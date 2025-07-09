@@ -17,6 +17,7 @@ DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
 intentos_fallidos = {}
 MAX_ERRORES = 4
 TIEMPO_LIMITE_MINUTOS = 10
+torneos_iniciados = set()  # <- Añade esta línea aquí
 
 def generar_codigo_unico(longitud=6):
     return ''.join(random.choices(string.ascii_uppercase + string.digits, k=longitud))
@@ -632,10 +633,305 @@ async def clear(ctx, canal: discord.TextChannel = None, cantidad: int = None):
     except discord.HTTPException as e:
         await ctx.send(f"⚠️ Hubo un error al intentar borrar mensajes: {e}")
 
+@bot.command(name="comandos")
+async def mostrar_comandos(ctx):
+    rol_moderador = discord.utils.get(ctx.guild.roles, name="Moderador")
+    es_moderador = rol_moderador in ctx.author.roles if rol_moderador else False
+
+    embed = discord.Embed(
+        title="📜 Lista de comandos disponibles",
+        color=discord.Color.gold()
+    )
+
+    # Comandos para todos
+    embed.add_field(
+        name="👤 Comandos para todos los usuarios",
+        value=(
+            "`!agendar-partida dd/mm/yyyy hh:mm @Jugador1 vs @Jugador2`\n"
+            "`!eventos-hoy`\n"
+            "`!inscribirse CÓDIGO`\n"
+            "`!ver-inscritos CÓDIGO`\n"
+            "`!torneos-activos`"
+        ),
+        inline=False
+    )
+
+    # Comandos de moderador
+    if es_moderador:
+        embed.add_field(
+            name="🛡️ Comandos exclusivos para Moderadores",
+            value=(
+                "`!new-tournament Evento | tipo | jugadores | dd/mm/yyyy`\n"
+                "`!strike @usuario`\n"
+                "`!out @usuario`\n"
+                "`!eliminar-mensajes #canal cantidad`"
+            ),
+            inline=False
+        )
+    await ctx.send(embed=embed)
+
+@bot.command(name="start-event")
+@commands.has_permissions(manage_roles=True)
+async def start_event(ctx, codigo=None):
+    autor = ctx.author
+    servidor = ctx.guild
+
+    rol_moderador = discord.utils.get(servidor.roles, name="Moderador")
+    rol_strike = discord.utils.get(servidor.roles, name="Strike")
+    es_dueno = autor == servidor.owner
+    es_moderador = rol_moderador and rol_moderador in autor.roles
+    tiene_strike = rol_strike and rol_strike in autor.roles
+
+    if not (es_dueno or es_moderador):
+        if not tiene_strike:
+            await asignar_strike_automatico(ctx)
+        else:
+            await ctx.send("🚫 No tienes permisos para iniciar un evento.")
+        return
+    if not codigo:
+        await ctx.send("❌ Debes indicar el código del torneo. Ejemplo: `!start-event CZI1F6`")
+        return
+
+    codigo = codigo.upper()
+    if codigo in torneos_iniciados:
+        await ctx.send(f"⚠️ El torneo con código `{codigo}` ya fue iniciado.")
+        return
+
+    canal_torneos = discord.utils.get(ctx.guild.text_channels, name="torneos-activos")
+    canal_inscritos = discord.utils.get(ctx.guild.text_channels, name="inscritos-en-torneos")
+    canal_emparejamientos = discord.utils.get(ctx.guild.text_channels, name="emparejamientos")
+
+    if not canal_torneos or not canal_inscritos or not canal_emparejamientos:
+        await ctx.send("❌ Faltan uno o más canales necesarios (`#torneos-activos`, `#inscritos-en-torneos`, `#emparejamientos`).")
+        return
+
+    # Buscar torneo
+    patron_torneo = re.compile(
+        r"`(.+?)` `(\d{2}/\d{2}/\d{4})` \| `(\d+)` \| `(.+?)` \| código: `(\w{6})` creado por .+",
+        re.IGNORECASE
+    )
+    torneo = None
+    async for mensaje in canal_torneos.history(limit=100):
+        match = patron_torneo.search(mensaje.content)
+        if match:
+            nombre, fecha, cupo, tipo, codigo_mensaje = match.groups()
+            if codigo == codigo_mensaje.upper():
+                torneo = {
+                    "nombre": nombre,
+                    "codigo": codigo_mensaje,
+                    "mensaje": mensaje
+                }
+                break
+
+    if not torneo:
+        await ctx.send(f"❌ No se encontró ningún torneo con el código `{codigo}`.")
+        return
+
+    # Obtener jugadores inscritos
+    patron_inscrito = re.compile(
+        r"🎟️ Inscrito #\d+ en `(.+?)` \(`(\w{6})`\)\n👤 <@!?(\d+)>",
+        re.IGNORECASE
+    )
+
+    jugadores = []
+    async for mensaje in canal_inscritos.history(limit=200):
+        match = patron_inscrito.search(mensaje.content)
+        if match:
+            nombre_torneo, codigo_encontrado, user_id = match.groups()
+            if codigo_encontrado.upper() == codigo:
+                jugadores.append(int(user_id))
+
+    if len(jugadores) < 1:
+        await ctx.send("⚠️ No hay suficientes jugadores inscritos para iniciar el torneo (mínimo 2).")
+        return
+
+    # Mezclar jugadores y emparejarlos
+    random.shuffle(jugadores)
+    emparejamientos = list(zip(jugadores[::2], jugadores[1::2]))
+
+    embed = discord.Embed(
+        title=f"🎯 Emparejamientos Ronda 1 - {torneo['nombre']}",
+        color=discord.Color.gold()
+    )
+
+    for i, (p1, p2) in enumerate(emparejamientos, start=1):
+        jugador1 = ctx.guild.get_member(p1)
+        jugador2 = ctx.guild.get_member(p2)
+        nombre1 = jugador1.mention if jugador1 else f"<@{p1}>"
+        nombre2 = jugador2.mention if jugador2 else f"<@{p2}>"
+        embed.add_field(name=f"Match #{i}", value=f"{nombre1} vs {nombre2}", inline=False)
+
+    # Si hay número impar, agregar bye
+    if len(jugadores) % 2 != 0:
+        jugador_bye = ctx.guild.get_member(jugadores[-1])
+        nombre_bye = jugador_bye.mention if jugador_bye else f"<@{jugadores[-1]}>"
+        embed.add_field(name="Bye", value=f"{nombre_bye} descansa esta ronda", inline=False)
+
+    await canal_emparejamientos.send(embed=embed)
+    await ctx.send(f"✅ Torneo `{torneo['nombre']}` iniciado correctamente.")
+
+    torneos_iniciados.add(codigo)
+
+@bot.command(name="reportar-resultado")
+async def reportar_resultado(ctx, jugador1: discord.Member = None, resultado: str = None, _vs: str = None, jugador2: discord.Member = None, codigo=None):
+    # Validar canal
+    if ctx.channel.name != "resultados":
+        await ctx.send("❌ Este comando solo puede usarse en el canal `#resultados`.")
+        return
+
+    errores = []
+
+    if not jugador1:
+        errores.append("• Falta **Jugador 1** (`@mención`).")
+    if not resultado or not re.match(r"^\d+-\d+$", resultado):
+        errores.append("• Resultado inválido. Usa formato como `2-1`, `1-1`, etc.")
+    if not jugador2:
+        errores.append("• Falta **Jugador 2** (`@mención`).")
+    if not codigo:
+        errores.append("• Falta el **código del torneo**.")
+
+    if errores:
+        await ctx.send("❌ Errores en el comando:\n" + "\n".join(errores) + "\n\n✅ Ejemplo: `!reportar-resultado @Jugador1 2-1 @Jugador2 ABC123`")
+        return
+
+    codigo = codigo.upper()
+    canal_resultados = discord.utils.get(ctx.guild.text_channels, name="resultados-de-partidas")
+    if not canal_resultados:
+        await ctx.send("❌ No se encontró el canal `#resultados-de-partidas`.")
+        return
+
+    # Publicar resultado en el canal de partidas
+    await canal_resultados.send(
+        f"📊 Resultado registrado en torneo `{codigo}`:\n"
+        f"{jugador1.mention} **{resultado}** {jugador2.mention}"
+    )
+
+    # Cargar resultados previos
+    patron_resultado = re.compile(r"<@!?(\d+)>\s+\*\*(\d+)-(\d+)\*\*\s+<@!?(\d+)>")
+    partidas = []
+
+    async for mensaje in canal_resultados.history(limit=500):
+        if f"`{codigo}`" not in mensaje.content:
+            continue
+        match = patron_resultado.search(mensaje.content)
+        if not match:
+            continue
+        p1_id, g1, g2, p2_id = match.groups()
+        partidas.append({
+            "jugador1": int(p1_id),
+            "jugador2": int(p2_id),
+            "g1": int(g1),
+            "g2": int(g2)
+        })
+
+    if len(partidas) < 1:
+        await ctx.send("⚠️ No hay suficientes partidas registradas para calcular clasificación.")
+        return
+
+    # Clasificación
+    puntos = {}
+    juegos = {}
+    oponentes = {}
+
+    for p in partidas:
+        j1 = p["jugador1"]
+        j2 = p["jugador2"]
+        g1 = p["g1"]
+        g2 = p["g2"]
+
+        puntos.setdefault(j1, 0)
+        puntos.setdefault(j2, 0)
+        juegos.setdefault(j1, [0, 0])  # [ganados, totales]
+        juegos.setdefault(j2, [0, 0])
+        oponentes.setdefault(j1, set())
+        oponentes.setdefault(j2, set())
+
+        if g1 > g2:
+            puntos[j1] += 3
+        elif g2 > g1:
+            puntos[j2] += 3
+        else:
+            puntos[j1] += 1
+            puntos[j2] += 1
+
+        juegos[j1][0] += g1
+        juegos[j1][1] += g1 + g2
+        juegos[j2][0] += g2
+        juegos[j2][1] += g1 + g2
+
+        oponentes[j1].add(j2)
+        oponentes[j2].add(j1)
+
+    def calc_mwp(pid):
+        total_partidas = sum(
+            1 for p in partidas if pid in [p["jugador1"], p["jugador2"]]
+        )
+        wins = sum(
+            1 for p in partidas
+            if (p["jugador1"] == pid and p["g1"] > p["g2"]) or (p["jugador2"] == pid and p["g2"] > p["g1"])
+        )
+        empates = sum(
+            1 for p in partidas
+            if (p["jugador1"] == pid or p["jugador2"] == pid) and p["g1"] == p["g2"]
+        )
+        if total_partidas == 0:
+            return 0.33
+        return max((wins + empates * 0.5) / total_partidas, 0.33)
+
+    def calc_omwp(pid):
+        opps = oponentes.get(pid, [])
+        if not opps:
+            return 0.33
+        total = sum(calc_mwp(opp) for opp in opps)
+        return max(total / len(opps), 0.33)
+
+    jugadores = list(puntos.keys())
+    clasificacion = []
+
+    for j in jugadores:
+        nombre = ctx.guild.get_member(j).display_name if ctx.guild.get_member(j) else f"<@{j}>"
+        mwp = calc_mwp(j)
+        omwp = calc_omwp(j)
+        gw = juegos[j][0]
+        gt = juegos[j][1]
+        gwp = gw / gt if gt else 0
+        clasificacion.append({
+            "jugador": nombre,
+            "puntos": puntos[j],
+            "MWP": mwp,
+            "OMWP": omwp,
+            "GWP": gwp
+        })
+
+    clasificacion.sort(key=lambda x: (x["puntos"], x["OMWP"], x["MWP"]), reverse=True)
+
+    # Mostrar tabla
+    canal_clasificacion = discord.utils.get(ctx.guild.text_channels, name="clasificaciones")
+    if not canal_clasificacion:
+        await ctx.send("❌ No se encontró el canal `#clasificaciones`.")
+        return
+
+    embed = discord.Embed(title=f"📈 Clasificación torneo `{codigo}`", color=discord.Color.gold())
+
+    for i, j in enumerate(clasificacion, 1):
+        embed.add_field(
+            name=f"#{i} - {j['jugador']}",
+            value=(
+                f"🏆 Puntos: `{j['puntos']}`\n"
+                f"🎯 MWP: `{j['MWP']:.2%}`\n"
+                f"🤝 OMWP: `{j['OMWP']:.2%}`\n"
+                f"🎮 GWP: `{j['GWP']:.2%}`"
+            ),
+            inline=False
+        )
+
+    await canal_clasificacion.send(embed=embed)
+    await ctx.send("✅ Resultado registrado y clasificación actualizada.")
+
 @tasks.loop(minutes=1)
 async def publicar_eventos_diarios():
     now = datetime.now()
-    if now.hour != 10 or now.minute != 00:
+    if now.hour != 10 or now.minute <= 5:
         return  
 
     for guild in bot.guilds:
@@ -690,7 +986,7 @@ async def limpiar_partidos_pasados():
     now = datetime.now()
 
     # Ejecutar exactamente a las 10:00
-    if now.hour != 10 or now.minute != 0:
+    if now.hour != 10 or now.minute <= 5:
         return
 
     for guild in bot.guilds:
@@ -719,31 +1015,88 @@ async def limpiar_partidos_pasados():
                     await mensaje.delete()
                    
             except ValueError:
-               
                 continue
+@tasks.loop(minutes=1)
+async def revisar_torneos_y_emparejar():
+    now = datetime.now()
+
+    if now.weekday() != 0 or not (now.hour == 10 and now.minute <= 5):
+        return
+
+    for guild in bot.guilds:
+        canal_torneos = discord.utils.get(guild.text_channels, name="torneos-activos")
+        canal_inscritos = discord.utils.get(guild.text_channels, name="inscritos-en-torneos")
+        canal_emparejamientos = discord.utils.get(guild.text_channels, name="emparejamientos")
+
+        if not canal_torneos or not canal_inscritos or not canal_emparejamientos:
+            continue
+
+        patron_torneo = re.compile(
+            r"`(.+?)` `(\d{2}/\d{2}/\d{4})` \| `(\d+)` \| `(.+?)` \| código: `(\w{6})`"
+        )
+
+        async for mensaje in canal_torneos.history(limit=100):
+            match = patron_torneo.search(mensaje.content)
+            if not match:
+                continue
+
+            nombre, fecha_str, cupo, tipo, codigo = match.groups()
+            fecha_torneo = datetime.strptime(fecha_str, "%d/%m/%Y").date()
+
+            if fecha_torneo != now.date():
+                continue
+
+            if codigo in torneos_iniciados:
+                continue  # Ya se procesó
+
+            jugadores = []
+            patron_inscrito = re.compile(
+                rf"🎟️ Inscrito #\d+ en `{re.escape(nombre)}` \(`{codigo}`\)\n👤 <@!?(\d+)>"
+            )
+
+            async for msg in canal_inscritos.history(limit=500):
+                match_ins = patron_inscrito.search(msg.content)
+                if match_ins:
+                    user_id = int(match_ins.group(1))
+                    jugador = guild.get_member(user_id)
+                    if jugador:
+                        jugadores.append(jugador)
+
+            if len(jugadores) < 2:
+                await canal_emparejamientos.send(
+                    f"⚠️ El torneo `{nombre}` no tiene suficientes jugadores para iniciar."
+                )
+                torneos_iniciados.add(codigo)
+                continue
+
+            random.shuffle(jugadores)
+            emparejamientos = [
+                (jugadores[i], jugadores[i + 1])
+                for i in range(0, len(jugadores) - 1, 2)
+            ]
+
+            embed = discord.Embed(
+                title=f"🏁 Emparejamientos - Torneo `{nombre}`",
+                description=f"🧩 Tipo: `{tipo}`\n📅 Fecha de inicio: `{now.strftime('%d/%m/%Y')}`",
+                color=discord.Color.orange()
+            )
+
+            for idx, (j1, j2) in enumerate(emparejamientos, start=1):
+                embed.add_field(name=f"Partida #{idx}", value=f"{j1.mention} vs {j2.mention}", inline=False)
+
+            if len(jugadores) % 2 == 1:
+                jugador_libre = jugadores[-1]
+                embed.add_field(name="Libre esta ronda", value=f"{jugador_libre.mention} (descansa)", inline=False)
+
+            await canal_emparejamientos.send(embed=embed)
+
+            # ✅ Marcar como iniciado
+            torneos_iniciados.add(codigo)
             
+
 @bot.event
 async def on_command_error(ctx, error):
     if isinstance(error, commands.CommandNotFound):
-        mensaje = (
-            "❌ **Comando no reconocido.**\n\n"
-            "**Comandos disponibles:**\n"
-            "• `!agendar-partida dd/mm/yyyy hh:mm @Jugador1 vs @Jugador2`\n"
-            "   → Agenda una nueva partida en el canal `#partidos-agendados`\n\n"
-            "• `!eventos-hoy`\n"
-            "   → Muestra las partidas agendadas para hoy\n\n"
-            "_Ejemplo:_\n"
-            "`!agendar-partida 07/07/2025 23:45 @Fizban vs @sete`"
-        )
-        await ctx.send(mensaje)
-
-    else:
-        # Para otros errores (opcional: muestra o loguea el error real)
-        raise error  # Puedes quitar esto si no quieres que lo muestre en consola
-
-@bot.event
-async def on_command_error(ctx, error):
-    if isinstance(error, CommandNotFound):
         await ctx.send(
             "❌ **Comando no reconocido.**\n"
             "Usa por ejemplo:\n"
@@ -752,35 +1105,39 @@ async def on_command_error(ctx, error):
         )
         return
 
-    if isinstance(error, MemberNotFound):
-        await ctx.send(
-            "❌ Uno de los jugadores no se encuentra en el servidor o no fue mencionado correctamente.\n\n"
-            "✅ **Asegúrate de usar el formato correcto:**\n"
-            "`!agendar-partida dd/mm/yyyy hh:mm @Jugador1 vs @Jugador2`\n"
-            "_Ejemplo:_ `!agendar-partida 07/07/2025 23:45 @Fizban vs @sete`"
-        )
-        # Registrar intento fallido si quieres penalizar
-        await manejar_error_de_agendamiento(ctx)
+    if isinstance(error, commands.MemberNotFound):
+        # Identifica el comando específico que falló
+        if ctx.command and ctx.command.name == "agendar-partida":
+            await ctx.send(
+                "❌ Uno de los jugadores no se encuentra en el servidor o no fue mencionado correctamente.\n\n"
+                "✅ Asegúrate de usar el formato correcto:\n"
+                "`!agendar-partida dd/mm/yyyy hh:mm @Jugador1 vs @Jugador2`\n"
+                "_Ejemplo:_ `!agendar-partida 07/07/2025 23:45 @Fizban vs @sete`"
+            )
+            await manejar_error_de_agendamiento(ctx)
+        elif ctx.command and ctx.command.name == "reportar-resultado":
+            await ctx.send(
+                "❌ Uno de los jugadores no se encuentra en el servidor o no fue mencionado correctamente.\n\n"
+                "✅ Formato correcto:\n"
+                "`!reportar-resultado @Jugador1 2-1 @Jugador2 CODIGO`"
+            )
+        else:
+            await ctx.send("❌ No se encontró uno de los jugadores mencionados.")
         return
 
-    # Otros errores (ej. errores en el código)
-    if isinstance(error, CommandInvokeError):
+    # Otros errores de invocación
+    if isinstance(error, commands.CommandInvokeError):
         original = error.original
-        if isinstance(original, MemberNotFound):
-            await ctx.send(
-                "❌ No se pudo encontrar a uno de los jugadores mencionados. Usa `@mención` correctamente."
-            )
+        if isinstance(original, commands.MemberNotFound):
+            await ctx.send("❌ Uno de los jugadores no se pudo encontrar en el servidor.")
             return
-
-    # Imprime el error para debug y opcionalmente lo relanza
-    print(f"[ERROR] {error.__class__.__name__}: {error}")
-    # raise error  # Puedes comentar esto si no quieres que aparezca en consola
 
 @bot.event
 async def on_ready():
     print(f'✅ Bot conectado como {bot.user} (ID: {bot.user.id})')
     publicar_eventos_diarios.start()
     limpiar_partidos_pasados.start()
+    revisar_torneos_y_emparejar.start()
 
 webserver.keep_alive()  
 bot.run(DISCORD_TOKEN)
