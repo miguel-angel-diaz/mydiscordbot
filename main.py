@@ -7,6 +7,9 @@ from utils.torneos import nuevo_torneo_handle, comenzar_evento_handle, mostrar_c
 from utils.watchers import cargar_tareas;
 
 import config
+import os
+import webserver
+DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
 
 
 intents = discord.Intents.default()
@@ -108,5 +111,6 @@ async def on_ready():
     print(f"✅ Bot conectado como {bot.user}")
     cargar_tareas(bot)
 
-# webserver.keep_alive()  
-bot.run(config.TOKEN)
+webserver.keep_alive()  
+bot.run(DISCORD_TOKEN)
+# bot.run(config.TOKEN)
