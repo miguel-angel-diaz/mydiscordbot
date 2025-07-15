@@ -1,0 +1,212 @@
+
+import discord
+from datetime import datetime
+import re
+
+async def aplicar_strike(ctx, miembro: discord.Member):
+     # Intentar eliminar el mensaje del canal público
+    try:
+        await ctx.message.delete()
+    except discord.NotFound:
+        pass
+    except discord.Forbidden:
+        pass
+    except Exception as e:
+        print(f"[ERROR al borrar mensaje]: {e}")
+
+    servidor = ctx.guild
+
+    # Verificar permisos
+    if not await moderador_permisos_handle(ctx):
+      return
+    
+    if miembro is None:
+        await ctx.send("❌ Debes mencionar a un usuario. Ejemplo: `!strike @Usuario`")
+        return
+
+    rol_strike = discord.utils.get(servidor.roles, name="Strike")
+    if not rol_strike:
+        await ctx.send("⚠️ El rol `Strike` no existe en el servidor.")
+        return
+
+    if rol_strike in miembro.roles:
+        await ctx.send(f"ℹ️ {miembro.mention} ya tiene el rol `Strike`.")
+        return
+
+    try:
+        await miembro.add_roles(rol_strike, reason="Strike manual asignado por Moderador.")
+        await miembro.send(get_mensaje_strike())
+    except discord.Forbidden:
+        await ctx.send("❌ No tengo permisos para asignar el rol o enviar mensaje privado.")
+        return
+
+    await ctx.send(f"✅ {miembro.mention} ha recibido un **Strike**.")
+
+async def aplicar_out(ctx, miembro: discord.Member):
+     # Intentar eliminar el mensaje del canal público
+    try:
+        await ctx.message.delete()
+    except discord.NotFound:
+        pass
+    except discord.Forbidden:
+        pass
+    except Exception as e:
+        print(f"[ERROR al borrar mensaje]: {e}")
+        
+    servidor = ctx.guild
+    
+    # Verificar permisos
+    if not await moderador_permisos_handle(ctx):
+      return
+
+    if miembro is None:
+        await ctx.send("❌ Debes mencionar a un usuario. Ejemplo: `!out @Usuario`")
+        return
+    
+    rol_out = discord.utils.get(servidor.roles, name="Out")
+    if not rol_out:
+        await ctx.send("⚠️ El rol `Out` no existe en el servidor.")
+        return
+
+    if rol_out in miembro.roles:
+        await ctx.send(f"ℹ️ {miembro.mention} ya tiene el rol `Out`.")
+        return
+
+    try:
+        await miembro.add_roles(rol_out, reason="Out manual asignado por moderador.")
+    except discord.Forbidden:
+        await ctx.send("❌ No tengo permisos para asignar el rol. Revisa la jerarquía de roles.")
+        return
+
+    mensaje_out = (
+        "Escúchame bien, campeón. No fue solo la pinta, ni que vinieras en grupo, ni que te colaras en la fila. Fue todo. "
+        "La energía, la actitud, el rollo. Este sitio tiene su código, su vibra... y tú no venías ni en la misma frecuencia.\n\n"
+        "Así que no, no vas a entrar. No hoy, no mañana, no el próximo eclipse lunar. "
+        "Puedes venir disfrazado de unicornio o vestido en látex con lentejuelas bendecidas por los dioses del techno… "
+        "pero ya cruzaste la línea.\n\n"
+        "Este club no es para todos. Es para los que son. Y tú... tú simplemente no eres."
+    )
+
+    try:
+        await miembro.send(mensaje_out)
+    except discord.Forbidden:
+        await ctx.send(f"⚠️ {miembro.mention} no tiene los mensajes privados habilitados.")
+
+    await ctx.send(f"✅ {miembro.mention} ha sido expulsado de la comunidad.")
+
+async def eliminar_mensajes(ctx, canal: discord.TextChannel, cantidad: int):
+    
+    # Verificar permisos
+    if not await moderador_permisos_handle(ctx):
+      return
+
+    # Validar argumentos
+    if canal is None or cantidad is None:
+        await ctx.send(
+            "❌ Uso incorrecto del comando.\n"
+            "✅ Formato: `!eliminar-mensajes #canal cantidad`\n"
+            "_Ejemplo:_ `!eliminar-mensajes #general 50`"
+        )
+        return
+
+   
+    # Validar cantidad
+    if cantidad <= 0 or cantidad > 1000:
+        await ctx.send("⚠️ La cantidad debe ser entre 1 y 1000 mensajes.")
+        return
+
+    # Intentar borrar mensajes
+    try:
+        mensajes_borrados = await canal.purge(limit=cantidad)
+        await ctx.send(f"✅ Se han eliminado {len(mensajes_borrados)} mensajes de {canal.mention}.", delete_after=5)
+    except discord.Forbidden:
+        await ctx.send("❌ No tengo permisos para borrar mensajes en ese canal.")
+    except discord.HTTPException as e:
+        await ctx.send(f"⚠️ Hubo un error al intentar borrar mensajes: {e}")
+
+async def moderador_permisos_handle(ctx):
+    autor = ctx.author
+    servidor = ctx.guild
+    es_dueno = autor == servidor.owner
+    rol_moderador = discord.utils.get(servidor.roles, name="Moderador")
+    tiene_permiso = es_dueno or (rol_moderador and rol_moderador in autor.roles)
+
+    if not tiene_permiso:
+        await asignar_strike_automatico(ctx)
+        return False
+
+    return True
+
+async def asignar_strike_automatico(ctx):
+    autor = ctx.author
+    servidor = ctx.guild
+    rol_strike = discord.utils.get(servidor.roles, name="Strike")
+
+    if not rol_strike:
+        await ctx.send("⚠️ El rol `Strike` no existe.")
+        return
+
+    if rol_strike in autor.roles:
+        await ctx.send(f"⛔ Ya tienes un strike, {autor.mention}. No puedes usar este comando.")
+        return
+
+    try:
+        await autor.add_roles(rol_strike, reason="Intentó usar comando sin permiso.")
+        await ctx.send(f"🚫 {autor.mention}, no puedes usar este comando. Has recibido un **Strike**.")
+        await autor.send(get_mensaje_strike())
+    except discord.Forbidden:
+        await ctx.send("⚠️ No tengo permisos para asignar el rol.")
+
+def get_mensaje_strike():
+    return (
+        "Oye... te lo voy a decir solo una vez.\n\n"
+        "Lo que hiciste, no va con las reglas de The Klub. Aquí se viene a respetar la energía, la gente y el espacio. "
+        "No te echamos hoy... pero la próxima, estás fuera sin saludo ni explicación.\n\n"
+        "Este sitio no es un “vale todo”. Es un “vale lo que yo diga”.\n"
+        "Y tú ya estás en tu última vida.\n\n"
+        "Decide bien cuál va a ser tu siguiente movimiento."
+    )
+
+async def cerrar_peticion_handle(ctx, codigo, respuesta):
+    canal_peticiones = discord.utils.get(ctx.guild.text_channels, name="peticiones-de-usuarios")
+    if not canal_peticiones:
+        await ctx.send("❌ No se encontró el canal `#peticiones-de-usuarios`.")
+        return
+
+    mensaje_objetivo = None
+    autor_id = None
+
+    async for mensaje in canal_peticiones.history(limit=100):
+        if mensaje.embeds:
+            embed = mensaje.embeds[0]
+            if f"`{codigo}`" in embed.description or any(f"`{codigo}`" in field.value for field in embed.fields):
+                mensaje_objetivo = mensaje
+                if embed.footer and embed.footer.text.isdigit():
+                    autor_id = int(embed.footer.text)
+                break
+
+    if not mensaje_objetivo or not autor_id:
+        await ctx.send("⚠️ No se pudo identificar al autor de la petición.")
+        return
+
+    miembro = ctx.guild.get_member(autor_id)
+    if not miembro:
+        await ctx.send("⚠️ No se encontró al miembro en el servidor.")
+        return
+
+    try:
+        await miembro.send(
+            f"📬 Tu petición con código `{codigo}` ha sido **cerrada**.\n"
+            f"💬 Respuesta del equipo:\n>>> {respuesta}"
+        )
+    except discord.Forbidden:
+        await ctx.send("⚠️ No se pudo enviar mensaje privado al autor (DMs desactivados).")
+        return
+
+    try:
+        await mensaje_objetivo.delete()
+    except discord.Forbidden:
+        await ctx.send("⚠️ No tengo permisos para eliminar mensajes en `#peticiones-de-usuarios`.")
+        return
+
+    await ctx.send(f"✅ Petición `{codigo}` cerrada y respuesta enviada al usuario.")
