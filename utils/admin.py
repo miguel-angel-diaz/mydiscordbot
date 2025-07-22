@@ -169,12 +169,15 @@ def get_mensaje_strike():
 
 async def cerrar_peticion_handle(ctx, codigo, respuesta):
     canal_peticiones = discord.utils.get(ctx.guild.text_channels, name="peticiones-de-usuarios")
-    if not canal_peticiones:
-        await ctx.send("❌ No se encontró el canal `#peticiones-de-usuarios`.")
+    canal_resolucion = discord.utils.get(ctx.guild.text_channels, name="resolucion-de-peticiones")
+
+    if not canal_peticiones or not canal_resolucion:
+        await ctx.send("❌ No se encontraron los canales necesarios (`#peticiones-de-usuarios` o `#resolucion-de-peticiones`).")
         return
 
     mensaje_objetivo = None
     autor_id = None
+    contenido_peticion = "Sin descripción disponible"
 
     async for mensaje in canal_peticiones.history(limit=100):
         if mensaje.embeds:
@@ -183,6 +186,7 @@ async def cerrar_peticion_handle(ctx, codigo, respuesta):
                 mensaje_objetivo = mensaje
                 if embed.footer and embed.footer.text.isdigit():
                     autor_id = int(embed.footer.text)
+                contenido_peticion = embed.description
                 break
 
     if not mensaje_objetivo or not autor_id:
@@ -210,3 +214,17 @@ async def cerrar_peticion_handle(ctx, codigo, respuesta):
         return
 
     await ctx.send(f"✅ Petición `{codigo}` cerrada y respuesta enviada al usuario.")
+
+    # 📦 Publicar resumen en #resolucion-de-peticiones
+    embed_resolucion = discord.Embed(
+        title="📌 Petición Resuelta",
+        color=discord.Color.green()
+    )
+    embed_resolucion.add_field(name="🔢 Código de solicitud", value=f"`{codigo}`", inline=False)
+    embed_resolucion.add_field(name="👤 Usuario solicitante", value=miembro.mention, inline=True)
+    embed_resolucion.add_field(name="🔧 Cerrada por", value=ctx.author.mention, inline=True)
+    embed_resolucion.add_field(name="📝 Contenido original", value=contenido_peticion[:1024], inline=False)
+    embed_resolucion.add_field(name="✅ Resolución", value=respuesta[:1024], inline=False)
+    embed_resolucion.set_footer(text=f"ID del solicitante: {miembro.id}")
+
+    await canal_resolucion.send(embed=embed_resolucion)

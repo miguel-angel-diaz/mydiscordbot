@@ -1,10 +1,13 @@
+import aiohttp
 import discord
+import challonge
 from datetime import datetime, timedelta
 import re
-
-from utils.resultados import generar_embed_clasificacion, calcular_clasificacion, extraer_partidas, guardar_resultado
+import config
 from utils.torneos import generar_codigo_unico
+from utils.admin import moderador_permisos_handle
 
+import config
 
 MAX_ERRORES = 3
 TIEMPO_LIMITE_MINUTOS = 10
@@ -167,389 +170,6 @@ async def eventos_hoy_handle(ctx):
 
     await ctx.author.send(embed=embed)
 
-
-async def inscribirse_handler(ctx, codigo=None):
-    try:
-        await ctx.message.delete()
-    except (discord.Forbidden, discord.NotFound):
-        pass
-    except Exception as e:
-        print(f"[ERROR al borrar mensaje]: {e}")
-
-    if not await validar_canal_correcto(ctx, "inscripciones", "!inscribirse"):
-        return
-
-    if not codigo:
-        await ctx.author.send("❌ Debes proporcionar un código. Ejemplo: `!inscribirse CZI1F6`")
-        return
-
-    codigo = codigo.upper()
-    canal_torneos = discord.utils.get(ctx.guild.text_channels, name="torneos-activos")
-    canal_inscritos = discord.utils.get(ctx.guild.text_channels, name="inscritos-en-torneos")
-
-    if not canal_torneos or not canal_inscritos:
-        await ctx.author.send("❌ No se encuentran los canales necesarios.")
-        return
-
-    patron = re.compile(
-        r"`(.+?)` `(\d{2}/\d{2}/\d{4})` \| `(\d+)` \| `(.+?)` \| `(.+?)` \| código: `(\w{6})`",
-        re.IGNORECASE
-    )
-    torneo = None
-
-    async for mensaje in canal_torneos.history(limit=100):
-        match = patron.search(mensaje.content)
-        if match and match.group(6).upper() == codigo:
-            nombre, fecha, cupo, tipo, acceso, _ = match.groups()
-            torneo = {
-                "nombre": nombre,
-                "fecha": fecha,
-                "cupo": int(cupo),
-                "tipo": tipo,
-                "acceso": acceso,
-                "codigo": codigo
-            }
-            break
-
-    if not torneo:
-        await ctx.author.send(f"❌ No se encontró ningún torneo con el código `{codigo}`.")
-        return
-
-    # ✅ Validación de acceso por roles
-    acceso = torneo["acceso"].lower()
-    roles_usuario = [r.name.lower() for r in ctx.author.roles]
-
-    tiene_acceso = False
-    if acceso == "todos":
-        tiene_acceso = True
-    elif acceso == "socio":
-        tiene_acceso = any(r in roles_usuario for r in ["socio", "second-chance-socio"])
-    elif acceso == "miembro":
-        tiene_acceso = any(r in roles_usuario for r in ["miembro", "second-chance-miembro"])
-
-    if not tiene_acceso:
-        await ctx.author.send(
-            f"🚫 El torneo `{torneo['nombre']}` es exclusivo para `{torneo['acceso']}`.\n"
-            f"No tienes los permisos necesarios para inscribirte."
-        )
-        return
-
-    # ✅ Comprobación de duplicado e inscripción
-    ya_inscrito = False
-    total_inscritos = 0
-
-    async for mensaje in canal_inscritos.history(limit=200):
-        if mensaje.content.startswith("🎟️ Inscrito") and f"`{codigo}`" in mensaje.content:
-            total_inscritos += 1
-            if ctx.author.mention in mensaje.content:
-                ya_inscrito = True
-                break
-
-    if ya_inscrito:
-        await ctx.author.send(f"ℹ️ Ya estás inscrito en el torneo `{torneo['nombre']}`.")
-        return
-
-    if total_inscritos >= torneo["cupo"]:
-        await ctx.author.send(f"🚫 El torneo `{torneo['nombre']}` ya alcanzó su cupo máximo.")
-        return
-
-    numero = total_inscritos + 1
-    mensaje = (
-        f"🎟️ Inscrito #{numero} | {torneo['nombre']} (`{torneo['codigo']}`) | <@{ctx.author.id}>"
-    )
-    await canal_inscritos.send(mensaje)
-    await ctx.author.send(f"✅ Te has inscrito correctamente en `{torneo['nombre']}`.")
-
-    canal_anuncios = discord.utils.get(ctx.guild.text_channels, name="anuncios-torneos")
-    if canal_anuncios:
-        plazas_restantes = torneo["cupo"] - numero
-        mensaje_anuncio = (
-            f"📢 {ctx.author.mention} se ha inscrito al torneo `{torneo['nombre']}` "
-            f"(`{torneo['codigo']}`). Quedan **{plazas_restantes}** plazas disponibles."
-        )
-        await canal_anuncios.send(mensaje_anuncio)
-
-async def desinscribirse_handler(ctx, codigo=None):
-    try:
-        await ctx.message.delete()
-    except (discord.NotFound, discord.Forbidden):
-        pass
-    except Exception as e:
-        print(f"[ERROR al borrar mensaje]: {e}")
-
-    if not await validar_canal_correcto(ctx, "inscripciones", "!desinscribirse"):
-        return
-
-    if not codigo:
-        try:
-            await ctx.author.send("❌ Debes indicar el código del torneo. Ejemplo: `!desinscribirse CZI1F6`")
-        except discord.Forbidden:
-            pass
-        return
-
-    codigo = codigo.upper()
-    canal_inscritos = discord.utils.get(ctx.guild.text_channels, name="inscritos-en-torneos")
-    canal_torneos = discord.utils.get(ctx.guild.text_channels, name="torneos-activos")
-    canal_anuncios = discord.utils.get(ctx.guild.text_channels, name="anuncios-torneos")
-
-    if not canal_inscritos or not canal_torneos:
-        try:
-            await ctx.author.send("❌ No se encuentran los canales necesarios.")
-        except discord.Forbidden:
-            pass
-        return
-
-    # Recuperar datos del torneo
-    patron = re.compile(
-        r"`(.+?)` `(\d{2}/\d{2}/\d{4})` \| `(\d+)` \| `(.+?)` \| `(.+?)` \| código: `(\w{6})`",
-        re.IGNORECASE
-    )
-    torneo = None
-
-    async for mensaje in canal_torneos.history(limit=100):
-        match = patron.search(mensaje.content)
-        if match and match.group(6).upper() == codigo:
-            nombre, fecha, cupo, tipo, acceso, _ = match.groups()
-            torneo = {
-                "nombre": nombre,
-                "fecha": fecha,
-                "cupo": int(cupo),
-                "tipo": tipo,
-                "acceso": acceso,
-                "codigo": codigo
-            }
-            break
-
-    if not torneo:
-        try:
-            await ctx.author.send(f"❌ No se encontró el torneo con código `{codigo}`.")
-        except discord.Forbidden:
-            pass
-        return
-
-    # Buscar mensajes de inscripción a eliminar
-    mensajes_a_borrar = []
-
-    async for mensaje in canal_inscritos.history(limit=200):
-        if (
-            mensaje.author == ctx.guild.me and
-            ctx.author.mention in mensaje.content and
-            f"`{codigo}`" in mensaje.content
-        ):
-            mensajes_a_borrar.append(mensaje)
-
-    if not mensajes_a_borrar:
-        try:
-            await ctx.author.send(f"ℹ️ No estás inscrito en el torneo con código `{codigo}`.")
-        except discord.Forbidden:
-            pass
-        return
-
-    for msg in mensajes_a_borrar:
-        try:
-            await msg.delete()
-        except discord.Forbidden:
-            continue
-
-    try:
-        await ctx.author.send(f"✅ Has sido desinscrito del torneo con código `{codigo}`.")
-    except discord.Forbidden:
-        pass
-
-    # ✅ Recuento de inscritos restantes
-    total_inscritos_restantes = 0
-    async for mensaje in canal_inscritos.history(limit=200):
-        if mensaje.content.startswith("🎟️ Inscrito") and f"`{codigo}`" in mensaje.content:
-            total_inscritos_restantes += 1
-
-    plazas_disponibles = torneo["cupo"] - total_inscritos_restantes
-
-    if canal_anuncios:
-        mensaje_anuncio = (
-            f"📢 {ctx.author.mention} se ha **desinscrito** del torneo `{torneo['nombre']}` "
-            f"(`{torneo['codigo']}`). Quedan **{plazas_disponibles}** plazas disponibles."
-        )
-        await canal_anuncios.send(mensaje_anuncio)
-    
-
-async def ver_inscritos_handler(ctx, codigo=None):
-       # Intentar eliminar el mensaje del canal público
-    try:
-        await ctx.message.delete()
-    except discord.NotFound:
-        pass
-    except discord.Forbidden:
-        pass
-    except Exception as e:
-        print(f"[ERROR al borrar mensaje]: {e}")
-    
-    # Validar canal correcto
-    if not await validar_canal_correcto(ctx, "inscripciones", "!ver-inscritos"):
-        return
-    if not codigo:
-        await ctx.send("❌ Debes indicar el código del torneo. Ejemplo: `!ver-inscritos CZI1F6`")
-        return
-
-    codigo = codigo.upper()
-    canal_inscritos = discord.utils.get(ctx.guild.text_channels, name="inscritos-en-torneos")
-    canal_torneos = discord.utils.get(ctx.guild.text_channels, name="torneos-activos")
-
-    patron_torneo = re.compile(r"`(.+?)` `(\d{2}/\d{2}/\d{4})` \| `(\d+)` \| `(.+?)` \| código: `(\w{6})`", re.IGNORECASE)
-    torneo = None
-
-    async for mensaje in canal_torneos.history(limit=100):
-        match = patron_torneo.search(mensaje.content)
-        if match and match.group(5).upper() == codigo:
-            nombre, fecha, cupo, tipo, _ = match.groups()
-            torneo = {"nombre": nombre, "fecha": fecha, "cupo": int(cupo)}
-            break
-
-    if not torneo:
-        await ctx.send(f"❌ No se encontró el torneo con el código `{codigo}`.")
-        return
-
-    inscritos = []
-    patron_inscrito = re.compile(r"🎟️ Inscrito #\d+ en `(.+?)` \(`(\w{6})`\)\n👤 <@!?(\d+)>", re.IGNORECASE)
-
-    async for mensaje in canal_inscritos.history(limit=200):
-        match = patron_inscrito.search(mensaje.content)
-        if match and match.group(2).upper() == codigo:
-            miembro = ctx.guild.get_member(int(match.group(3)))
-            inscritos.append(miembro.mention if miembro else f"<@{match.group(3)}>")
-
-    if not inscritos:
-        await ctx.send(f"ℹ️ No hay jugadores inscritos en `{torneo['nombre']}`.")
-        return
-
-    embed = discord.Embed(
-        title=f"🎯 Inscritos en {torneo['nombre']}",
-        description=f"🗓️ Fecha límite: `{torneo['fecha']}`\n🔢 Cupo: {len(inscritos)}/{torneo['cupo']}",
-        color=discord.Color.purple()
-    )
-    for i, jugador in enumerate(inscritos, start=1):
-        embed.add_field(name=f"#{i}", value=jugador, inline=False)
-
-    await ctx.send(embed=embed)
-
-# TORNEOS ACTIVOS
-async def torneos_activos_handle(ctx):
-    canal = discord.utils.get(ctx.guild.text_channels, name="torneos-activos")
-    if not canal:
-        await ctx.send("❌ No se encontró el canal `#torneos-activos`.")
-        return
-
-    hoy = datetime.now().date()
-    patron = re.compile(r"`(.+?)` `(\d{2}/\d{2}/\d{4})` \| `(\d+)` \| `(.+?)` creado por (.+)", re.IGNORECASE)
-
-    torneos = []
-
-    async for mensaje in canal.history(limit=100):
-        match = patron.search(mensaje.content)
-        if match:
-            nombre, fecha_str, cantidad, tipo, autor = match.groups()
-            try:
-                fecha = datetime.strptime(fecha_str, "%d/%m/%Y").date()
-                if fecha >= hoy:
-                    torneos.append((fecha_str, nombre, tipo, cantidad, autor))
-            except ValueError:
-                continue
-
-    if not torneos:
-        await ctx.send("📭 No hay torneos activos para hoy o más adelante.")
-        return
-
-    embed = discord.Embed(title="🏆 Torneos activos", color=discord.Color.purple())
-    for fecha, nombre, tipo, cantidad, autor in sorted(torneos):
-        embed.add_field(
-            name=f"{nombre} ({fecha})",
-            value=f"• Tipo: `{tipo}`\n• Jugadores: `{cantidad}`\n• Creador: {autor}",
-            inline=False
-        )
-
-    await ctx.send(embed=embed)
-
-# REPORTAR RESULTADO
-async def reportar_resultado_handle(ctx, jugador1, resultado, jugador2, codigo):
-    if ctx.channel.name != "resultados":
-        return await ctx.send("❌ Este comando solo puede usarse en el canal `#resultados`.")
-
-    errores = []
-    if not jugador1:
-        errores.append("• Falta **Jugador 1** (`@mención`).")
-    if not resultado or not re.match(r"^\d+-\d+$", resultado):
-        errores.append("• Resultado inválido. Usa formato como `2-1`, `1-1`, etc.")
-    if not jugador2:
-        errores.append("• Falta **Jugador 2** (`@mención`).")
-    if not codigo:
-        errores.append("• Falta el **código del torneo**.")
-
-    if errores:
-        return await ctx.send("❌ Errores en el comando:\n" + "\n".join(errores) + "\n\n✅ Ejemplo: `!reportar-resultado @Jugador1 2-1 @Jugador2 ABC123`")
-
-    codigo = codigo.upper()
-    canal_resultados = discord.utils.get(ctx.guild.text_channels, name="resultados-de-partidas")
-    canal_clasificacion = discord.utils.get(ctx.guild.text_channels, name="clasificaciones")
-
-    if not canal_resultados or not canal_clasificacion:
-        return await ctx.send("❌ No se encontraron los canales requeridos.")
-
-    await guardar_resultado(ctx, canal_resultados, jugador1, resultado, jugador2, codigo)
-
-    partidas = await extraer_partidas(canal_resultados, codigo)
-    if len(partidas) < 1:
-        return await ctx.send("⚠️ No hay suficientes partidas registradas para calcular clasificación.")
-
-    clasificacion = calcular_clasificacion(partidas, ctx.guild)
-    embed = generar_embed_clasificacion(clasificacion, codigo)
-
-    await canal_clasificacion.send(embed=embed)
-    await ctx.send("✅ Resultado registrado y clasificación actualizada.")
-
-async def partidas_pendientes_handle(ctx):
-    # Intentamos borrar el mensaje público para que sea todo privado
-    try:
-        await ctx.message.delete()
-    except discord.NotFound:
-        pass
-    except discord.Forbidden:
-        pass
-    
-      # Validar canal correcto
-    if not await validar_canal_correcto(ctx, "agenda", "!partidas-pendientes"):
-        return
-
-    canal_partidos = discord.utils.get(ctx.guild.text_channels, name="partidos-agendados")
-    if not canal_partidos:
-        await ctx.author.send("❌ No se encontró el canal `#partidos-agendados` en este servidor.")
-        return
-
-    patron = re.compile(
-        r"\[EVENTO\]\s+(\d{2}/\d{2}/\d{4})\s+(\d{2}:\d{2})\s+\|\s+(.+?)\s+vs\s+(.+?)\s+\|"
-    )
-
-    partidas_usuario = []
-
-    async for mensaje in canal_partidos.history(limit=200):
-        if not mensaje.content.startswith("📅 [EVENTO]"):
-            continue
-
-        match = patron.search(mensaje.content)
-        if not match:
-            continue
-
-        fecha_str, hora_str, jugador1_text, jugador2_text = match.groups()
-
-        # Comprobar si el usuario está mencionado en el mensaje
-        if ctx.author.mention in mensaje.content:
-            partidas_usuario.append(f"{fecha_str} {hora_str}: {jugador1_text} vs {jugador2_text}")
-
-    if not partidas_usuario:
-        await ctx.author.send("ℹ️ No tienes partidas pendientes agendadas.")
-        return
-
-    mensaje_respuesta = "📅 **Tus partidas pendientes:**\n" + "\n".join(partidas_usuario)
-    await ctx.author.send(mensaje_respuesta)
-
 async def validar_canal_correcto(ctx, canal_valido: str, comando: str):
     """
     Verifica si el comando fue usado en el canal correcto. Si no lo fue:
@@ -627,3 +247,224 @@ async def nueva_peticion_handle(ctx, descripcion):
         await ctx.author.send(f"✅ Tu petición ha sido registrada con el código `{codigo}`.")
     except discord.Forbidden:
         await ctx.send(f"✅ Tu petición ha sido registrada con el código `{codigo}`, pero no pude enviarte mensaje privado.")
+    
+
+def tiene_rol_permitido(member: discord.Member, roles_permitidos: set):
+    return any(role.name in roles_permitidos for role in member.roles)
+
+
+async def inscribirse_handler(ctx, codigo_torneo: str, usuario: discord.Member = None):
+     # Eliminar mensaje original si es posible
+    try:
+        await ctx.message.delete()
+    except (discord.Forbidden, discord.NotFound):
+        pass
+    except Exception as e:
+        print(f"[ERROR al borrar mensaje]: {e}")
+
+    apuntado = usuario or ctx.author
+
+    tipo_torneo_socios = "socio" in codigo_torneo.lower()
+    roles_permitidos = config.ROLES_SOCIOS if tipo_torneo_socios else config.ROLES_TODOS
+
+    if usuario and usuario != ctx.author:
+        tiene_permiso = await moderador_permisos_handle(ctx)
+        if not tiene_permiso:
+            return
+
+    if not tiene_rol_permitido(apuntado, roles_permitidos):
+        await ctx.author.send(f"❌ El usuario {apuntado.display_name} no tiene los roles necesarios para inscribirse a este torneo.")
+        return
+
+    payload = {
+        "api_key": config.CHALLONGE_API_KEY,
+        "participant": {
+            "name": str(apuntado.id)
+        }
+    }
+    url_post = f"https://api.challonge.com/v1/tournaments/{codigo_torneo}/participants.json"
+
+    async with aiohttp.ClientSession() as session:
+        async with session.post(url_post, json=payload, auth=aiohttp.BasicAuth(config.CHALLONGE_USERNAME, config.CHALLONGE_API_KEY)) as resp:
+            if resp.status not in (200, 201):
+                error_text = await resp.text()
+                await ctx.author.send(f"❌ Error al inscribir al usuario: {error_text}")
+                return
+
+        # Obtener la lista actual de participantes para contar
+        url_get = f"https://api.challonge.com/v1/tournaments/{codigo_torneo}/participants.json"
+        async with session.get(url_get, auth=aiohttp.BasicAuth(config.CHALLONGE_USERNAME, config.CHALLONGE_API_KEY)) as get_resp:
+            if get_resp.status != 200:
+                error_text = await get_resp.text()
+                await ctx.author.send(f"⚠️ Inscrito pero no pude contar los participantes: {error_text}")
+                return
+            participantes = await get_resp.json()
+            total_inscritos = len(participantes)
+
+    # Buscar canal de torneos activos
+    canal_torneos = discord.utils.get(ctx.guild.text_channels, name="torneos-activos")
+    if not canal_torneos:
+        await ctx.author.send("⚠️ No encontré el canal `#torneos-activos` para extraer la URL del deck.")
+        return
+
+    deck_url = None
+    total_maximo = None
+
+    async for mensaje in canal_torneos.history(limit=100):
+        if codigo_torneo in mensaje.content:
+            for linea in mensaje.content.splitlines():
+                if linea.startswith("📥"):
+                    deck_url = linea.split("📥 **Decks:**")[-1].strip()
+                if linea.startswith("👥"):
+                    try:
+                        total_maximo =int(linea.split("👥 **Jugadores:**")[-1].strip())
+                        print(f"[ERROR al borrar mensaje]:{total_maximo}")
+                        
+                    except ValueError:
+                        total_maximo = None
+            break
+
+    # Enviar mensaje al jugador
+    if deck_url:
+        try:
+            await apuntado.send(
+                f"✅ Estás inscrito en el torneo `{codigo_torneo}`.\n"
+                f"📥 Sube tu deck aquí: {deck_url}"
+            )
+        except discord.Forbidden:
+            await ctx.author.send(
+                f"⚠️ No pude enviar un mensaje directo a {apuntado.display_name}. "
+                f"Es posible que tenga los DMs cerrados."
+            )
+        except discord.HTTPException as e:
+            await ctx.author.send(
+                f"⚠️ No se pudo enviar el mensaje a {apuntado.display_name} por un error inesperado: {str(e)}"
+            )
+    else:
+        await ctx.author.send("⚠️ No se encontró la URL de decks para este torneo en `#torneos-activos`.")
+
+    # Publicar en canal de inscripciones
+    canal_inscripciones = discord.utils.get(ctx.guild.text_channels, name="inscripciones")
+    if canal_inscripciones:
+        if total_maximo:
+            plazas_restantes = total_maximo - total_inscritos
+            mensaje = f"✅ `{apuntado.display_name}` se ha inscrito en `{codigo_torneo}`. Quedan **{plazas_restantes}** plazas."
+        else:
+            mensaje = f"✅ `{apuntado.display_name}` se ha inscrito en `{codigo_torneo}`."
+        await canal_inscripciones.send(mensaje)
+    else:
+        await ctx.author.send("⚠️ No encontré el canal `#inscripciones` para anunciar la inscripción.")
+
+async def desinscribirse_handler(ctx, codigo_torneo: str, usuario: discord.Member = None):
+    apuntado = usuario or ctx.author
+
+    # Si el autor quiere desinscribir a otro, requiere permisos de moderador
+    if apuntado != ctx.author:
+        tiene_permiso = await moderador_permisos_handle(ctx)
+        if not tiene_permiso:
+            return
+
+    # Buscar el ID del participante en Challonge
+    url_get = f"https://api.challonge.com/v1/tournaments/{codigo_torneo}/participants.json"
+    participant_id = None
+    total_inscritos = 0
+
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url_get, auth=aiohttp.BasicAuth(config.CHALLONGE_USERNAME, config.CHALLONGE_API_KEY)) as resp:
+            if resp.status != 200:
+                error_text = await resp.text()
+                await ctx.author.send(f"❌ Error al buscar participantes: {error_text}")
+                return
+            data = await resp.json()
+
+        for participante in data:
+            p = participante.get("participant", {})
+            if p.get("name") == str(apuntado.id):
+                participant_id = p.get("id")
+            total_inscritos += 1
+
+        if not participant_id:
+            await ctx.author.send(f"❌ No se encontró a {apuntado.display_name} inscrito en el torneo `{codigo_torneo}`.")
+            return
+
+        # Eliminar participante
+        url_delete = f"https://api.challonge.com/v1/tournaments/{codigo_torneo}/participants/{participant_id}.json"
+        async with session.delete(url_delete, auth=aiohttp.BasicAuth(config.CHALLONGE_USERNAME, config.CHALLONGE_API_KEY)) as delete_resp:
+            if delete_resp.status not in (200, 202):
+                error_text = await delete_resp.text()
+                await ctx.author.send(f"❌ Error al desinscribir: {error_text}")
+                return
+
+    await ctx.author.send(f"✅ {apuntado.display_name} ha sido desinscrito del torneo `{codigo_torneo}`.")
+    if apuntado != ctx.author:
+        try:
+            await apuntado.send(f"❌ Has sido desinscrito del torneo `{codigo_torneo}`.")
+        except discord.Forbidden:
+            await ctx.author.send(
+                f"⚠️ No pude enviar un mensaje directo a {apuntado.display_name}. "
+                f"Es posible que tenga los DMs cerrados."
+            )
+        except discord.HTTPException as e:
+            await ctx.author.send(
+                f"⚠️ No se pudo enviar el mensaje a {apuntado.display_name} por un error inesperado: {str(e)}"
+            )
+        
+
+    # Buscar canal de torneos activos
+    canal_torneos = discord.utils.get(ctx.guild.text_channels, name="torneos-activos")
+    canal_inscripciones = discord.utils.get(ctx.guild.text_channels, name="inscripciones")
+
+    if not canal_torneos or not canal_inscripciones:
+        await ctx.author.send("⚠️ No se encontraron los canales `#torneos-activos` o `#inscripciones` para notificar.")
+        return
+
+   
+    total_maximo = None
+
+    async for mensaje in canal_torneos.history(limit=100):
+        if codigo_torneo in mensaje.content:
+            for linea in mensaje.content.splitlines():
+                if linea.startswith("👥"):
+                    try:
+                        total_maximo =int(linea.split("👥 **Jugadores:**")[-1].strip())
+                    except ValueError:
+                        total_maximo = None
+            break
+
+    if total_maximo is not None:
+        plazas_disponibles = total_maximo - (total_inscritos - 1)  # -1 porque ya está desinscrito
+        await canal_inscripciones.send(
+            f"📤 {apuntado.mention} se ha desinscrito del torneo `{codigo_torneo}`.\n"
+            f"🪑 Plazas disponibles: {plazas_disponibles}/{total_maximo}"
+        )
+
+async def ver_inscritos_handler(ctx, codigo_torneo: str):
+    url = f"https://api.challonge.com/v1/tournaments/{codigo_torneo}/participants.json"
+
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url, auth=aiohttp.BasicAuth(config.CHALLONGE_USERNAME, config.CHALLONGE_API_KEY)) as resp:
+            if resp.status != 200:
+                error_text = await resp.text()
+                await ctx.send(f"❌ Error al obtener los participantes: {error_text}")
+                return
+
+            data = await resp.json()
+
+    if not data:
+        await ctx.send(f"📭 No hay jugadores inscritos en el torneo `{codigo_torneo}`.")
+        return
+
+    inscritos = []
+    for i, p in enumerate(data, 1):
+        nombre = p.get("participant", {}).get("name", "Desconocido")
+        try:
+            miembro = await ctx.guild.fetch_member(int(nombre))
+        except (ValueError, discord.NotFound):
+            nombre_mostrado = nombre  # No era un ID o no se encontró en el servidor
+
+        inscritos.append(f"{i}. {miembro.display_name}")
+
+        inscritos_str = "\n".join(inscritos)
+    await ctx.author.send(
+        f"📋 **Jugadores inscritos en `{codigo_torneo}`:**\n```{inscritos_str}```"
+    )

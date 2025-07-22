@@ -3,15 +3,15 @@ from datetime import datetime
 import discord
 import re
 
-from utils.torneos import comenzar_evento_handle
+
 
 ultima_ejecucion_eventos = None
+ultima_ejecucion_torneos = None
+ultima_ejecucion = None
 
 def cargar_tareas(bot):
     publicar_eventos_diarios.start(bot)
     limpiar_partidos_pasados.start(bot)
-    iniciar_torneos_programados.start(bot)
-    publicar_torneos_activos_diarios.start(bot)
 
 
 @tasks.loop(minutes=1)
@@ -21,7 +21,7 @@ async def publicar_eventos_diarios(bot):
     ahora = datetime.now()
 
     # Solo entre las 10:00 y 10:15
-    if not (ahora.hour == 10 and ahora.minute <= 15):
+    if not (ahora.hour == 10 and ahora.minute <= 25):
         return
 
     hoy = ahora.date()
@@ -76,57 +76,20 @@ async def publicar_eventos_diarios(bot):
         await canal_destino.send(embed=embed)
 
 @tasks.loop(minutes=1)
-async def publicar_torneos_activos_diarios(bot):
-    global ultima_ejecucion
-    now = datetime.now()
-
-    # Ejecutar solo entre las 10:00 y 10:15 una vez al día
-    if not (now.hour == 10 and now.minute <= 15):
-        return
-
-    hoy = now.date()
-
-    if ultima_ejecucion == hoy:
-        return  # Ya se ejecutó hoy
-
-    for guild in bot.guilds:
-        canal_origen = discord.utils.get(guild.text_channels, name="torneos-activos")
-        canal_destino = discord.utils.get(guild.text_channels, name="anuncios-torneos")
-
-        if not canal_origen or not canal_destino:
-            continue
-
-        mensajes_torneos = []
-
-        async for msg in canal_origen.history(limit=100):
-            if (
-                msg.author == guild.me and
-                "código:" in msg.content.lower() and
-                msg.content.count("`") >= 10
-            ):
-                mensajes_torneos.append(msg.content)
-
-        if not mensajes_torneos:
-            await canal_destino.send("📭 No hay torneos activos actualmente.")
-            continue
-
-        await canal_destino.send("🎯 **Torneos activos actualmente:**")
-        for torneo in mensajes_torneos:
-            await canal_destino.send(torneo)
-
-@tasks.loop(minutes=1)
 async def limpiar_partidos_pasados(bot):
     global ultima_ejecucion
     now = datetime.now()
 
     # Ejecutar solo entre las 10:00 y 10:15 una vez al día
-    if not (now.hour == 10 and now.minute <= 15):
+    if not (now.hour == 10 and now.minute <= 25):
         return
 
     hoy = now.date()
 
     if ultima_ejecucion == hoy:
         return  # Ya se ejecutó hoy
+    
+    ultima_ejecucion = hoy
     
     for guild in bot.guilds:
         canal_partidos = discord.utils.get(guild.text_channels, name="partidos-agendados")
@@ -156,66 +119,5 @@ async def limpiar_partidos_pasados(bot):
                 except Exception as e:
                     print(f"Error borrando mensaje: {e}")
             
-@tasks.loop(minutes=1)
-async def iniciar_torneos_programados(bot):
-    global ultima_ejecucion
-    now = datetime.now()
 
-    # Ejecutar solo entre las 10:00 y 10:15 una vez al día
-    if now.weekday() != 0 or not (now.hour == 10 and now.minute <= 5):
-        return
-
-    hoy = now.date()
-
-    if ultima_ejecucion == hoy:
-        return  # Ya se ejecutó hoy
-
-    for guild in bot.guilds:
-        canal_torneos = discord.utils.get(guild.text_channels, name="torneos-activos")
-        canal_iniciados = discord.utils.get(guild.text_channels, name="torneos-iniciados")
-        canal_emparejamientos = discord.utils.get(guild.text_channels, name="emparejamientos")
-
-        if not canal_torneos or not canal_iniciados or not canal_emparejamientos:
-            continue
-
-        patron = re.compile(r"`(.+?)` `(\d{2}/\d{2}/\d{4})` \| `(\d+)` \| `(.+?)` \| código: `(\w{6})`")
-
-        async for msg in canal_torneos.history(limit=100):
-            match = patron.search(msg.content)
-            if not match:
-                continue
-
-            nombre = match.group(1)
-            fecha_str = match.group(2)
-            codigo = match.group(5).upper()
-
-            try:
-                fecha_torneo = datetime.strptime(fecha_str, "%d/%m/%Y").date()
-            except ValueError:
-                continue
-
-            if fecha_torneo != now.date():
-                continue  # Solo torneos con fecha de hoy
-
-            # Verificar si ya está iniciado en #torneos-iniciados
-            ya_iniciado = False
-            async for m_iniciado in canal_iniciados.history(limit=100):
-                if f"`{codigo}`" in m_iniciado.content:
-                    ya_iniciado = True
-                    break
-
-            if ya_iniciado:
-                continue  # Ya iniciado previamente
-
-            # Simular contexto con el owner del servidor
-            dummy_msg = await canal_emparejamientos.send(f"🤖 Iniciando torneo `{codigo}` automáticamente...")
-            ctx = commands.Context(
-                bot=bot,
-                message=dummy_msg,
-                guild=guild,
-                author=guild.owner,
-                channel=canal_emparejamientos
-            )
-
-            # Iniciar el torneo (sin set)
-            await comenzar_evento_handle(ctx, codigo)
+           
