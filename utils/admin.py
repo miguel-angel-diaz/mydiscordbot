@@ -1,19 +1,18 @@
 
 import discord
 from datetime import datetime
-import re
+import aiohttp
+import random
+import config
+
+from utils.commons import borrar_mensaje_seguro, validar_canal_correcto 
 
 async def aplicar_strike(ctx, miembro: discord.Member):
      # Intentar eliminar el mensaje del canal público
-    try:
-        await ctx.message.delete()
-    except discord.NotFound:
-        pass
-    except discord.Forbidden:
-        pass
-    except Exception as e:
-        print(f"[ERROR al borrar mensaje]: {e}")
-
+    await borrar_mensaje_seguro(ctx)
+    if not await validar_canal_correcto(ctx, "preguntale-a-el-barbas", "!strike"):
+        return
+   
     servidor = ctx.guild
 
     # Verificar permisos
@@ -44,14 +43,9 @@ async def aplicar_strike(ctx, miembro: discord.Member):
 
 async def aplicar_out(ctx, miembro: discord.Member):
      # Intentar eliminar el mensaje del canal público
-    try:
-        await ctx.message.delete()
-    except discord.NotFound:
-        pass
-    except discord.Forbidden:
-        pass
-    except Exception as e:
-        print(f"[ERROR al borrar mensaje]: {e}")
+    await borrar_mensaje_seguro(ctx)
+    if not await validar_canal_correcto(ctx, "preguntale-a-el-barbas", "!out"):
+        return
         
     servidor = ctx.guild
     
@@ -97,6 +91,7 @@ async def aplicar_out(ctx, miembro: discord.Member):
 async def eliminar_mensajes(ctx, canal: discord.TextChannel, cantidad: int):
     
     # Verificar permisos
+    
     if not await moderador_permisos_handle(ctx):
       return
 
@@ -124,18 +119,6 @@ async def eliminar_mensajes(ctx, canal: discord.TextChannel, cantidad: int):
     except discord.HTTPException as e:
         await ctx.send(f"⚠️ Hubo un error al intentar borrar mensajes: {e}")
 
-async def moderador_permisos_handle(ctx):
-    autor = ctx.author
-    servidor = ctx.guild
-    es_dueno = autor == servidor.owner
-    rol_moderador = discord.utils.get(servidor.roles, name="Moderador")
-    tiene_permiso = es_dueno or (rol_moderador and rol_moderador in autor.roles)
-
-    if not tiene_permiso:
-        await asignar_strike_automatico(ctx)
-        return False
-
-    return True
 
 async def asignar_strike_automatico(ctx):
     autor = ctx.author
@@ -168,6 +151,11 @@ def get_mensaje_strike():
     )
 
 async def cerrar_peticion_handle(ctx, codigo, respuesta):
+    await borrar_mensaje_seguro(ctx)
+    if not await validar_canal_correcto(ctx, "peticiones-de-usuarios", "!cerrar-peticion"):
+        return
+    if not await moderador_permisos_handle(ctx):
+      return
     canal_peticiones = discord.utils.get(ctx.guild.text_channels, name="peticiones-de-usuarios")
     canal_resolucion = discord.utils.get(ctx.guild.text_channels, name="resolucion-de-peticiones")
 
@@ -228,3 +216,71 @@ async def cerrar_peticion_handle(ctx, codigo, respuesta):
     embed_resolucion.set_footer(text=f"ID del solicitante: {miembro.id}")
 
     await canal_resolucion.send(embed=embed_resolucion)
+
+async def sorteo_torneo_handle(ctx, codigo_torneo: str, premio: str = "Premio del sorteo"):
+    await borrar_mensaje_seguro(ctx)
+    if not await validar_canal_correcto(ctx, "preguntale-a-el-barbas", "!sorteo-torneo"):
+        return
+
+    if not await moderador_permisos_handle(ctx):
+      return
+
+    url_get = f"https://api.challonge.com/v1/tournaments/{codigo_torneo}/participants.json"
+
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url_get, auth=aiohttp.BasicAuth(config.CHALLONGE_USERNAME, config.CHALLONGE_API_KEY)) as resp:
+            if resp.status != 200:
+                error_text = await resp.text()
+                await ctx.send(f"❌ Error al obtener inscritos: {error_text}")
+                return
+            data = await resp.json()
+
+    # Extraer IDs y resolver miembros
+    candidatos = []
+    for p in data:
+        participante = p.get("participant", {})
+        discord_id = participante.get("name")
+        try:
+            miembro = await ctx.guild.fetch_member(int(discord_id))
+            candidatos.append(miembro)
+        except (ValueError, discord.NotFound):
+            continue  # Saltamos si no es un ID válido o no está en el servidor
+
+    if not candidatos:
+        await ctx.send("⚠️ No hay participantes válidos para el sorteo.")
+        return
+
+    # Elegir ganador aleatorio
+    ganador = random.choice(candidatos)
+
+    # Mensaje al moderador
+    try:
+        await ctx.author.send(
+            f"🎉 Sorteo realizado para el torneo `{codigo_torneo}`\n"
+            f"🏆 Ganador: {ganador.display_name} ({ganador.mention})\n"
+            f"🎁 Premio: {premio}"
+        )
+    except discord.Forbidden:
+        await ctx.send("⚠️ No pude enviarte mensaje privado con el resultado.")
+
+    # Mensaje al ganador
+    try:
+        await ganador.send(
+            f"🎉 ¡Felicidades! Has sido seleccionado en un sorteo del torneo `{codigo_torneo}`.\n"
+            f"🎁 Te ha tocado: {premio}"
+        )
+    except discord.Forbidden:
+        await ctx.send(f"⚠️ No pude enviar mensaje privado a {ganador.display_name}.")
+
+async def moderador_permisos_handle(ctx):
+    autor = ctx.author
+    servidor = ctx.guild
+    es_dueno = autor == servidor.owner
+    rol_moderador = discord.utils.get(servidor.roles, name="admin")
+    tiene_permiso = es_dueno | (rol_moderador and rol_moderador in autor.roles)
+
+    if not tiene_permiso:
+        await asignar_strike_automatico(ctx)
+        return False
+
+    return True
