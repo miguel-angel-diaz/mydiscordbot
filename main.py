@@ -1,8 +1,8 @@
 import discord
 from discord.ext import commands
 
-from utils.admin import aplicar_out, aplicar_strike, eliminar_mensajes, cerrar_peticion_handle, sorteo_torneo_handle, moderador_permisos_handle
-from utils.jugadores import agendar_partida_handle, eventos_hoy_handle, nueva_peticion_handle, inscribirse_handler, desinscribirse_handler, ver_inscritos_handler, reportar_resultado_handle
+from utils.admin import aplicar_out, aplicar_strike, eliminar_mensajes, cerrar_peticion_handle, sorteo_torneo_handle, moderador_permisos_handle, nuevo_sorteo_handle, realizar_sorteo_handle
+from utils.jugadores import agendar_partida_handle, eventos_hoy_handle, nueva_peticion_handle, inscribirse_handler, desinscribirse_handler, ver_inscritos_handler, reportar_resultado_handle, inscribirse_sorteo_handle
 from utils.torneos import nuevo_torneo, iniciar_torneo_handle, actualizar_clasificacion_handle, partidos_pendientes_handle, forzar_ronda_handle
 
 from utils.watchers import cargar_tareas;
@@ -67,6 +67,18 @@ async def cerrar_peticion(ctx, codigo: str = None, *, respuesta: str = None):
 async def sorteo_torneo(ctx, codigo_torneo: str, *, premio: str = "Premio del sorteo"):
     """Realiza un sorteo entre los inscritos de un torneo - !sorteo-torneo <código_torneo> <premio>"""
     await sorteo_torneo_handle(ctx, codigo_torneo, premio)
+
+@bot.command(name="nuevo-sorteo")
+@comando_roles_permitidos("admin")
+@commands.has_permissions(manage_guild=True)
+async def nuevo_sorteo(ctx, *, args: str):
+    await nuevo_sorteo_handle(ctx, args)
+
+@bot.command(name="realizar-sorteo")
+@comando_roles_permitidos("admin")
+@commands.has_permissions(manage_guild=True)
+async def realizar_sorteo(ctx, codigo: str):
+    await realizar_sorteo_handle(ctx, codigo.strip())
 
 #########################################################################################################
 
@@ -138,6 +150,13 @@ async def partidos_pendientes(ctx, codigo_torneo: str):
     """Muestra los partidos pendientes de esa ronda de un torneo - !partidos-pendientes <código_torneo>"""
     await partidos_pendientes_handle(ctx, codigo_torneo)
 
+@bot.command(name="inscribirse-sorteo")
+@comando_roles_permitidos("socio", "second-chance-socio", "Miembro", "second-chance-miembro")
+@commands.has_permissions(manage_messages=True)
+@commands.has_permissions(manage_roles=True)
+async def inscribirse_sorteo(ctx, codigo: str):
+    await inscribirse_sorteo_handle(ctx, codigo)
+
 
 #########################################################################################################
 
@@ -186,7 +205,9 @@ async def forzar_ronda(ctx, codigo_torneo: str):
 
 @bot.command(name="mis-comandos")
 async def mis_comandos(ctx):
+
     """Muestra los comandos disponibles según tus permisos y roles - !mis-comandos"""
+    await borrar_mensaje_seguro(ctx)
     if not await validar_canal_correcto(ctx, "preguntale-a-el-barbas", "!mis-comandos"):
         return
     usuario_roles = [r.name for r in ctx.author.roles]

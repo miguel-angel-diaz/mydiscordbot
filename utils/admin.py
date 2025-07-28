@@ -284,3 +284,110 @@ async def moderador_permisos_handle(ctx):
         return False
 
     return True
+
+async def nuevo_sorteo_handle(ctx, args: str):
+    await borrar_mensaje_seguro(ctx)
+
+    if not await moderador_permisos_handle(ctx):
+      return
+
+    # Validar canal correcto
+    if not await validar_canal_correcto(ctx, "preguntale-a-el-barbas", "!nuevo_sorteo"):
+        return
+
+    # Separar argumentos
+    partes = [p.strip() for p in args.split("|")]
+    if len(partes) != 4:
+        await ctx.author.send("❌ Formato incorrecto. Usa:\n`!nuevo_sorteo nuevo-sorteo | codigo | fecha | regalo`")
+        return
+
+    _, codigo, fecha, regalo = partes
+
+    # Crear el embed para el canal de anuncios
+    embed = discord.Embed(
+        title="🎁 ¡Nuevo Sorteo Activo!",
+        description=f"**Código:** `{codigo}`\n**Fecha límite:** {fecha}\n**Regalo:** {regalo}",
+        color=discord.Color.gold()
+    )
+    embed.set_footer(text="¡Participa antes de que finalice el sorteo!")
+
+    canal_anuncios = discord.utils.get(ctx.guild.text_channels, name="anuncios")
+    if canal_anuncios:
+        await canal_anuncios.send(embed=embed)
+    else:
+        await ctx.author.send("⚠️ No encontré el canal `#anuncios`.")
+
+    # Agregar al canal de sorteos activos
+    canal_sorteos_activos = discord.utils.get(ctx.guild.text_channels, name="sorteos-activos")
+    if canal_sorteos_activos:
+        await canal_sorteos_activos.send(f"🎉 **Sorteo activo:** `{codigo}`\n📅 **Fecha:** {fecha}\n🎁 **Regalo:** {regalo}")
+    else:
+        await ctx.author.send("⚠️ No encontré el canal `#sorteos-activos`.")
+
+async def realizar_sorteo_handle(ctx, codigo: str):
+    await borrar_mensaje_seguro(ctx)
+
+    if not await moderador_permisos_handle(ctx):
+        return
+
+    if not await validar_canal_correcto(ctx, "preguntale-a-el-barbas", "!nuevo_sorteo"):
+        return
+
+    canal_inscritos = discord.utils.get(ctx.guild.text_channels, name="inscritos-sorteos")
+    canal_sorteos_activos = discord.utils.get(ctx.guild.text_channels, name="sorteos-activos")
+
+    if not canal_inscritos or not canal_sorteos_activos:
+        await ctx.send("❌ No se encontraron los canales `#inscritos-sorteos` o `#sorteos-activos`.")
+        return
+
+    # Buscar inscritos válidos al sorteo
+    mensajes = [msg async for msg in canal_inscritos.history(limit=200)]
+    inscritos = []
+
+    for msg in mensajes:
+        partes = msg.content.split("|")
+        if len(partes) >= 3:
+            codigo_msg = partes[1].strip()
+            user_id_str = partes[2].strip().split()[0]
+
+            if codigo_msg == codigo:
+                try:
+                    user = await ctx.guild.fetch_member(int(user_id_str))
+                    inscritos.append((msg, user))
+                except (discord.NotFound, ValueError):
+                    continue
+
+    if not inscritos:
+        await ctx.send(f"❌ No hay inscritos para el sorteo `{codigo}`.")
+        return
+
+    # Elegir un ganador
+    mensaje_ganador, usuario_ganador = random.choice(inscritos)
+
+    # Enviar mensajes privados
+    try:
+        await usuario_ganador.send(f"🎉 ¡Has ganado el sorteo `{codigo}`! Felicidades.")
+        await ctx.author.send(f"✅ El ganador del sorteo `{codigo}` es {usuario_ganador.mention}. Se le ha notificado por privado.")
+    except discord.Forbidden:
+        await ctx.send(f"⚠️ No pude enviar mensaje al ganador ({usuario_ganador.mention}), tiene los DMs cerrados.")
+
+    # Eliminar todos los inscritos de ese sorteo
+    eliminados = 0
+    for msg, _ in inscritos:
+        try:
+            await msg.delete()
+            eliminados += 1
+        except discord.HTTPException:
+            continue
+
+    # Eliminar el sorteo del canal de sorteos activos (más flexible)
+    mensajes_sorteos = [msg async for msg in canal_sorteos_activos.history(limit=100)]
+    for msg in mensajes_sorteos:
+        if msg.content.startswith("🎉") and codigo in msg.content:
+            try:
+                await msg.delete()
+                break
+            except discord.HTTPException:
+                continue
+
+    await ctx.send(f"✅ Sorteo `{codigo}` finalizado. {eliminados} inscritos eliminados y sorteo activo eliminado.")

@@ -568,3 +568,54 @@ async def reportar_resultado_handle(ctx, codigo_torneo: str, jugador1: discord.M
     )
 
     await partidos_pendientes_handle(ctx, codigo_torneo)
+
+async def inscribirse_sorteo_handle(ctx, codigo: str):
+    await borrar_mensaje_seguro(ctx)
+
+    user = ctx.author
+    guild = ctx.guild
+
+    # Verificar que el sorteo está activo
+    canal_activos = discord.utils.get(guild.text_channels, name="sorteos-activos")
+    if not canal_activos:
+        await user.send("⚠️ No se encontró el canal `#sorteos-activos`.")
+        return
+
+    sorteo_activo = False
+    async for mensaje in canal_activos.history(limit=100):
+        if mensaje.content.startswith("🎉") and codigo in mensaje.content:
+            sorteo_activo = True
+            break
+
+    if not sorteo_activo:
+        await user.send(f"❌ El sorteo con código `{codigo}` no está activo o no existe.")
+        return
+
+    # Inscribir al usuario en el canal #inscritos-sorteos
+    canal_inscritos = discord.utils.get(guild.text_channels, name="inscritos-sorteos")
+    if not canal_inscritos:
+        await user.send("⚠️ No se encontró el canal `#inscritos-sorteos`.")
+        return
+
+    # Verificar que el usuario no esté ya inscrito
+    ya_inscrito = False
+    contador = 1
+    async for mensaje in canal_inscritos.history(limit=200, oldest_first=True):
+        if f"{codigo} <@{user.id}>" in mensaje.content:
+            ya_inscrito = True
+        if mensaje.content.startswith(f"{contador}"):
+            contador += 1
+
+    if ya_inscrito:
+        await user.send(f"⚠️ Ya estás inscrito en el sorteo `{codigo}`.")
+        return
+
+    # Publicar inscripción
+    linea = f"{contador} | {codigo} | {user.id} <@{user.id}>"
+    await canal_inscritos.send(linea)
+
+    try:
+        await user.send(f"✅ Te has inscrito correctamente al sorteo `{codigo}`.")
+    except discord.Forbidden:
+        await ctx.send(f"⚠️ No pude enviarte un mensaje privado, revisa tus DMs.")
+        

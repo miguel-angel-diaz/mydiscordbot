@@ -369,9 +369,6 @@ async def actualizar_clasificacion_handle(ctx, codigo_torneo: str, canal_destino
     else:
         await ctx.send("⚠️ No se encontró el canal `#clasificaciones-torneos`.")
 
-    if canal_destino == "clasificacion-general":
-         await ctx.author.send("⚠️ No se encontró la URL de decks para este torneo en `#torneos-activos`.")
-
 async def partidos_pendientes_handle(ctx, codigo_torneo: str):
     await borrar_mensaje_seguro(ctx)
     if not await validar_canal_correcto(ctx, "preguntale-a-el-barbas", "!partidos-pendientes"):
