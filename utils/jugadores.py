@@ -19,7 +19,7 @@ async def agendar_partida_handle(ctx, fecha, hora, jugador1, _vs, jugador2):
 
     if not await validar_canal_correcto(ctx, "agenda", "!agendar-partida"):
         return
-
+    
     errores = []
 
     if not fecha:
@@ -217,6 +217,10 @@ async def inscribirse_handler(ctx, codigo_torneo: str, usuario: discord.Member =
     await borrar_mensaje_seguro(ctx)
     if not await validar_canal_correcto(ctx, "preguntale-a-el-barbas", "!inscribirse"):
         return
+    
+    if codigo_torneo is None :
+        await ctx.author.send("❌ Debes mencionar a codigo de torneo. Ejemplo: `!inscribirse codigo`")
+        return
 
     apuntado = usuario or ctx.author
 
@@ -325,6 +329,11 @@ async def desinscribirse_handler(ctx, codigo_torneo: str, usuario: discord.Membe
     await borrar_mensaje_seguro(ctx)
     if not await validar_canal_correcto(ctx, "preguntale-a-el-barbas", "!desinscribirse"):
         return
+    
+    if codigo_torneo is None :
+        await ctx.author.send("❌ Debes mencionar a codigo de torneo. Ejemplo: `!desinscribirse codigo`")
+        return
+    
     apuntado = usuario or ctx.author
 
     # Si el autor quiere desinscribir a otro, requiere permisos de moderador
@@ -412,6 +421,9 @@ async def ver_inscritos_handler(ctx, codigo_torneo: str):
     await borrar_mensaje_seguro(ctx)
     if not await validar_canal_correcto(ctx, "preguntale-a-el-barbas", "!ver-inscritos"):
         return
+    if codigo_torneo is None :
+        await ctx.author.send("❌ Debes mencionar a codigo de torneo. Ejemplo: `!ver-inscritos codigo`")
+        return
     url = f"https://api.challonge.com/v1/tournaments/{codigo_torneo}/participants.json"
 
     async with aiohttp.ClientSession() as session:
@@ -447,12 +459,26 @@ async def reportar_resultado_handle(ctx, codigo_torneo: str, jugador1: discord.M
     if not await validar_canal_correcto(ctx, "resultados", "!reportar-resultado"):
         return
     author = ctx.author
+    if codigo_torneo is None:
+        await author.send("❌ Debes indicar el **código del torneo**. Ejemplo: `!reportar-resultado MTG123 @Jugador1 2-1 @Jugador2`")
+        return
 
+    if jugador1 is None:
+        await author.send("❌ Debes mencionar al **jugador 1**. Ejemplo: `!reportar-resultado MTG123 @Jugador1 2-1 @Jugador2`")
+        return
+
+    if resultado is None:
+        await author.send("❌ Debes indicar el **resultado** del enfrentamiento. Ejemplo: `!reportar-resultado MTG123 @Jugador1 2-1 @Jugador2`")
+        return
+
+    if jugador2 is None:
+        await author.send("❌ Debes mencionar al **jugador 2**. Ejemplo: `!reportar-resultado MTG123 @Jugador1 2-1 @Jugador2`")
+        return
     # Verificar si quien envía el mensaje es moderador o uno de los jugadores
     if author != jugador1 and author != jugador2:
         es_mod = await moderador_permisos_handle(ctx)
         if not es_mod:
-            await ctx.author.send("❌ Solo los jugadores involucrados o un moderador pueden reportar el resultado.")
+            await author.send("❌ Solo los jugadores involucrados o un moderador pueden reportar el resultado.")
             return
 
     # Obtener participantes del torneo
@@ -460,7 +486,7 @@ async def reportar_resultado_handle(ctx, codigo_torneo: str, jugador1: discord.M
     async with aiohttp.ClientSession() as session:
         async with session.get(url_participantes, auth=aiohttp.BasicAuth(config.CHALLONGE_USERNAME, config.CHALLONGE_API_KEY)) as resp:
             if resp.status != 200:
-                await ctx.author.send("❌ No se pudieron obtener los participantes del torneo.")
+                await author.send("❌ No se pudieron obtener los participantes del torneo.")
                 return
             participantes_data = await resp.json()
 
@@ -474,14 +500,14 @@ async def reportar_resultado_handle(ctx, codigo_torneo: str, jugador1: discord.M
                 id_jugador2 = p["id"]
 
         if not id_jugador1 or not id_jugador2:
-            await ctx.author.send("❌ No se encontraron ambos jugadores inscritos en el torneo.")
+            await author.send("❌ No se encontraron ambos jugadores inscritos en el torneo.")
             return
 
         # Buscar el match entre esos jugadores
         url_matches = f"https://api.challonge.com/v1/tournaments/{codigo_torneo}/matches.json"
         async with session.get(url_matches, auth=aiohttp.BasicAuth(config.CHALLONGE_USERNAME, config.CHALLONGE_API_KEY)) as resp:
             if resp.status != 200:
-                await ctx.author.send("❌ No se pudieron obtener los emparejamientos.")
+                await author.send("❌ No se pudieron obtener los emparejamientos.")
                 return
             matches_data = await resp.json()
 
@@ -495,18 +521,18 @@ async def reportar_resultado_handle(ctx, codigo_torneo: str, jugador1: discord.M
                 break
 
         if not match_id:
-            await ctx.author.send("❌ No se encontró un match entre estos dos jugadores.")
+            await author.send("❌ No se encontró un match entre estos dos jugadores.")
             return
 
         # Procesar el resultado tipo "2-1"
         if not resultado or "-" not in resultado:
-            await ctx.author.send("❌ El resultado debe tener el formato 'X-Y', por ejemplo '2-1'.")
+            await author.send("❌ El resultado debe tener el formato 'X-Y', por ejemplo '2-1'.")
             return
 
         try:
             puntos1, puntos2 = map(int, resultado.split("-"))
         except ValueError:
-            await ctx.author.send("❌ El resultado debe tener números válidos, por ejemplo '2-1'.")
+            await author.send("❌ El resultado debe tener números válidos, por ejemplo '2-1'.")
             return
 
         winner_id = id_jugador1 if puntos1 > puntos2 else id_jugador2
@@ -534,7 +560,7 @@ async def reportar_resultado_handle(ctx, codigo_torneo: str, jugador1: discord.M
         async with session.put(url_put, json=payload, auth=aiohttp.BasicAuth(config.CHALLONGE_USERNAME, config.CHALLONGE_API_KEY)) as put_resp:
             if put_resp.status not in (200, 202):
                 error = await put_resp.text()
-                await ctx.author.send(f"❌ Error al reportar el resultado: {error}")
+                await author.send(f"❌ Error al reportar el resultado: {error}")
                 return
 
     # Mandar mensaje privado a ambos jugadores
@@ -547,12 +573,12 @@ async def reportar_resultado_handle(ctx, codigo_torneo: str, jugador1: discord.M
                 f"📊 Resultado: {resultado}"
             )
         except discord.Forbidden:
-            await ctx.author.send(
+            await author.send(
                 f"⚠️ No pude enviar un mensaje directo a {jugador.display_name}. "
                 f"Es posible que tenga los DMs cerrados."
             )
         except discord.HTTPException as e:
-            await ctx.author.send(
+            await author.send(
                 f"⚠️ No se pudo enviar el mensaje a {jugador.display_name} por un error inesperado: {str(e)}"
             )
     # Canal de resultados
@@ -562,7 +588,7 @@ async def reportar_resultado_handle(ctx, codigo_torneo: str, jugador1: discord.M
             f"🏆 Resultado reportado en `{codigo_torneo}`:\n"
             f"**{jugador1.display_name}** {resultado} **{jugador2.display_name}**"
         )
-    await ctx.author.send(
+    await author.send(
         "✅ Resultado reportado correctamente.:\n"
         f"**{jugador1.display_name}** {resultado} **{jugador2.display_name}**"
     )
@@ -574,6 +600,10 @@ async def inscribirse_sorteo_handle(ctx, codigo: str):
 
     user = ctx.author
     guild = ctx.guild
+
+    if codigo is None:
+        await user.send("❌ Debes indicar un codigo de Sorteo. Ejemplo: `!inscribirse-sorteo codigo")
+        return
 
     # Verificar que el sorteo está activo
     canal_activos = discord.utils.get(guild.text_channels, name="sorteos-activos")

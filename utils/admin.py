@@ -20,7 +20,7 @@ async def aplicar_strike(ctx, miembro: discord.Member):
       return
     
     if miembro is None:
-        await ctx.send("❌ Debes mencionar a un usuario. Ejemplo: `!strike @Usuario`")
+        await ctx.author.send("❌ Debes mencionar a un usuario. Ejemplo: `!strike @Usuario`")
         return
 
     rol_strike = discord.utils.get(servidor.roles, name="Strike")
@@ -29,17 +29,20 @@ async def aplicar_strike(ctx, miembro: discord.Member):
         return
 
     if rol_strike in miembro.roles:
-        await ctx.send(f"ℹ️ {miembro.mention} ya tiene el rol `Strike`.")
+        await ctx.author.send(f"ℹ️ {miembro.mention} ya tiene el rol `Strike`.")
         return
 
     try:
         await miembro.add_roles(rol_strike, reason="Strike manual asignado por Moderador.")
         await miembro.send(get_mensaje_strike())
     except discord.Forbidden:
-        await ctx.send("❌ No tengo permisos para asignar el rol o enviar mensaje privado.")
+        await ctx.author.send("❌ No tengo permisos para asignar el rol o enviar mensaje privado.")
         return
 
-    await ctx.send(f"✅ {miembro.mention} ha recibido un **Strike**.")
+    await ctx.author.send(f"✅ {miembro.mention} ha recibido un **Strike**.")
+    
+    canal_anuncios = discord.utils.get(ctx.guild.text_channels, name="anuncios")
+    await canal_anuncios.send(f"⚠️ Hemos decidido que {miembro.mention} Permanezca una semana en el Hielo, la proxima vez le invitaremos a que abandone The Klub")
 
 async def aplicar_out(ctx, miembro: discord.Member):
      # Intentar eliminar el mensaje del canal público
@@ -54,22 +57,22 @@ async def aplicar_out(ctx, miembro: discord.Member):
       return
 
     if miembro is None:
-        await ctx.send("❌ Debes mencionar a un usuario. Ejemplo: `!out @Usuario`")
+        await ctx.author.send("❌ Debes mencionar a un usuario. Ejemplo: `!out @Usuario`")
         return
     
     rol_out = discord.utils.get(servidor.roles, name="Out")
     if not rol_out:
-        await ctx.send("⚠️ El rol `Out` no existe en el servidor.")
+        await ctx.author.send("⚠️ El rol `Out` no existe en el servidor.")
         return
 
     if rol_out in miembro.roles:
-        await ctx.send(f"ℹ️ {miembro.mention} ya tiene el rol `Out`.")
+        await ctx.author.send(f"ℹ️ {miembro.mention} ya tiene el rol `Out`.")
         return
 
     try:
         await miembro.add_roles(rol_out, reason="Out manual asignado por moderador.")
     except discord.Forbidden:
-        await ctx.send("❌ No tengo permisos para asignar el rol. Revisa la jerarquía de roles.")
+        await ctx.author.send("❌ No tengo permisos para asignar el rol. Revisa la jerarquía de roles.")
         return
 
     mensaje_out = (
@@ -84,9 +87,12 @@ async def aplicar_out(ctx, miembro: discord.Member):
     try:
         await miembro.send(mensaje_out)
     except discord.Forbidden:
-        await ctx.send(f"⚠️ {miembro.mention} no tiene los mensajes privados habilitados.")
+        await ctx.author.send(f"⚠️ {miembro.mention} no tiene los mensajes privados habilitados.")
 
-    await ctx.send(f"✅ {miembro.mention} ha sido expulsado de la comunidad.")
+    await ctx.author.send(f"✅ {miembro.mention} ha sido expulsado de la comunidad.")
+    
+    canal_anuncios = discord.utils.get(ctx.guild.text_channels, name="anuncios")
+    await canal_anuncios.send(f"⚠️ Hemos invitado a abandonar el servidor a {miembro.mention}, ya no podra volver a entrar a The Klub.")
 
 async def eliminar_mensajes(ctx, canal: discord.TextChannel, cantidad: int):
     
@@ -94,10 +100,11 @@ async def eliminar_mensajes(ctx, canal: discord.TextChannel, cantidad: int):
     
     if not await moderador_permisos_handle(ctx):
       return
-
+    
+   
     # Validar argumentos
     if canal is None or cantidad is None:
-        await ctx.send(
+        await ctx.author.send(
             "❌ Uso incorrecto del comando.\n"
             "✅ Formato: `!eliminar-mensajes #canal cantidad`\n"
             "_Ejemplo:_ `!eliminar-mensajes #general 50`"
@@ -107,7 +114,7 @@ async def eliminar_mensajes(ctx, canal: discord.TextChannel, cantidad: int):
    
     # Validar cantidad
     if cantidad <= 0 or cantidad > 1000:
-        await ctx.send("⚠️ La cantidad debe ser entre 1 y 1000 mensajes.")
+        await ctx.author.send("⚠️ La cantidad debe ser entre 1 y 1000 mensajes.")
         return
 
     # Intentar borrar mensajes
@@ -115,9 +122,9 @@ async def eliminar_mensajes(ctx, canal: discord.TextChannel, cantidad: int):
         mensajes_borrados = await canal.purge(limit=cantidad)
         await ctx.send(f"✅ Se han eliminado {len(mensajes_borrados)} mensajes de {canal.mention}.", delete_after=5)
     except discord.Forbidden:
-        await ctx.send("❌ No tengo permisos para borrar mensajes en ese canal.")
+        await ctx.author.send("❌ No tengo permisos para borrar mensajes en ese canal.")
     except discord.HTTPException as e:
-        await ctx.send(f"⚠️ Hubo un error al intentar borrar mensajes: {e}")
+        await ctx.author.send(f"⚠️ Hubo un error al intentar borrar mensajes: {e}")
 
 
 async def asignar_strike_automatico(ctx):
@@ -135,10 +142,13 @@ async def asignar_strike_automatico(ctx):
 
     try:
         await autor.add_roles(rol_strike, reason="Intentó usar comando sin permiso.")
-        await ctx.send(f"🚫 {autor.mention}, no puedes usar este comando. Has recibido un **Strike**.")
+        await ctx.author.send(f"🚫 {autor.mention}, no puedes usar este comando. Has recibido un **Strike**.")
         await autor.send(get_mensaje_strike())
     except discord.Forbidden:
         await ctx.send("⚠️ No tengo permisos para asignar el rol.")
+    
+    canal_anuncios = discord.utils.get(ctx.guild.text_channels, name="anuncios")
+    await canal_anuncios.send(f"⚠️ Hemos decidido que {autor.mention} Permanezca una semana en el Hielo, la proxima vez le invitaremos a que abandone The Klub")
 
 def get_mensaje_strike():
     return (
@@ -156,11 +166,16 @@ async def cerrar_peticion_handle(ctx, codigo, respuesta):
         return
     if not await moderador_permisos_handle(ctx):
       return
+    
+    if codigo is None:
+        await ctx.author.send("❌ Debes mencionar a un codigo de peticion y una respuesta . Ejemplo: `!cerrar-peticion codigo respuesta`")
+        return
+    
     canal_peticiones = discord.utils.get(ctx.guild.text_channels, name="peticiones-de-usuarios")
     canal_resolucion = discord.utils.get(ctx.guild.text_channels, name="resolucion-de-peticiones")
 
     if not canal_peticiones or not canal_resolucion:
-        await ctx.send("❌ No se encontraron los canales necesarios (`#peticiones-de-usuarios` o `#resolucion-de-peticiones`).")
+        await ctx.author.send("❌ No se encontraron los canales necesarios (`#peticiones-de-usuarios` o `#resolucion-de-peticiones`).")
         return
 
     mensaje_objetivo = None
@@ -220,6 +235,10 @@ async def cerrar_peticion_handle(ctx, codigo, respuesta):
 async def sorteo_torneo_handle(ctx, codigo_torneo: str, premio: str = "Premio del sorteo"):
     await borrar_mensaje_seguro(ctx)
     if not await validar_canal_correcto(ctx, "preguntale-a-el-barbas", "!sorteo-torneo"):
+        return
+    
+    if codigo_torneo is None:
+        await ctx.author.send("❌ Debes mencionar a un codigo de sorteo. Ejemplo: `!sorteo-torneo codigo`")
         return
 
     if not await moderador_permisos_handle(ctx):
@@ -294,13 +313,13 @@ async def nuevo_sorteo_handle(ctx, args: str):
     # Validar canal correcto
     if not await validar_canal_correcto(ctx, "preguntale-a-el-barbas", "!nuevo_sorteo"):
         return
-
-    # Separar argumentos
-    partes = [p.strip() for p in args.split("|")]
-    if len(partes) != 4:
+    
+    if args is None:
         await ctx.author.send("❌ Formato incorrecto. Usa:\n`!nuevo_sorteo nuevo-sorteo | codigo | fecha | regalo`")
         return
 
+    # Separar argumentos
+    partes = [p.strip() for p in args.split("|")]
     _, codigo, fecha, regalo = partes
 
     # Crear el embed para el canal de anuncios
@@ -330,7 +349,11 @@ async def realizar_sorteo_handle(ctx, codigo: str):
     if not await moderador_permisos_handle(ctx):
         return
 
-    if not await validar_canal_correcto(ctx, "preguntale-a-el-barbas", "!nuevo_sorteo"):
+    if not await validar_canal_correcto(ctx, "preguntale-a-el-barbas", "!realizar-sorteo"):
+        return
+    
+    if codigo is None:
+        await ctx.author.send("❌ Debes mencionar a un codigo de sorteo. Ejemplo: `!realizar-sorteo codigo`")
         return
 
     canal_inscritos = discord.utils.get(ctx.guild.text_channels, name="inscritos-sorteos")
@@ -361,8 +384,8 @@ async def realizar_sorteo_handle(ctx, codigo: str):
         await ctx.send(f"❌ No hay inscritos para el sorteo `{codigo}`.")
         return
 
-    # Elegir un ganador
-    mensaje_ganador, usuario_ganador = random.choice(inscritos)
+    
+    usuario_ganador = random.choice(inscritos)
 
     # Enviar mensajes privados
     try:

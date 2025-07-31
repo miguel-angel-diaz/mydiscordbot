@@ -17,12 +17,6 @@ CHALLONGE_API_KEY = "DwMmC03iVa5UKm377ZaScn6omJ3EA6jWRcPvzZOJ"
 def generar_codigo_unico(longitud=6):
     return ''.join(random.choices(string.ascii_uppercase + string.digits, k=longitud))
 
-async def asignar_strike_automatico(ctx):
-    rol = discord.utils.get(ctx.guild.roles, name="Strike")
-    if rol and rol not in ctx.author.roles:
-        await ctx.author.add_roles(rol)
-        await ctx.send(f"⚠️ {ctx.author.mention} ha recibido el rol **Strike** por intentar ejecutar un comando sin permisos.")
-
 def slugify_challonge(value: str) -> str:
     # Convierte a minúsculas y elimina cualquier carácter que no sea letra o número
     value = value.lower()
@@ -139,6 +133,10 @@ async def iniciar_torneo_handle(ctx, codigo_torneo: str):
     if not await moderador_permisos_handle(ctx):
         return
 
+    if codigo_torneo is None:
+        await ctx.author.send("❌ Debes mencionar a codigo de torneo. Ejemplo: `!iniciar-torneo codigo`")
+        return
+
     # Iniciar el torneo en Challonge
     url_start = f"https://api.challonge.com/v1/tournaments/{codigo_torneo}/start.json"
 
@@ -231,9 +229,9 @@ async def iniciar_torneo_handle(ctx, codigo_torneo: str):
                 if canal_clasificaciones:
                     await canal_clasificaciones.send(mensaje_clasificacion)
                 else:
-                    await ctx.send("⚠️ No se encontró el canal `#clasificaciones-torneos`.")
+                    await ctx.author.send("⚠️ No se encontró el canal `#clasificaciones-torneos`.")
             else:
-                await ctx.send("❌ Error al obtener la clasificación del torneo.")
+                await ctx.author.send("❌ Error al obtener la clasificación del torneo.")
                 
     # Eliminar mensaje del torneo en #torneos-activos
     canal_torneos_activos = discord.utils.get(ctx.guild.text_channels, name="torneos-activos")
@@ -248,7 +246,20 @@ async def iniciar_torneo_handle(ctx, codigo_torneo: str):
                 except discord.HTTPException as e:
                     await ctx.author.send(f"⚠️ No se pudo eliminar el mensaje de `#torneos-activos`: {e}")
 
-async def actualizar_clasificacion_handle(ctx, codigo_torneo: str, canal_destino: str = "clasificaciones-torneos"):
+async def actualizar_clasificacion_handle(ctx, codigo_torneo: str, canal_destino: str = "clasificaciones-torneos", from_chanel: int = 0):
+    if from_chanel == 0: 
+        await borrar_mensaje_seguro(ctx)
+        if not await validar_canal_correcto(ctx, "preguntale-a-el-barbas", "!iniciar-torneo"):
+            return
+    
+        # Verificar permisos de moderador
+        if not await moderador_permisos_handle(ctx):
+            return
+        
+        if codigo_torneo is None:
+            await ctx.author.send("❌ Debes mencionar a codigo de torneo. Ejemplo: `!iniciar-torneo codigo`")
+            return
+    
     url_participants = f"https://api.challonge.com/v1/tournaments/{codigo_torneo}/participants.json"
     url_matches = f"https://api.challonge.com/v1/tournaments/{codigo_torneo}/matches.json"
 
@@ -371,7 +382,12 @@ async def actualizar_clasificacion_handle(ctx, codigo_torneo: str, canal_destino
 
 async def partidos_pendientes_handle(ctx, codigo_torneo: str):
     await borrar_mensaje_seguro(ctx)
+
     if not await validar_canal_correcto(ctx, "preguntale-a-el-barbas", "!partidos-pendientes"):
+        return
+    
+    if codigo_torneo is None:
+        await ctx.author.send("❌ Debes mencionar a codigo de torneo. Ejemplo: `!partidos-pendientes codigo`")
         return
 
     url_matches = f"https://api.challonge.com/v1/tournaments/{codigo_torneo}/matches.json"
@@ -430,7 +446,7 @@ async def partidos_pendientes_handle(ctx, codigo_torneo: str):
     else:
         await ctx.author.send("⚠️ No se encontró el canal `#emparejamientos`.")
     
-    await actualizar_clasificacion_handle(ctx, codigo_torneo)
+    await actualizar_clasificacion_handle(ctx, codigo_torneo, canal_destino = "clasificaciones-torneos",  from_chanel = 1)
 
 async def forzar_ronda_handle(ctx, codigo_torneo: str):
     await borrar_mensaje_seguro(ctx)
@@ -438,6 +454,9 @@ async def forzar_ronda_handle(ctx, codigo_torneo: str):
         return
     if not await moderador_permisos_handle(ctx):
       return
+    if codigo_torneo is None:
+        await ctx.author.send("❌ Debes mencionar a codigo de torneo. Ejemplo: `!forzar-ronda codigo`")
+        return
     url_participants = f"https://api.challonge.com/v1/tournaments/{codigo_torneo}/participants.json"
     url_matches = f"https://api.challonge.com/v1/tournaments/{codigo_torneo}/matches.json"
 
@@ -532,4 +551,4 @@ async def finalizar_torneo_handle(ctx, codigo_torneo: str):
             await ctx.send(f"⚠️ No se pudo enviar el mensaje en `#anuncios`: {e}")
 
     # Publicar clasificación final
-    await actualizar_clasificacion_handle(ctx, codigo_torneo, canal_destino="clasificacion-general")
+    await actualizar_clasificacion_handle(ctx, codigo_torneo, canal_destino="clasificacion-general",  from_chanel = 1 )

@@ -1,4 +1,6 @@
 import discord
+from functools import wraps
+from discord.ext import commands
 
 async def borrar_mensaje_seguro(ctx):
     try:
@@ -32,3 +34,22 @@ async def validar_canal_correcto(ctx, canal_valido: str, comando: str):
         return False
     
     return True
+
+def enviar_ayuda_handle():
+    def decorator(func):
+        @wraps(func)
+        async def wrapper(ctx, *args, **kwargs):
+            # Si no se pasó ningún argumento posicional y no hay kwargs, consideramos que se ejecutó mal
+            if not args and not kwargs:
+                try:
+                    await ctx.author.send(
+                        f"🔔 Parece que usaste el comando `!{ctx.command.name}` sin los argumentos necesarios.\n\n"
+                        f"📘 Uso correcto:\n{ctx.command.help or 'No hay ayuda disponible para este comando.'}"
+                    )
+                except Exception:
+                    pass  # Por si tiene los DMs cerrados
+
+            # Ejecutar el comando normalmente
+            return await func(ctx, *args, **kwargs)
+        return wrapper
+    return decorator
