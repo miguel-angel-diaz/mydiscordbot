@@ -1,8 +1,8 @@
 import discord
-from discord.ext import commands
+
 import aiohttp
 import asyncio
-import os
+
 import re
 import config
 from datetime import datetime
@@ -134,8 +134,28 @@ async def iniciar_torneo_handle(ctx, codigo_torneo: str):
         return
 
     if codigo_torneo is None:
-        await ctx.author.send("❌ Debes mencionar a codigo de torneo. Ejemplo: `!iniciar-torneo codigo`")
-        return
+        try:
+            await ctx.author.send(
+                "📩 No escribiste el código del torneo.\n"
+                "Por favor, respóndeme con el **código del torneo** que quieres iniciar. Tienes 60 segundos."
+            )
+
+            def dm_check(m):
+                return m.author == ctx.author and isinstance(m.channel, discord.DMChannel)
+
+            respuesta = await ctx.bot.wait_for("message", check=dm_check, timeout=60.0)
+            codigo_torneo = respuesta.content.strip()
+
+            if not codigo_torneo:
+                await ctx.author.send("❌ El código no puede estar vacío. Cancelo la inscripción.")
+                return
+
+        except asyncio.TimeoutError:
+            await ctx.author.send("⏰ Tiempo agotado. Intenta de nuevo con `!iniciar-torneo <código_torneo>`.")
+            return
+        except discord.Forbidden:
+            await ctx.send("❌ No puedo enviarte mensajes privados. Activa los DMs para continuar.")
+            return
 
     # Iniciar el torneo en Challonge
     url_start = f"https://api.challonge.com/v1/tournaments/{codigo_torneo}/start.json"
@@ -257,8 +277,28 @@ async def actualizar_clasificacion_handle(ctx, codigo_torneo: str, canal_destino
             return
         
         if codigo_torneo is None:
-            await ctx.author.send("❌ Debes mencionar a codigo de torneo. Ejemplo: `!iniciar-torneo codigo`")
-            return
+            try:
+                await ctx.author.send(
+                    "📩 No escribiste el código del torneo.\n"
+                    "Por favor, respóndeme con el **código del torneo** al que quieres actualizar la clasificacion. Tienes 60 segundos."
+                )
+
+                def dm_check(m):
+                    return m.author == ctx.author and isinstance(m.channel, discord.DMChannel)
+
+                respuesta = await ctx.bot.wait_for("message", check=dm_check, timeout=60.0)
+                codigo_torneo = respuesta.content.strip()
+
+                if not codigo_torneo:
+                    await ctx.author.send("❌ El código no puede estar vacío. Cancelo la inscripción.")
+                    return
+
+            except asyncio.TimeoutError:
+                await ctx.author.send("⏰ Tiempo agotado. Intenta de nuevo con `!actualizar-clasificacion <código_torneo>`.")
+                return
+            except discord.Forbidden:
+                await ctx.send("❌ No puedo enviarte mensajes privados. Activa los DMs para continuar.")
+                return
     
     url_participants = f"https://api.challonge.com/v1/tournaments/{codigo_torneo}/participants.json"
     url_matches = f"https://api.challonge.com/v1/tournaments/{codigo_torneo}/matches.json"
@@ -380,15 +420,35 @@ async def actualizar_clasificacion_handle(ctx, codigo_torneo: str, canal_destino
     else:
         await ctx.send("⚠️ No se encontró el canal `#clasificaciones-torneos`.")
 
-async def partidos_pendientes_handle(ctx, codigo_torneo: str):
+async def partidos_pendientes_handle(ctx, codigo_torneo: str, type: str):
     await borrar_mensaje_seguro(ctx)
 
     if not await validar_canal_correcto(ctx, "preguntale-a-el-barbas", "!partidos-pendientes"):
         return
     
     if codigo_torneo is None:
-        await ctx.author.send("❌ Debes mencionar a codigo de torneo. Ejemplo: `!partidos-pendientes codigo`")
-        return
+        try:
+            await ctx.author.send(
+                "📩 No escribiste el código del torneo.\n"
+                "Por favor, respóndeme con el **código del torneo** del torneo que quieres conocer los partidos pendientes. Tienes 60 segundos."
+            )
+
+            def dm_check(m):
+                return m.author == ctx.author and isinstance(m.channel, discord.DMChannel)
+
+            respuesta = await ctx.bot.wait_for("message", check=dm_check, timeout=60.0)
+            codigo_torneo = respuesta.content.strip()
+
+            if not codigo_torneo:
+                await ctx.author.send("❌ El código no puede estar vacío. Cancelo la solicitud.")
+                return
+
+        except asyncio.TimeoutError:
+            await ctx.author.send("⏰ Tiempo agotado. Intenta de nuevo con `!partidos-pendientes <código_torneo>`.")
+            return
+        except discord.Forbidden:
+            await ctx.send("❌ No puedo enviarte mensajes privados. Activa los DMs para continuar.")
+            return
 
     url_matches = f"https://api.challonge.com/v1/tournaments/{codigo_torneo}/matches.json"
     url_participants = f"https://api.challonge.com/v1/tournaments/{codigo_torneo}/participants.json"
@@ -408,13 +468,15 @@ async def partidos_pendientes_handle(ctx, codigo_torneo: str):
                 return
             matches_raw = await resp_match.json()
 
-    # Mapeo de ID de participante a nombre
+    # Mapeo de ID de participante a miembro/nombre
     id_to_name = {}
+    id_to_member = {}
     for p in participantes_raw:
         part = p["participant"]
         try:
             miembro = await ctx.guild.fetch_member(int(part["name"]))
             id_to_name[part["id"]] = f"{miembro.display_name} (<@{miembro.id}>)"
+            id_to_member[part["id"]] = miembro
         except (ValueError, discord.NotFound):
             id_to_name[part["id"]] = part["name"]
 
@@ -423,9 +485,12 @@ async def partidos_pendientes_handle(ctx, codigo_torneo: str):
     for m in matches_raw:
         match = m["match"]
         if match["state"] == "open":
-            p1 = id_to_name.get(match["player1_id"], "Jugador 1")
-            p2 = id_to_name.get(match["player2_id"], "Jugador 2")
-            pendientes.append((match["round"], p1, p2))
+            p1_id = match["player1_id"]
+            p2_id = match["player2_id"]
+            ronda = match["round"]
+            p1 = id_to_name.get(p1_id, "Jugador 1")
+            p2 = id_to_name.get(p2_id, "Jugador 2")
+            pendientes.append((ronda, p1, p2, p1_id, p2_id))
 
     if not pendientes:
         await finalizar_torneo_handle(ctx, codigo_torneo)
@@ -434,19 +499,45 @@ async def partidos_pendientes_handle(ctx, codigo_torneo: str):
     # Ordenar por ronda
     pendientes.sort(key=lambda x: x[0])
 
-    # Formar mensaje
+    # Enviar mensaje general al canal de emparejamientos
     mensaje = f"📋 **Partidos pendientes del torneo `{codigo_torneo}`:**\n"
-    for ronda, p1, p2 in pendientes:
+    for ronda, p1, p2, _, _ in pendientes:
         mensaje += f"• Ronda {ronda}: {p1} vs {p2}\n"
 
-    # Enviar al canal correspondiente
     canal_emparejamientos = discord.utils.get(ctx.guild.text_channels, name="emparejamientos")
     if canal_emparejamientos:
         await canal_emparejamientos.send(mensaje)
     else:
         await ctx.author.send("⚠️ No se encontró el canal `#emparejamientos`.")
-    
-    await actualizar_clasificacion_handle(ctx, codigo_torneo, canal_destino = "clasificaciones-torneos",  from_chanel = 1)
+
+    if type == 'torneos':
+        # Enviar mensajes privados a los jugadores
+        for ronda, _, _, p1_id, p2_id in pendientes:
+            p1_member = id_to_member.get(p1_id)
+            p2_member = id_to_member.get(p2_id)
+
+            texto_dm = (
+                f"👥 **Tienes una partida pendiente de la ronda {ronda} del torneo `{codigo_torneo}`**\n"
+                f"🆚 Tu oponente: {id_to_name.get(p2_id)}\n"
+                f"📅 Tienes hasta el **lunes** para jugarla.\n\n"
+                "⚠️ Si no se juega a tiempo, el resultado será registrado como **empate**.\n"
+                "🚫 Forzar empates o no intentar jugar puede ser motivo de expulsión."
+            )
+
+            if p1_member:
+                try:
+                    await p1_member.send(texto_dm.replace(id_to_name.get(p2_id), id_to_name.get(p2_id)))
+                except discord.Forbidden:
+                    pass  # No enviar error si tiene los DMs cerrados
+
+            if p2_member:
+                try:
+                    await p2_member.send(texto_dm.replace(id_to_name.get(p2_id), id_to_name.get(p1_id)))
+                except discord.Forbidden:
+                    pass
+
+        
+        await actualizar_clasificacion_handle(ctx, codigo_torneo, canal_destino = "clasificaciones-torneos",  from_chanel = 1)
 
 async def forzar_ronda_handle(ctx, codigo_torneo: str):
     await borrar_mensaje_seguro(ctx)
@@ -455,8 +546,28 @@ async def forzar_ronda_handle(ctx, codigo_torneo: str):
     if not await moderador_permisos_handle(ctx):
       return
     if codigo_torneo is None:
-        await ctx.author.send("❌ Debes mencionar a codigo de torneo. Ejemplo: `!forzar-ronda codigo`")
-        return
+        try:
+            await ctx.author.send(
+                "📩 No escribiste el código del torneo.\n"
+                "Por favor, respóndeme con el **código del torneo** del que quieres forzar la nueva ronda. Tienes 60 segundos."
+            )
+
+            def dm_check(m):
+                return m.author == ctx.author and isinstance(m.channel, discord.DMChannel)
+
+            respuesta = await ctx.bot.wait_for("message", check=dm_check, timeout=60.0)
+            codigo_torneo = respuesta.content.strip()
+
+            if not codigo_torneo:
+                await ctx.author.send("❌ El código no puede estar vacío. Cancelo la inscripción.")
+                return
+
+        except asyncio.TimeoutError:
+            await ctx.author.send("⏰ Tiempo agotado. Intenta de nuevo con `!partidos-pendientes <código_torneo>`.")
+            return
+        except discord.Forbidden:
+            await ctx.send("❌ No puedo enviarte mensajes privados. Activa los DMs para continuar.")
+            return
     url_participants = f"https://api.challonge.com/v1/tournaments/{codigo_torneo}/participants.json"
     url_matches = f"https://api.challonge.com/v1/tournaments/{codigo_torneo}/matches.json"
 
@@ -510,7 +621,7 @@ async def forzar_ronda_handle(ctx, codigo_torneo: str):
                     await ctx.send(f"⚠️ Error al forzar empate en match {match_id} (status {resp_put.status})")
 
     await ctx.send(f"🤝 Se han forzado {empates_aplicados} empates en la ronda {ronda_actual}.")
-    await partidos_pendientes_handle(ctx, codigo_torneo)
+    await partidos_pendientes_handle(ctx, codigo_torneo, 'torneos')
 
 async def finalizar_torneo_handle(ctx, codigo_torneo: str):
     canales_a_limpiar = [
@@ -539,7 +650,7 @@ async def finalizar_torneo_handle(ctx, codigo_torneo: str):
         except Exception as e:
             await ctx.send(f"⚠️ No se pudo limpiar el canal `{nombre_canal}`: {e}")
      # Enviar anuncio al canal #anuncios
-    canal_anuncios = discord.utils.get(ctx.guild.text_channels, name="anuncios")
+    canal_anuncios = discord.utils.get(ctx.guild.text_channels, name="anuncios-torneos")
     if canal_anuncios:
         try:
             await canal_anuncios.send(
@@ -552,3 +663,67 @@ async def finalizar_torneo_handle(ctx, codigo_torneo: str):
 
     # Publicar clasificación final
     await actualizar_clasificacion_handle(ctx, codigo_torneo, canal_destino="clasificacion-general",  from_chanel = 1 )
+
+async def new_tournament_assistance_handle(ctx, *, args=None):
+    """Asistente por DM para crear un torneo paso a paso."""
+    await borrar_mensaje_seguro(ctx)
+
+    if not await validar_canal_correcto(ctx, "preguntale-a-el-barbas", "!nuevo-torneo"):
+        return
+
+    if args:
+        await nuevo_torneo(ctx, args=args)
+        return
+
+    try:
+        await ctx.author.send("🎮 ¡Vamos a crear un torneo! Responde a las siguientes preguntas paso a paso. Puedes cancelar en cualquier momento escribiendo `cancelar`.")
+
+        def dm_check(m):
+            return m.author == ctx.author and isinstance(m.channel, discord.DMChannel)
+
+        await ctx.author.send("1️⃣ ¿Nombre del torneo?")
+        nombre = await ctx.bot.wait_for("message", check=dm_check, timeout=90.0)
+        if nombre.content.lower() == "cancelar": return
+
+        await ctx.author.send("2️⃣ ¿Formato? (Ej: Premodern, Classic-Legacy, 7Pts, Premodern Bondage, ...)")
+        formato = await ctx.bot.wait_for("message", check=dm_check, timeout=90.0)
+        if formato.content.lower() == "cancelar": return
+
+        await ctx.author.send("3️⃣ ¿Tipo de torneo en Challonge? (Ej: swiss, round robin, Single elimination)")
+        tipo = await ctx.bot.wait_for("message", check=dm_check, timeout=90.0)
+        if tipo.content.lower() == "cancelar": return
+
+        await ctx.author.send("4️⃣ ¿Número máximo de jugadores?")
+        jugadores = await ctx.bot.wait_for("message", check=dm_check, timeout=90.0)
+        if jugadores.content.lower() == "cancelar": return
+        try:
+            int(jugadores.content)
+        except ValueError:
+            await ctx.author.send("❌ Debe ser un número.")
+            return
+
+        await ctx.author.send("5️⃣ ¿Fecha de inicio? (Formato: DD/MM/AAAA)")
+        fecha = await ctx.bot.wait_for("message", check=dm_check, timeout=90.0)
+        if fecha.content.lower() == "cancelar": return
+        try:
+            datetime.strptime(fecha.content, "%d/%m/%Y")
+        except ValueError:
+            await ctx.author.send("❌ Fecha inválida. Usa el formato DD/MM/AAAA.")
+            return
+
+        await ctx.author.send("6️⃣ ¿Nivel o rol permitido para inscribirse? (Ej: abierto, nivel1, etc.)")
+        nivel = await ctx.bot.wait_for("message", check=dm_check, timeout=90.0)
+        if nivel.content.lower() == "cancelar": return
+
+        await ctx.author.send("7️⃣ ¿URL para envío de mazos (decklists)?")
+        deck = await ctx.bot.wait_for("message", check=dm_check, timeout=90.0)
+        if deck.content.lower() == "cancelar": return
+
+        # Construir args para pasar a la función existente
+        args_final = f"{nombre.content} | {formato.content} | {tipo.content} | {jugadores.content} | {fecha.content} | {nivel.content} | {deck.content}"
+        await nuevo_torneo(ctx, args=args_final)
+
+    except discord.Forbidden:
+        await ctx.send("❌ No pude enviarte mensajes privados. Asegúrate de tener los DMs habilitados.")
+    except asyncio.TimeoutError:
+        await ctx.author.send("⏰ Tiempo agotado. Puedes volver a intentarlo enviando `!nuevo-torneo` en el servidor.")

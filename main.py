@@ -3,7 +3,7 @@ from discord.ext import commands
 
 from utils.admin import aplicar_out, aplicar_strike, eliminar_mensajes, cerrar_peticion_handle, sorteo_torneo_handle, moderador_permisos_handle, nuevo_sorteo_handle, realizar_sorteo_handle
 from utils.jugadores import agendar_partida_handle, eventos_hoy_handle, nueva_peticion_handle, inscribirse_handler, desinscribirse_handler, ver_inscritos_handler, reportar_resultado_handle, inscribirse_sorteo_handle
-from utils.torneos import nuevo_torneo, iniciar_torneo_handle, actualizar_clasificacion_handle, partidos_pendientes_handle, forzar_ronda_handle
+from utils.torneos import iniciar_torneo_handle, actualizar_clasificacion_handle, partidos_pendientes_handle, forzar_ronda_handle, new_tournament_assistance_handle
 
 from utils.watchers import cargar_tareas;
 from utils.commons import validar_canal_correcto, borrar_mensaje_seguro, enviar_ayuda_handle
@@ -147,9 +147,9 @@ async def reportar_resultado(ctx, codigo_torneo: str, jugador1: discord.Member, 
 @comando_roles_permitidos("Socio", "second-chance-socio", "Miembro", "second-chance-miembro")
 @commands.has_permissions(manage_messages=True)
 @commands.has_permissions(manage_roles=True)
-async def partidos_pendientes(ctx, codigo_torneo: str):
+async def partidos_pendientes(ctx, codigo_torneo: str, type='user'):
     """Muestra los partidos pendientes de esa ronda de un torneo - !partidos-pendientes <código_torneo>"""
-    await partidos_pendientes_handle(ctx, codigo_torneo)
+    await partidos_pendientes_handle(ctx, codigo_torneo, type)
 
 @bot.command(name="inscribirse-sorteo")
 @comando_roles_permitidos("Socio", "second-chance-socio", "Miembro", "second-chance-miembro")
@@ -170,7 +170,7 @@ async def inscribirse_sorteo(ctx, codigo: str):
 @commands.has_permissions(manage_roles=True)
 async def new_tournament(ctx, *, args=None):
     """Crea un nuevo torneo en Challonge -!nuevo-torneo Nombre | Formato | tipo | Jugadores | Fecha | Roles_permitidos | DeckURL"""
-    await nuevo_torneo(ctx, args=args)
+    await new_tournament_assistance_handle(ctx, args=args)
 
 @bot.command(name="iniciar-torneo")
 @comando_roles_permitidos("admin")

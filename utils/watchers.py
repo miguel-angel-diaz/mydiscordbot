@@ -2,6 +2,9 @@ from discord.ext import tasks, commands
 from datetime import datetime
 import discord
 import re
+import asyncio
+
+from utils.torneos import iniciar_torneo_handle
 
 
 
@@ -119,5 +122,94 @@ async def limpiar_partidos_pasados(bot):
                 except Exception as e:
                     print(f"Error borrando mensaje: {e}")
             
+@tasks.loop(minutes=1)
+async def gestionar_torneos_futuros(bot):
+    global ultima_ejecucion_torneos
+    now = datetime.now()
 
-           
+    # Ejecutar solo entre las 10:00 y 10:25 una vez al día
+    if not (now.hour == 10 and now.minute <= 25):
+        return
+
+    hoy = now.date()
+
+    if ultima_ejecucion_torneos == hoy:
+        return  # Ya se ejecutó hoy
+
+    ultima_ejecucion_torneos = hoy
+
+    for guild in bot.guilds:
+        canal_anuncios = discord.utils.get(guild.text_channels, name="anuncios-torneos")
+        if not canal_anuncios:
+            continue
+
+        patron_fecha = re.compile(r"📅 Inicio:\s*(\d{2}/\d{2}/\d{4})")
+        patron_codigo = re.compile(r"\*\*Código:\*\*\s*`?(\S+)`?")  # Extrae el código del torneo
+
+        async for mensaje in canal_anuncios.history(limit=200):
+            lineas = mensaje.content.splitlines()
+
+            fecha_inicio = None
+            codigo_torneo = None
+
+            for linea in lineas:
+                if fecha_inicio is None:
+                    match_fecha = patron_fecha.search(linea)
+                    if match_fecha:
+                        try:
+                            fecha_inicio = datetime.strptime(match_fecha.group(1), "%d/%m/%Y").date()
+                        except ValueError:
+                            fecha_inicio = None
+                if codigo_torneo is None:
+                    match_codigo = patron_codigo.search(linea)
+                    if match_codigo:
+                        codigo_torneo = match_codigo.group(1)
+
+            if fecha_inicio and fecha_inicio > hoy and codigo_torneo:
+                owner = guild.owner
+                try:
+                    pregunta = (
+                        f"📅 El torneo **{codigo_torneo}** con inicio el **{fecha_inicio.strftime('%d/%m/%Y')}** "
+                        f"en el servidor **{guild.name}** está programado para eliminarse hoy.\n"
+                        f"¿Quieres iniciar el torneo manualmente y evitar que se elimine?\n"
+                        f"Responde con `sí` para iniciar o `no` para borrar."
+                    )
+                    await owner.send(pregunta)
+
+                    def dm_check(m):
+                        return (
+                            m.author == owner
+                            and m.guild is None
+                            and m.content.lower() in ["sí", "si", "no"]
+                        )
+
+                    respuesta = await bot.wait_for("message", timeout=60.0, check=dm_check)
+
+                    if respuesta.content.lower() in ["sí", "si"]:
+                        await owner.send(f"✅ Iniciando torneo `{codigo_torneo}`...")
+                        # Aquí llamamos a tu función, pasando un contexto simulado o adaptado
+                        # Nota: 'ctx' no está definido, debes crear un contexto válido o modificar iniciar_torneo_handle para recibir guild y código.
+                        # Por ejemplo, si tienes un contexto, úsalo, si no, tendrás que adaptar la función.
+                        # Si quieres puedo ayudarte a adaptarla.
+                        await iniciar_torneo_handle(guild, codigo_torneo)
+                        break  # No borramos el mensaje
+
+                    else:
+                        await mensaje.delete()
+                        await owner.send("🗑️ El torneo ha sido eliminado.")
+                        break
+
+                except asyncio.TimeoutError:
+                    try:
+                        await mensaje.delete()
+                        await owner.send("⌛ No respondiste a tiempo. El torneo ha sido eliminado.")
+                    except Exception as e:
+                        print(f"Error eliminando tras timeout: {e}")
+
+                except discord.Forbidden:
+                    print(f"No puedo enviar DMs o borrar mensaje en {guild.name}")
+
+                except Exception as e:
+                    print(f"Error en watcher: {e}")
+
+            # Solo procesar un torneo por mensaje

@@ -1,12 +1,12 @@
 import aiohttp
 import discord
-import challonge
+import asyncio
 from datetime import datetime, timedelta
 import re
 import config
 from utils.torneos import generar_codigo_unico, partidos_pendientes_handle
 from utils.admin import moderador_permisos_handle
-from utils.commons import borrar_mensaje_seguro, validar_canal_correcto
+from utils.commons import borrar_mensaje_seguro, validar_canal_correcto, buscar_usuario_en_servidor
 
 import config
 
@@ -14,46 +14,58 @@ MAX_ERRORES = 3
 TIEMPO_LIMITE_MINUTOS = 10
 intentos_fallidos = {}  # Guardado temporal por usuario
 
-async def agendar_partida_handle(ctx, fecha, hora, jugador1, _vs, jugador2):
+async def agendar_partida_handle(ctx, fecha=None, hora=None, jugador1=None, _vs=None, jugador2=None):
     await borrar_mensaje_seguro(ctx)
 
     if not await validar_canal_correcto(ctx, "agenda", "!agendar-partida"):
         return
-    
-    errores = []
 
-    if not fecha:
-        errores.append("• Falta la **fecha**. Formato esperado: `dd/mm/yyyy`")
-    else:
+    def dm_check(m):
+        return m.author == ctx.author and isinstance(m.channel, discord.DMChannel)
+
+    # Si falta algún argumento, empieza la conversación por DM
+    if not all([fecha, hora, jugador1, jugador2]) or _vs is None or _vs.lower() != "vs":
         try:
-            datetime.strptime(fecha, "%d/%m/%Y")
-        except ValueError:
-            errores.append(f"• Fecha inválida (`{fecha}`). Usa el formato `dd/mm/yyyy`")
+            await ctx.author.send("📅 Vamos a agendar una partida. Responde a las siguientes preguntas:")
 
-    if not hora:
-        errores.append("• Falta la **hora**. Formato esperado: `hh:mm`")
-    else:
-        try:
-            datetime.strptime(hora, "%H:%M")
-        except ValueError:
-            errores.append(f"• Hora inválida (`{hora}`). Usa el formato `hh:mm`")
+            await ctx.author.send("1️⃣ ¿Qué **fecha** es la partida? (formato: `dd/mm/yyyy`)")
+            respuesta_fecha = await ctx.bot.wait_for("message", check=dm_check, timeout=90)
+            fecha = respuesta_fecha.content.strip()
+            try:
+                datetime.strptime(fecha, "%d/%m/%Y")
+            except ValueError:
+                await ctx.author.send("❌ Fecha inválida. Usa el formato `dd/mm/yyyy`.")
+                return
 
-    if not jugador1:
-        errores.append("• Falta el **jugador 1** (`@mención`)")
-    if not jugador2:
-        errores.append("• Falta el **jugador 2** (`@mención`)")
+            await ctx.author.send("2️⃣ ¿A qué **hora** es la partida? (formato: `hh:mm`)")
+            respuesta_hora = await ctx.bot.wait_for("message", check=dm_check, timeout=90)
+            hora = respuesta_hora.content.strip()
+            try:
+                datetime.strptime(hora, "%H:%M")
+            except ValueError:
+                await ctx.author.send("❌ Hora inválida. Usa el formato `hh:mm`.")
+                return
 
-    if _vs is None or _vs.lower() != "vs":
-        errores.append("• Falta la palabra clave **vs** entre los jugadores")
+            await ctx.author.send("3️⃣ Escribe el nombre o apodo del **jugador 1** tal como aparece en el servidor:")
+            respuesta_j1 = await ctx.bot.wait_for("message", check=dm_check, timeout=90)
+            jugador1 = buscar_usuario_en_servidor(ctx.guild, respuesta_j1.content.strip())
 
-    if errores:
-        mensaje = "❌ Comando incorrecto. Revisa los siguientes errores:\n\n"
-        mensaje += "\n".join(errores)
-        mensaje += "\n\n✅ **Ejemplo correcto:** `!agendar-partida 07/07/2025 23:45 @Fizban vs @sete`"
-        await ctx.author.send(mensaje)
-        await manejar_error_de_agendamiento(ctx)
-        return
+            await ctx.author.send("4️⃣ Escribe el nombre o apodo del **jugador 2** tal como aparece en el servidor:")
+            respuesta_j2 = await ctx.bot.wait_for("message", check=dm_check, timeout=90)
+            jugador2 = buscar_usuario_en_servidor(ctx.guild, respuesta_j2.content.strip())
 
+            if not jugador1 or not jugador2:
+                await ctx.author.send("❌ Uno o ambos jugadores no fueron reconocidos. Asegúrate de mencionar correctamente.")
+                return
+
+        except asyncio.TimeoutError:
+            await ctx.author.send("⏰ Tiempo agotado. Vuelve a intentar con `!agendar-partida`.")
+            return
+        except Exception as e:
+            await ctx.author.send("❌ Ocurrió un error inesperado al intentar agendar la partida.")
+            raise e
+
+    # Envío a canal de agenda
     canal_destino = discord.utils.get(ctx.guild.text_channels, name="partidos-agendados")
     if not canal_destino:
         await ctx.author.send("❌ No se encontró el canal `#partidos-agendados`.")
@@ -65,16 +77,13 @@ async def agendar_partida_handle(ctx, fecha, hora, jugador1, _vs, jugador2):
     )
 
     await canal_destino.send(mensaje_agendado)
+    await ctx.author.send("✅ Has agendado la partida correctamente.")
 
-    # Mensajes privados a los involucrados
     mensaje_privado = (
         f"✅ Se ha agendado una partida para el `{fecha}` a las `{hora}` entre {jugador1.mention} y {jugador2.mention}."
-        f"\npuedes consultar en el canal de  `#agenda` con el comando `!partidas-pendientes` para más detalles."
+        f"\nPuedes consultarlo en el canal `#agenda` con el comando `!partidas-pendientes`."
     )
 
-    await ctx.author.send("✅ Has agendado la partida correctamente.")
-    
-    # Enviar mensajes privados a los jugadores si son usuarios del servidor
     for jugador in (jugador1, jugador2):
         try:
             await jugador.send(mensaje_privado)
@@ -83,6 +92,15 @@ async def agendar_partida_handle(ctx, fecha, hora, jugador1, _vs, jugador2):
 
     if ctx.author.id in intentos_fallidos:
         del intentos_fallidos[ctx.author.id]
+
+async def extraer_mencion(mensaje, ctx):
+    if mensaje.mentions:
+        return mensaje.mentions[0]
+    else:
+        try:
+            return await ctx.guild.fetch_member(int(mensaje.content.strip("<@!>")))
+        except:
+            return None
 
 async def manejar_error_de_agendamiento(ctx):
     ahora = datetime.now()
@@ -167,12 +185,26 @@ async def nueva_peticion_handle(ctx, descripcion):
     if not descripcion:
         try:
             await ctx.author.send(
-                "❌ Debes incluir una descripción.\n"
-                "Ejemplo: `!nueva-peticion Agregar soporte para torneos dobles.`"
+                "📝 No escribiste una descripción para la petición.\n"
+                "Por favor, respóndeme con la descripción de tu sugerencia o petición (tienes 90 segundos)."
             )
+
+            def dm_check(m):
+                return m.author == ctx.author and isinstance(m.channel, discord.DMChannel)
+
+            respuesta = await ctx.bot.wait_for("message", check=dm_check, timeout=90.0)
+            descripcion = respuesta.content.strip()
+
+            if not descripcion:
+                await ctx.author.send("❌ La descripción no puede estar vacía. Cancelo la petición.")
+                return
+
+        except asyncio.TimeoutError:
+            await ctx.author.send("⏰ Tiempo agotado. Intenta de nuevo con `!nueva-peticion <descripción>`.")
+            return
         except discord.Forbidden:
-            await ctx.send("❌ Debes incluir una descripción. Y además, no puedo enviarte mensajes por privado.")
-        return
+            await ctx.send("❌ No puedo enviarte mensajes privados. Activa los DMs para continuar.")
+            return
 
     # Obtener canal destino
     canal_destino = discord.utils.get(ctx.guild.text_channels, name="peticiones-de-usuarios")
@@ -218,19 +250,77 @@ async def inscribirse_handler(ctx, codigo_torneo: str, usuario: discord.Member =
     if not await validar_canal_correcto(ctx, "preguntale-a-el-barbas", "!inscribirse"):
         return
     
-    if codigo_torneo is None :
-        await ctx.author.send("❌ Debes mencionar a codigo de torneo. Ejemplo: `!inscribirse codigo`")
-        return
+    if usuario and usuario != ctx.author:
+        tiene_permiso = await moderador_permisos_handle(ctx)
+        if not tiene_permiso:
+            return
+    
+    if not codigo_torneo:
+        try:
+            # Mostrar torneos disponibles antes de preguntar por el código
+            canal_torneos = discord.utils.get(ctx.guild.text_channels, name="torneos-activos")
+            if canal_torneos:
+                torneos_disponibles = []
+                async for mensaje in canal_torneos.history(limit=100):
+                    lineas = mensaje.content.splitlines()
+                    codigo = None
+                    nivel = "Todos"  # Valor por defecto
+
+                    for linea in lineas:
+                        if "**Código:**" in linea:
+                            codigo = linea.split("**Código:**")[-1].strip().strip("`")
+                        if "Nivel:" in linea or "Roles permitidos:" in linea:
+                            # Normalizamos el texto quitando símbolos y espacios
+                            linea_limpia = linea.replace("*", "").lower()
+                            if "nivel:" in linea_limpia:
+                                nivel = linea_limpia.split("nivel:")[-1].strip()
+                            elif "roles permitidos:" in linea_limpia:
+                                nivel = linea_limpia.split("roles permitidos:")[-1].strip()
+
+                    if not codigo:
+                        continue
+
+                    roles_permitidos = config.ROLES_SOCIOS if nivel == "socios" else config.ROLES_TODOS
+
+                    if tiene_rol_permitido(ctx.author, roles_permitidos):
+                        # Capitalizamos solo al mostrar
+                        torneos_disponibles.append(f"• `{codigo}` — Nivel: {nivel.capitalize()}")
+
+                if torneos_disponibles:
+                    texto_torneos = "\n".join(torneos_disponibles)
+                    await ctx.author.send(f"🎯 **Torneos disponibles:**\n{texto_torneos}")
+                else:
+                    await ctx.author.send("⚠️ No hay torneos activos disponibles en este momento.")
+                    return
+            else:
+                await ctx.author.send("⚠️ No encontré el canal `#torneos-activos`.")
+                return
+
+            # Ahora sí, pedirle el código
+            await ctx.author.send(
+                "📩 Por favor, respóndeme con el **código del torneo** al que deseas inscribirte. Tienes 60 segundos."
+            )
+            def dm_check(m): return m.author == ctx.author and isinstance(m.channel, discord.DMChannel)
+            respuesta = await ctx.bot.wait_for("message", check=dm_check, timeout=60.0)
+            codigo_torneo = respuesta.content.strip()
+
+            if not codigo_torneo:
+                await ctx.author.send("❌ El código no puede estar vacío. Cancelo la inscripción.")
+                return
+
+        except asyncio.TimeoutError:
+            await ctx.author.send("⏰ Tiempo agotado. Intenta de nuevo con `!inscribirse <código>`.")
+            return
+        except discord.Forbidden:
+            await ctx.send("❌ No puedo enviarte mensajes privados. Activa los DMs para continuar.")
+            return
 
     apuntado = usuario or ctx.author
 
     tipo_torneo_socios = "socio" in codigo_torneo.lower()
     roles_permitidos = config.ROLES_SOCIOS if tipo_torneo_socios else config.ROLES_TODOS
 
-    if usuario and usuario != ctx.author:
-        tiene_permiso = await moderador_permisos_handle(ctx)
-        if not tiene_permiso:
-            return
+   
 
     if not tiene_rol_permitido(apuntado, roles_permitidos):
         await ctx.author.send(f"❌ El usuario {apuntado.display_name} no tiene los roles necesarios para inscribirse a este torneo.")
@@ -330,9 +420,29 @@ async def desinscribirse_handler(ctx, codigo_torneo: str, usuario: discord.Membe
     if not await validar_canal_correcto(ctx, "preguntale-a-el-barbas", "!desinscribirse"):
         return
     
-    if codigo_torneo is None :
-        await ctx.author.send("❌ Debes mencionar a codigo de torneo. Ejemplo: `!desinscribirse codigo`")
-        return
+    if codigo_torneo is None:
+        try:
+            await ctx.author.send(
+                "📩 No escribiste el código del torneo.\n"
+                "Por favor, respóndeme con el **código del torneo** del que quieres desinscribirte. Tienes 60 segundos."
+            )
+
+            def dm_check(m):
+                return m.author == ctx.author and isinstance(m.channel, discord.DMChannel)
+
+            respuesta = await ctx.bot.wait_for("message", check=dm_check, timeout=60.0)
+            codigo_torneo = respuesta.content.strip()
+
+            if not codigo_torneo:
+                await ctx.author.send("❌ El código no puede estar vacío. Cancelo la inscripción.")
+                return
+
+        except asyncio.TimeoutError:
+            await ctx.author.send("⏰ Tiempo agotado. Intenta de nuevo con `!desinscribirse <código_torneo>`.")
+            return
+        except discord.Forbidden:
+            await ctx.send("❌ No puedo enviarte mensajes privados. Activa los DMs para continuar.")
+            return
     
     apuntado = usuario or ctx.author
 
@@ -421,9 +531,30 @@ async def ver_inscritos_handler(ctx, codigo_torneo: str):
     await borrar_mensaje_seguro(ctx)
     if not await validar_canal_correcto(ctx, "preguntale-a-el-barbas", "!ver-inscritos"):
         return
-    if codigo_torneo is None :
-        await ctx.author.send("❌ Debes mencionar a codigo de torneo. Ejemplo: `!ver-inscritos codigo`")
-        return
+    
+    if codigo_torneo is None:
+        try:
+            await ctx.author.send(
+                "📩 No escribiste el código del torneo.\n"
+                "Por favor, respóndeme con el **código del torneo** del torneo que quieres ver los inscritos. Tienes 60 segundos."
+            )
+
+            def dm_check(m):
+                return m.author == ctx.author and isinstance(m.channel, discord.DMChannel)
+
+            respuesta = await ctx.bot.wait_for("message", check=dm_check, timeout=60.0)
+            codigo_torneo = respuesta.content.strip()
+
+            if not codigo_torneo:
+                await ctx.author.send("❌ El código no puede estar vacío. Cancelo la inscripción.")
+                return
+
+        except asyncio.TimeoutError:
+            await ctx.author.send("⏰ Tiempo agotado. Intenta de nuevo con `!ver-inscritos <código_torneo>`.")
+            return
+        except discord.Forbidden:
+            await ctx.send("❌ No puedo enviarte mensajes privados. Activa los DMs para continuar.")
+            return
     url = f"https://api.challonge.com/v1/tournaments/{codigo_torneo}/participants.json"
 
     async with aiohttp.ClientSession() as session:
@@ -459,28 +590,55 @@ async def reportar_resultado_handle(ctx, codigo_torneo: str, jugador1: discord.M
     if not await validar_canal_correcto(ctx, "resultados", "!reportar-resultado"):
         return
     author = ctx.author
-    if codigo_torneo is None:
-        await author.send("❌ Debes indicar el **código del torneo**. Ejemplo: `!reportar-resultado MTG123 @Jugador1 2-1 @Jugador2`")
-        return
+    def dm_check(m):
+        return m.author == author and isinstance(m.channel, discord.DMChannel)
 
-    if jugador1 is None:
-        await author.send("❌ Debes mencionar al **jugador 1**. Ejemplo: `!reportar-resultado MTG123 @Jugador1 2-1 @Jugador2`")
-        return
+    try:
+        if not all([codigo_torneo, jugador1, resultado, jugador2]):
+            await author.send("📊 Vamos a reportar un resultado. Responde a las siguientes preguntas:")
 
-    if resultado is None:
-        await author.send("❌ Debes indicar el **resultado** del enfrentamiento. Ejemplo: `!reportar-resultado MTG123 @Jugador1 2-1 @Jugador2`")
-        return
+            if not codigo_torneo:
+                await author.send("1️⃣ ¿Cuál es el **código del torneo**?")
+                respuesta_codigo = await ctx.bot.wait_for("message", check=dm_check, timeout=90)
+                codigo_torneo = respuesta_codigo.content.strip()
 
-    if jugador2 is None:
-        await author.send("❌ Debes mencionar al **jugador 2**. Ejemplo: `!reportar-resultado MTG123 @Jugador1 2-1 @Jugador2`")
-        return
-    # Verificar si quien envía el mensaje es moderador o uno de los jugadores
-    if author != jugador1 and author != jugador2:
-        es_mod = await moderador_permisos_handle(ctx)
-        if not es_mod:
-            await author.send("❌ Solo los jugadores involucrados o un moderador pueden reportar el resultado.")
-            return
+            if not jugador1:
+                await author.send("2️⃣ Escribe el nombre o apodo del **jugador 1** (tal como aparece en el servidor):")
+                respuesta_j1 = await ctx.bot.wait_for("message", check=dm_check, timeout=90)
+                jugador1 = buscar_usuario_en_servidor(ctx.guild, respuesta_j1.content.strip())
 
+            if not resultado:
+                await author.send("3️⃣ ¿Cuál fue el **resultado**? (formato ejemplo: `2-1`)")
+                respuesta_resultado = await ctx.bot.wait_for("message", check=dm_check, timeout=90)
+                resultado = respuesta_resultado.content.strip()
+
+            if not jugador2:
+                await author.send("4️⃣ Escribe el nombre o apodo del **jugador 2**:")
+                respuesta_j2 = await ctx.bot.wait_for("message", check=dm_check, timeout=90)
+                jugador2 = buscar_usuario_en_servidor(ctx.guild, respuesta_j2.content.strip())
+
+            if not jugador1 or not jugador2:
+                await author.send("❌ No se pudieron identificar uno o ambos jugadores. Verifica los nombres.")
+                return
+
+        # Validación de permisos
+        if author != jugador1 and author != jugador2:
+            es_mod = await moderador_permisos_handle(ctx)
+            if not es_mod:
+                await author.send("❌ Solo los jugadores involucrados o un moderador pueden reportar el resultado.")
+                return
+
+        # Aquí continuarías con la lógica que ya tenías: buscar match en Challonge, registrar resultado, etc.
+
+    except asyncio.TimeoutError:
+        await author.send("⏰ Tiempo agotado. Vuelve a intentar con `!reportar-resultado`.")
+        return
+    except discord.Forbidden:
+        await ctx.send("❌ No puedo enviarte mensajes privados. Activa los mensajes en tu configuración de privacidad.")
+        return
+    except Exception as e:
+        await author.send("❌ Ocurrió un error inesperado durante el proceso.")
+        raise e
     # Obtener participantes del torneo
     url_participantes = f"https://api.challonge.com/v1/tournaments/{codigo_torneo}/participants.json"
     async with aiohttp.ClientSession() as session:
@@ -593,7 +751,7 @@ async def reportar_resultado_handle(ctx, codigo_torneo: str, jugador1: discord.M
         f"**{jugador1.display_name}** {resultado} **{jugador2.display_name}**"
     )
 
-    await partidos_pendientes_handle(ctx, codigo_torneo)
+    await partidos_pendientes_handle(ctx, codigo_torneo, 'user')
 
 async def inscribirse_sorteo_handle(ctx, codigo: str):
     await borrar_mensaje_seguro(ctx)
@@ -602,8 +760,28 @@ async def inscribirse_sorteo_handle(ctx, codigo: str):
     guild = ctx.guild
 
     if codigo is None:
-        await user.send("❌ Debes indicar un codigo de Sorteo. Ejemplo: `!inscribirse-sorteo codigo")
-        return
+        try:
+            await ctx.author.send(
+                "📩 No escribiste el código del torneo.\n"
+                "Por favor, respóndeme con el **código del sorteo** para apuntarte al sorteo. Tienes 60 segundos."
+            )
+
+            def dm_check(m):
+                return m.author == ctx.author and isinstance(m.channel, discord.DMChannel)
+
+            respuesta = await ctx.bot.wait_for("message", check=dm_check, timeout=60.0)
+            codigo = respuesta.content.strip()
+
+            if not codigo:
+                await ctx.author.send("❌ El código no puede estar vacío. Cancelo la inscripción.")
+                return
+
+        except asyncio.TimeoutError:
+            await ctx.author.send("⏰ Tiempo agotado. Intenta de nuevo con `!inscribirse-sorteo <código_torneo>`.")
+            return
+        except discord.Forbidden:
+            await ctx.send("❌ No puedo enviarte mensajes privados. Activa los DMs para continuar.")
+            return
 
     # Verificar que el sorteo está activo
     canal_activos = discord.utils.get(guild.text_channels, name="sorteos-activos")
