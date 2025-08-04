@@ -2,9 +2,10 @@ import discord
 from discord.ext import commands
 
 from utils.admin import aplicar_out, aplicar_strike, eliminar_mensajes, cerrar_peticion_handle, sorteo_torneo_handle, moderador_permisos_handle, nuevo_sorteo_handle, realizar_sorteo_handle
-from utils.jugadores import agendar_partida_handle, eventos_hoy_handle, nueva_peticion_handle, inscribirse_handler, desinscribirse_handler, ver_inscritos_handler, reportar_resultado_handle, inscribirse_sorteo_handle
+from utils.jugadores import agendar_partida_handle, eventos_hoy_handle, nueva_peticion_handle, inscribirse_handler, desinscribirse_handler, ver_inscritos_handler, reportar_resultado_handle, inscribirse_sorteo_handle, mis_comandos_handle
 from utils.torneos import iniciar_torneo_handle, actualizar_clasificacion_handle, partidos_pendientes_handle, forzar_ronda_handle, new_tournament_assistance_handle
 
+from utils.events import registrar_mensaje_borrado_handle, bienvenida_y_comandos_handle
 from utils.watchers import cargar_tareas;
 from utils.commons import validar_canal_correcto, borrar_mensaje_seguro, enviar_ayuda_handle
 
@@ -88,7 +89,7 @@ async def realizar_sorteo(ctx, codigo: str):
 
 
 @bot.command(name="agendar-partida")
-@comando_roles_permitidos("Socio", "second-chance-socio", "Miembro", "second-chance-miembro")
+@comando_roles_permitidos("socio", "second-chance-socio", "miembro", "second-chance-miembro")
 @commands.has_permissions(manage_messages=True)
 @commands.has_permissions(manage_roles=True)
 async def agendar_partida(ctx, fecha=None, hora=None, jugador1: discord.Member = None, _vs=None, jugador2: discord.Member = None):
@@ -96,7 +97,7 @@ async def agendar_partida(ctx, fecha=None, hora=None, jugador1: discord.Member =
     await agendar_partida_handle(ctx, fecha, hora, jugador1, _vs, jugador2)
 
 @bot.command(name="eventos-hoy")
-@comando_roles_permitidos("Socio", "second-chance-socio", "Miembro", "second-chance-miembro")
+@comando_roles_permitidos("socio", "second-chance-socio", "miembro", "second-chance-miembro")
 @commands.has_permissions(manage_messages=True)
 @commands.has_permissions(manage_roles=True)
 async def eventos_hoy(ctx):
@@ -104,7 +105,7 @@ async def eventos_hoy(ctx):
     await eventos_hoy_handle(ctx)
 
 @bot.command(name="nueva-peticion")
-@comando_roles_permitidos("Socio", "second-chance-socio", "Miembro", "second-chance-miembro")
+@comando_roles_permitidos("socio", "second-chance-socio", "miembro", "second-chance-miembro")
 @commands.has_permissions(manage_messages=True)
 @commands.has_permissions(manage_roles=True)
 async def nueva_peticion(ctx, *, descripcion: str = None):
@@ -112,7 +113,7 @@ async def nueva_peticion(ctx, *, descripcion: str = None):
     await nueva_peticion_handle(ctx, descripcion)
 
 @bot.command(name="inscribirse")
-@comando_roles_permitidos("Socio", "second-chance-socio", "Miembro", "second-chance-miembro")
+@comando_roles_permitidos("socio", "second-chance-socio", "miembro", "second-chance-miembro")
 @commands.has_permissions(manage_messages=True)
 @commands.has_permissions(manage_roles=True)
 async def inscribirse(ctx, codigo: str = None, usuario: discord.Member = None):
@@ -120,7 +121,7 @@ async def inscribirse(ctx, codigo: str = None, usuario: discord.Member = None):
     await inscribirse_handler(ctx, codigo, usuario)
 
 @bot.command(name="desinscribirse")
-@comando_roles_permitidos("Socio", "second-chance-socio", "Miembro", "second-chance-miembro")
+@comando_roles_permitidos("socio", "second-chance-socio", "miembro", "second-chance-miembro")
 @commands.has_permissions(manage_messages=True)
 @commands.has_permissions(manage_roles=True)
 async def desinscribirse(ctx, codigo: str = None, usuario: discord.Member = None):
@@ -128,7 +129,7 @@ async def desinscribirse(ctx, codigo: str = None, usuario: discord.Member = None
     await desinscribirse_handler(ctx, codigo, usuario)
 
 @bot.command(name="ver-inscritos")
-@comando_roles_permitidos("Socio", "second-chance-socio", "Miembro", "second-chance-miembro")
+@comando_roles_permitidos("socio", "second-chance-socio", "miembro", "second-chance-miembro")
 @commands.has_permissions(manage_messages=True)
 @commands.has_permissions(manage_roles=True)
 async def ver_inscritos(ctx, codigo=None):
@@ -136,7 +137,7 @@ async def ver_inscritos(ctx, codigo=None):
     await ver_inscritos_handler(ctx, codigo)
 
 @bot.command(name="reportar-resultado")
-@comando_roles_permitidos("Socio", "second-chance-socio", "Miembro", "second-chance-miembro")
+@comando_roles_permitidos("socio", "second-chance-socio", "miembro", "second-chance-miembro")
 @commands.has_permissions(manage_messages=True)
 @commands.has_permissions(manage_roles=True)
 async def reportar_resultado(ctx, codigo_torneo: str, jugador1: discord.Member, resultado: str, jugador2: discord.Member):
@@ -144,7 +145,7 @@ async def reportar_resultado(ctx, codigo_torneo: str, jugador1: discord.Member, 
     await reportar_resultado_handle(ctx, codigo_torneo, jugador1, resultado, jugador2)
 
 @bot.command(name="partidos-pendientes")
-@comando_roles_permitidos("Socio", "second-chance-socio", "Miembro", "second-chance-miembro")
+@comando_roles_permitidos("socio", "second-chance-socio", "miembro", "second-chance-miembro")
 @commands.has_permissions(manage_messages=True)
 @commands.has_permissions(manage_roles=True)
 async def partidos_pendientes(ctx, codigo_torneo: str, type='user'):
@@ -152,7 +153,7 @@ async def partidos_pendientes(ctx, codigo_torneo: str, type='user'):
     await partidos_pendientes_handle(ctx, codigo_torneo, type)
 
 @bot.command(name="inscribirse-sorteo")
-@comando_roles_permitidos("Socio", "second-chance-socio", "Miembro", "second-chance-miembro")
+@comando_roles_permitidos("socio", "second-chance-socio", "miembro", "second-chance-miembro")
 @commands.has_permissions(manage_messages=True)
 @commands.has_permissions(manage_roles=True)
 async def inscribirse_sorteo(ctx, codigo: str):
@@ -206,61 +207,21 @@ async def forzar_ronda(ctx, codigo_torneo: str):
 
 @bot.command(name="mis-comandos")
 async def mis_comandos(ctx):
-    """Muestra los comandos disponibles según tus permisos y roles - !mis-comandos"""
-    await borrar_mensaje_seguro(ctx)
-    if not await validar_canal_correcto(ctx, "preguntale-a-el-barbas", "!mis-comandos"):
-        return
-
-    usuario_roles = [rol.name for rol in ctx.author.roles]
-    comandos_por_categoria = {"Todos": [], "Tus comandos": []}
-
-    for comando in bot.commands:
-        if comando.hidden:
-            continue
-
-        roles_permitidos = getattr(comando.callback, "roles_permitidos", None)
-        nombre = f"!{comando.name}"
-        descripcion = comando.help or "Sin descripción disponible"
-        linea = f"**{nombre}** — {descripcion}"
-
-        if roles_permitidos:
-            if any(rol in usuario_roles for rol in roles_permitidos):
-                comandos_por_categoria["Tus comandos"].append(linea)
-        else:
-            comandos_por_categoria["Todos"].append(linea)
-
-    if not comandos_por_categoria["Tus comandos"] and not comandos_por_categoria["Todos"]:
-        await ctx.author.send("❌ No tienes acceso a ningún comando.")
-        return
-
-    embed = discord.Embed(
-        title="📋 Comandos disponibles según tu rol",
-        color=discord.Color.blue()
-    )
-
-    for categoria, comandos in comandos_por_categoria.items():
-        if not comandos:
-            continue
-        contenido = ""
-        for linea in comandos:
-            if len(contenido) + len(linea) + 1 > 1024:
-                embed.add_field(name=f"🔹 {categoria}", value=contenido, inline=False)
-                contenido = linea + "\n"
-            else:
-                contenido += linea + "\n"
-        if contenido:
-            embed.add_field(name=f"🔹 {categoria}", value=contenido, inline=False)
-
-    try:
-        await ctx.author.send(embed=embed)
-    except discord.Forbidden:
-        await ctx.send("❌ No puedo enviarte un mensaje privado. Revisa tus ajustes de privacidad.")
+  await  mis_comandos_handle(ctx)
 
 @bot.event
 async def on_ready():
     print(f"✅ Bot conectado como {bot.user}")
     cargar_tareas(bot)
 
-webserver.keep_alive()  
-bot.run(DISCORD_TOKEN)
-# bot.run(config.TOKEN)
+@bot.event
+async def on_message_delete(message):
+    await registrar_mensaje_borrado_handle(message)
+
+@bot.event
+async def on_message(message: discord.Message):
+    await bienvenida_y_comandos_handle(message)
+    await bot.process_commands(message)  # Esto es importante para que los comandos funcionen
+# webserver.keep_alive()  
+# bot.run(DISCORD_TOKEN)
+bot.run(config.TOKEN)

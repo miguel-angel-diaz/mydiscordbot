@@ -60,3 +60,4 @@ def buscar_usuario_en_servidor(guild, nombre_busqueda: str):
         if nombre_busqueda in miembro.display_name.lower() or nombre_busqueda in miembro.name.lower():
             return miembro
     return None
+

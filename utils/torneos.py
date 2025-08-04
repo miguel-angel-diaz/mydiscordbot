@@ -266,6 +266,19 @@ async def iniciar_torneo_handle(ctx, codigo_torneo: str):
                 except discord.HTTPException as e:
                     await ctx.author.send(f"⚠️ No se pudo eliminar el mensaje de `#torneos-activos`: {e}")
 
+    canal_inscripciones = discord.utils.get(ctx.guild.text_channels, name="inscripciones")
+    if canal_inscripciones:
+        async for mensaje in canal_inscripciones.history(limit=100):
+            if codigo_torneo in mensaje.content:
+                try:
+                    await mensaje.delete()
+                except discord.Forbidden:
+                    await ctx.author.send("⚠️ No tengo permisos para eliminar mensajes en `#inscripciones`.")
+                    break
+                except discord.HTTPException as e:
+                    await ctx.author.send(f"⚠️ No se pudo eliminar un mensaje de `#inscripciones`: {e}")
+                    break
+
 async def actualizar_clasificacion_handle(ctx, codigo_torneo: str, canal_destino: str = "clasificaciones-torneos", from_chanel: int = 0):
     if from_chanel == 0: 
         await borrar_mensaje_seguro(ctx)

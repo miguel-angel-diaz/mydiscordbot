@@ -826,4 +826,32 @@ async def inscribirse_sorteo_handle(ctx, codigo: str):
         await user.send(f"✅ Te has inscrito correctamente al sorteo `{codigo}`.")
     except discord.Forbidden:
         await ctx.send(f"⚠️ No pude enviarte un mensaje privado, revisa tus DMs.")
-        
+
+async def mis_comandos_handle(ctx):
+    """Muestra los comandos disponibles según tus permisos y roles - !mis-comandos"""
+    await borrar_mensaje_seguro(ctx)
+    if not await validar_canal_correcto(ctx, "preguntale-a-el-barbas", "!mis-comandos"):
+        return
+
+    roles_usuario = [rol.name for rol in ctx.author.roles]
+    comandos_disponibles = []
+
+    for comando in config.COMANDOS_INFO:
+        roles_permitidos = comando["roles_permitidos"]
+        if any(rol in roles_usuario for rol in roles_permitidos):
+            comandos_disponibles.append(f"!{comando['comando']} - {comando['descripcion']}")
+
+    if not comandos_disponibles:
+        await ctx.author.send("❌ No tienes acceso a ningún comando.")
+        return
+
+    embed = discord.Embed(
+        title="📋 Tus comandos disponibles",
+        description="\n".join(comandos_disponibles),
+        color=discord.Color.green()
+    )
+
+    try:
+        await ctx.author.send(embed=embed)
+    except discord.Forbidden:
+        await ctx.send("❌ No puedo enviarte un mensaje privado. Revisa tus ajustes de privacidad.")
