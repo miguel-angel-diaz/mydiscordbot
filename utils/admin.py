@@ -410,7 +410,7 @@ async def moderador_permisos_handle(ctx):
 
     return True
 
-async def nuevo_sorteo_handle(ctx, args: str = None):
+async def nuevo_sorteo_handle(ctx, *, args: str = None):
     await borrar_mensaje_seguro(ctx)
 
     if not await moderador_permisos_handle(ctx):
@@ -467,6 +467,7 @@ async def nuevo_sorteo_handle(ctx, args: str = None):
     canal_sorteos_activos = discord.utils.get(ctx.guild.text_channels, name="sorteos-activos")
     if canal_sorteos_activos:
         await canal_sorteos_activos.send(f"🎉 **Sorteo activo:** `{codigo}`\n📅 **Fecha:** {fecha}\n🎁 **Regalo:** {regalo}")
+        await author.send(f"🎉 **se ha creado un nuevo sorteo con el codigo:** `{codigo}`")
     else:
         await author.send("⚠️ No encontré el canal `#sorteos-activos`.")
 

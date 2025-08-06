@@ -73,8 +73,8 @@ async def sorteo_torneo(ctx, codigo_torneo: str, *, premio: str = "Premio del so
 @bot.command(name="nuevo-sorteo")
 @comando_roles_permitidos("admin")
 @commands.has_permissions(manage_guild=True)
-async def nuevo_sorteo(ctx, *, args: str):
-    await nuevo_sorteo_handle(ctx, args)
+async def nuevo_sorteo(ctx, *, args: str = None):
+    await nuevo_sorteo_handle(ctx, args=args)
 
 @bot.command(name="realizar-sorteo")
 @comando_roles_permitidos("admin")
