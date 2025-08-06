@@ -222,6 +222,7 @@ async def on_message_delete(message):
 async def on_message(message: discord.Message):
     await bienvenida_y_comandos_handle(message)
     await bot.process_commands(message)  # Esto es importante para que los comandos funcionen
-# webserver.keep_alive()  
-# bot.run(DISCORD_TOKEN)
-bot.run(config.TOKEN)
+webserver.keep_alive()  
+bot.run(DISCORD_TOKEN)
+# bot.run(config.TOKEN)
+
