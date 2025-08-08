@@ -98,3 +98,50 @@ async def bienvenida_y_comandos_handle(message: discord.Message):
             await message.author.send("❌ No tienes acceso a ningún comando.")
         except discord.Forbidden:
             pass
+     # 🔹 Registrar en canal #registro-de-usuarios
+    canal_registro = discord.utils.get(message.guild.text_channels, name="registro-de-usuarios")
+    if canal_registro:
+        embed_registro = discord.Embed(
+            title="📥 Nuevo miembro registrado",
+            color=discord.Color.blue()
+        )
+        embed_registro.set_thumbnail(url=message.author.display_avatar.url)
+        embed_registro.add_field(name="Usuario", value=f"{message.author} (ID: {message.author.id})", inline=False)
+        embed_registro.add_field(name="Apodo en servidor", value=message.author.display_name, inline=False)
+        embed_registro.add_field(name="Roles asignados", value=", ".join(roles_usuario) or "Sin roles", inline=False)
+        embed_registro.add_field(name="Cuenta creada", value=message.author.created_at.strftime("%d/%m/%Y %H:%M:%S"), inline=False)
+        embed_registro.add_field(name="Se unió al servidor", value=message.author.joined_at.strftime("%d/%m/%Y %H:%M:%S"), inline=False)
+        embed_registro.add_field(name="Mensaje de presentación", value=message.content[:1000], inline=False)
+
+        await canal_registro.send(embed=embed_registro)
+
+async def evento_socio_handle(before: discord.Member, after: discord.Member):
+    # Nombre del rol que quieres detectar
+    ROL_SOCIO = "socio"
+
+    # Buscar si antes no lo tenía y ahora sí
+    roles_antes = {r.name for r in before.roles}
+    roles_despues = {r.name for r in after.roles}
+
+    if ROL_SOCIO not in roles_antes and ROL_SOCIO in roles_despues:
+        mensaje = (
+            "📢 **Información importante para socios**\n\n"
+            "La dirección se plantea establecer una cuota para los socios. "
+            "Dicha cuota será de **6 euros semestrales** o **10 anuales**, según la suscripción que quiera realizar el socio. "
+            "Este dinero tiene como único fin la creación de merchandising para los premios y organizar algún tipo de evento, "
+            "a criterio de la dirección.\n\n"
+            "Si algún socio desea ver las cuentas, éstas le serán mostradas para que pueda ver exactamente dónde se ha destinado el dinero, "
+            "ya que apostamos por la total transparencia y bienestar de nuestros socios.\n\n"
+            "Por último, remarcar que el acatamiento de dichas normas es obligatorio y que si no se han leído, no es problema de la dirección. "
+            "Estar en The Klub es un privilegio y no un derecho; este servidor pertenece exclusivamente a la dirección. "
+            "Cualquier intento de apropiación será sancionado.\n\n"
+            "Si estás conforme con todo esto, puedes pasar; si no, ten dignidad y vete tú antes de que te echemos nosotros, "
+            "sin problemas ni malos rollos ya que no todo el mundo vale para estar aquí.\n\n"
+            "🎉 **Y ahora sí que sí, sean bienvenidos a The Klub.**"
+        )
+
+        try:
+            await after.send(mensaje)
+            print(f"[INFO] Mensaje de socio enviado a {after}")
+        except discord.Forbidden:
+            print(f"[WARN] No pude enviar mensaje privado a {after}")
