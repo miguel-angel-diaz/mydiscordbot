@@ -1,4 +1,5 @@
 import discord
+from discord.ext import commands
 import config
 
 async def registrar_mensaje_borrado_handle(message: discord.Message):
@@ -145,3 +146,30 @@ async def evento_socio_handle(before: discord.Member, after: discord.Member):
             print(f"[INFO] Mensaje de socio enviado a {after}")
         except discord.Forbidden:
             print(f"[WARN] No pude enviar mensaje privado a {after}")
+         
+async def usuario_salio_evento(bot: commands.Bot, member: discord.Member):
+    # Canal donde se detallará la info del usuario que se fue
+    canal_info = discord.utils.get(member.guild.text_channels, name="usuarios-que-nos-dejaron")
+    if canal_info:
+        embed = discord.Embed(
+            title="👋 Usuario ha abandonado el servidor",
+            color=discord.Color.red()
+        )
+        embed.add_field(name="Nombre", value=f"{member.name}#{member.discriminator}", inline=True)
+        embed.add_field(name="ID", value=member.id, inline=True)
+        embed.add_field(name="Fecha de creación", value=member.created_at.strftime("%d/%m/%Y %H:%M:%S"), inline=False)
+        embed.add_field(name="Fecha de unión", value=member.joined_at.strftime("%d/%m/%Y %H:%M:%S") if member.joined_at else "Desconocida", inline=False)
+        embed.set_thumbnail(url=member.display_avatar.url)
+        await canal_info.send(embed=embed)
+
+    # Canal de anuncios
+    canal_anuncios = discord.utils.get(member.guild.text_channels, name="anuncios")
+    if canal_anuncios:
+        await canal_anuncios.send(f"📢 El usuario **{member.display_name}** ha abandonado **The Klub**.")
+
+    # Mensaje privado al usuario
+    try:
+        await member.send("En The Klub no creemos en segundas oportunidades, espero que haya reflexionado muy bien tu decisión.")
+    except discord.Forbidden:
+        # No se pudo enviar mensaje privado
+        pass
