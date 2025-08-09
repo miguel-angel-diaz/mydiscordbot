@@ -177,7 +177,7 @@ async def usuario_salio_handle(bot: commands.Bot, member: discord.Member):
     guild = member.guild
 
     # 1️⃣ Comprobar si está en la blacklist
-     if member.id in config.USUARIOS_BANEADOS:
+     if member.id in config.BLACKLIST_USERS:
         await castigar_usuario(member)
         return
 
