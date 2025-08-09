@@ -192,9 +192,14 @@ async def on_member_update(before, after):
 async def on_member_remove(member: discord.Member):
     await usuario_salio_handle(bot, member)
     
+@bot.event
+async def on_member_join(member):
+    await on_member_join_handle(member)
+    
 webserver.keep_alive()  
 bot.run(DISCORD_TOKEN)
 # bot.run(config.TOKEN)
+
 
 
 
