@@ -147,7 +147,7 @@ async def evento_socio_handle(before: discord.Member, after: discord.Member):
         except discord.Forbidden:
             print(f"[WARN] No pude enviar mensaje privado a {after}")
          
-async def usuario_salio_evento(bot: commands.Bot, member: discord.Member):
+async def usuario_salio_handle(bot: commands.Bot, member: discord.Member):
     # Canal donde se detallará la info del usuario que se fue
     canal_info = discord.utils.get(member.guild.text_channels, name="usuarios-que-nos-dejaron")
     if canal_info:
