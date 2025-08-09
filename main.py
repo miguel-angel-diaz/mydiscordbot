@@ -188,8 +188,9 @@ async def on_message(message: discord.Message):
 async def on_member_update(before, after):
     await evento_socio_handle(before, after)
     
-# webserver.keep_alive()  
-# bot.run(DISCORD_TOKEN)
-bot.run(config.TOKEN)
+webserver.keep_alive()  
+bot.run(DISCORD_TOKEN)
+# bot.run(config.TOKEN)
+
 
 
