@@ -173,3 +173,34 @@ async def usuario_salio_handle(bot: commands.Bot, member: discord.Member):
     except discord.Forbidden:
         # No se pudo enviar mensaje privado
         pass
+     async def on_member_join_handle(member: discord.Member):
+    guild = member.guild
+
+    # 1️⃣ Comprobar si está en la blacklist
+     if member.id in config.USUARIOS_BANEADOS:
+        await castigar_usuario(member)
+        return
+
+    # 2️⃣ Comprobar si aparece en el canal "usuarios-que-nos-dejaron"
+    canal_logs = discord.utils.get(guild.text_channels, name="usuarios-que-nos-dejaron")
+    if canal_logs:
+        async for mensaje in canal_logs.history(limit=200):  # Busca últimos 200 mensajes
+            if str(member.id) in mensaje.content or member.mention in mensaje.content:
+                await castigar_usuario(member)
+                return
+
+async def castigar_usuario(member: discord.Member):
+    try:
+        # Mensaje privado
+        await member.send(
+            "En The Klub no necesitamos gente como tú. "
+            "Y no queremos que la gente como tú entre en nuestro garito, "
+            "así que no te molestes."
+        )
+    except discord.Forbidden:
+        print(f"No se pudo enviar DM a {member.name}")
+
+    # Asignar rol Out
+    rol_out = discord.utils.get(member.guild.roles, name="Out")
+    if rol_out:
+        await member.add_roles(rol_out, reason="Usuario en blacklist o expulsado previamente")
