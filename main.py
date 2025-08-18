@@ -5,7 +5,7 @@ from utils.admin import aplicar_out, aplicar_strike, eliminar_mensajes, cerrar_p
 from utils.jugadores import agendar_partida_handle, eventos_hoy_handle, nueva_peticion_handle, inscribirse_handler, desinscribirse_handler, ver_inscritos_handler, reportar_resultado_handle, inscribirse_sorteo_handle, mis_comandos_handle
 from utils.torneos import iniciar_torneo_handle, actualizar_clasificacion_handle, partidos_pendientes_handle, forzar_ronda_handle, new_tournament_assistance_handle
 
-from utils.events import registrar_mensaje_borrado_handle, bienvenida_y_comandos_handle, evento_socio_handle, usuario_salio_handle
+from utils.events import registrar_mensaje_borrado_handle, bienvenida_y_comandos_handle, evento_socio_handle, usuario_salio_handle, on_member_join_handle
 from utils.watchers import cargar_tareas;
 from utils.commons import validar_canal_correcto, borrar_mensaje_seguro, enviar_ayuda_handle
 
@@ -199,8 +199,3 @@ async def on_member_join(member):
 webserver.keep_alive()  
 bot.run(DISCORD_TOKEN)
 # bot.run(config.TOKEN)
-
-
-
-
-

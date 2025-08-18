@@ -3,7 +3,6 @@ from discord.ext import commands
 import config
 
 async def registrar_mensaje_borrado_handle(message: discord.Message):
- 
     if message.author.bot or not message.guild:
         return
 
@@ -16,38 +15,26 @@ async def registrar_mensaje_borrado_handle(message: discord.Message):
         return
 
     try:
-        historial = []
-        async for msg in message.channel.history(limit=20, before=message.created_at, oldest_first=False):
-            if msg.id != message.id:
-                historial.append(msg)
-            if len(historial) == 5:
-                break
-
-        historial.reverse()
-
         embed = discord.Embed(
             title="🗑️ Mensaje borrado",
-            description=f"**Autor:** {message.author.mention}\n**Canal:** {message.channel.mention}\n**Fecha:** <t:{int(message.created_at.timestamp())}:F>",
+            description=f"**Autor:** {message.author.mention}\n"
+                        f"**Canal:** {message.channel.mention}\n"
+                        f"**Fecha:** <t:{int(message.created_at.timestamp())}:F>",
             color=discord.Color.red(),
         )
 
         if message.content:
-            embed.add_field(name="Contenido borrado", value=discord.utils.escape_markdown(message.content), inline=False)
+            embed.add_field(
+                name="Contenido borrado",
+                value=discord.utils.escape_markdown(message.content),
+                inline=False
+            )
 
         if message.attachments:
             urls = "\n".join([att.url for att in message.attachments])
             embed.add_field(name="Adjuntos", value=urls, inline=False)
 
         await canal_log.send(embed=embed)
-
-        if historial:
-            await canal_log.send("🧾 **5 mensajes anteriores:**")
-            for msg in historial:
-                contenido = msg.content if msg.content else "*[Sin texto]*"
-                autor = f"{msg.author.display_name} ({msg.author})"
-                fecha = f"<t:{int(msg.created_at.timestamp())}:F>"
-                texto = f"**{autor}** ({fecha}):\n{discord.utils.escape_markdown(contenido)}"
-                await canal_log.send(texto[:1900])
 
     except Exception as e:
         print(f"[ERROR] registrando mensaje borrado: {e}")
@@ -173,11 +160,12 @@ async def usuario_salio_handle(bot: commands.Bot, member: discord.Member):
     except discord.Forbidden:
         # No se pudo enviar mensaje privado
         pass
-     async def on_member_join_handle(member: discord.Member):
+
+async def on_member_join_handle(member: discord.Member):
     guild = member.guild
 
     # 1️⃣ Comprobar si está en la blacklist
-     if member.id in config.BLACKLIST_USERS:
+    if member.id in config.BLACKLIST_USERS:
         await castigar_usuario(member)
         return
 
