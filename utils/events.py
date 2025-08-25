@@ -43,15 +43,66 @@ async def bienvenida_y_comandos_handle(message: discord.Message):
     if message.author.bot or not message.guild:
         return
 
-    # Asegúrate de que es el canal #presentaciones
+    # Asegúrate de que es el canal #presentation
     canal_presentaciones = discord.utils.get(message.guild.text_channels, name="presentation")
     if not canal_presentaciones or message.channel.id != canal_presentaciones.id:
         return
 
-    # Asegúrate de que tiene ambos roles de bienvenida
-    roles_usuario = {role.name for role in message.author.roles}
-    if not config.ROLES_BIENVENIDA.issubset(roles_usuario):
+    member = message.author
+    guild = member.guild
+
+    # Roles de bienvenida
+    rol_welcome = discord.utils.get(guild.roles, name="Accept Welcome")
+    rol_rules = discord.utils.get(guild.roles, name="Accept Rules")
+    rol_miembro = discord.utils.get(guild.roles, name="miembro")
+
+    # 0️⃣ Verificar que tiene ambos roles
+    roles_usuario = {role.name for role in member.roles}
+    if not {"Accept Welcome", "Accept Rules"}.issubset(roles_usuario):
+        return  # Si no tiene ambos roles, no sigue
+
+    # 1️⃣ Quitar roles de bienvenida
+    roles_a_quitar = [r for r in (rol_welcome, rol_rules) if r in member.roles]
+    if roles_a_quitar:
+        try:
+            await member.remove_roles(*roles_a_quitar, reason="Ya obtuvo el rol 'miembro'")
+            print(f"[INFO] Roles de bienvenida quitados a {member.display_name}")
+        except discord.Forbidden:
+            print(f"[WARN] No tengo permisos para quitar roles a {member.display_name}")
+            return
+
+    # 2️⃣ Comprobar si está en la blacklist
+    if member.id in config.BLACKLIST_USERS:
+        await castigar_usuario(member)
         return
+
+    canal_logs = discord.utils.get(guild.text_channels, name="usuarios-que-nos-dejaron")
+    if canal_logs:
+        async for mensaje in canal_logs.history(limit=200):
+            # Caso 1: mensaje normal con el ID en el contenido
+            if str(member.id) in mensaje.content or member.mention in mensaje.content:
+                await castigar_usuario(member)
+                return
+
+            # Caso 2: mensaje con embed (lo más probable en tu caso)
+            for embed in mensaje.embeds:
+                if embed.description and str(member.id) in embed.description:
+                    await castigar_usuario(member)
+                    return
+                if embed.fields:
+                    for field in embed.fields:
+                        if str(member.id) in field.value or str(member.id) in field.name:
+                            await castigar_usuario(member)
+                            return
+
+    # 4️⃣ Asignar rol definitivo de miembro
+    if rol_miembro and rol_miembro not in member.roles:
+        try:
+            await member.add_roles(rol_miembro, reason="Aceptó reglas y bienvenida")
+            print(f"[INFO] Rol 'miembro' asignado a {member.display_name}")
+        except discord.Forbidden:
+            print(f"[WARN] No tengo permisos para asignar rol 'miembro' a {member.display_name}")
+            return
 
     # Simula que tiene el rol definitivo
     roles_simulados = roles_usuario | {"miembro"}
@@ -65,9 +116,9 @@ async def bienvenida_y_comandos_handle(message: discord.Message):
 
     # Mensaje de bienvenida
     try:
-        await message.author.send(f"👋 ¡Bienvenido/a al servidor, {message.author.display_name}! 🎉")
+        await member.send(f"👋 ¡Bienvenido/a al servidor, {member.display_name}! 🎉")
     except discord.Forbidden:
-        print(f"[INFO] No pude enviar bienvenida a {message.author}")
+        print(f"[INFO] No pude enviar bienvenida a {member}")
         return
 
     # Enviar comandos disponibles
@@ -78,27 +129,28 @@ async def bienvenida_y_comandos_handle(message: discord.Message):
             color=discord.Color.green()
         )
         try:
-            await message.author.send(embed=embed)
+            await member.send(embed=embed)
         except discord.Forbidden:
-            print(f"[INFO] No pude enviar comandos a {message.author}")
+            print(f"[INFO] No pude enviar comandos a {member}")
     else:
         try:
-            await message.author.send("❌ No tienes acceso a ningún comando.")
+            await member.send("❌ No tienes acceso a ningún comando.")
         except discord.Forbidden:
             pass
-     # 🔹 Registrar en canal #registro-de-usuarios
+
+    # 5️⃣ Registrar en canal #registro-de-usuarios
     canal_registro = discord.utils.get(message.guild.text_channels, name="registro-de-usuarios")
     if canal_registro:
         embed_registro = discord.Embed(
             title="📥 Nuevo miembro registrado",
             color=discord.Color.blue()
         )
-        embed_registro.set_thumbnail(url=message.author.display_avatar.url)
-        embed_registro.add_field(name="Usuario", value=f"{message.author} (ID: {message.author.id})", inline=False)
-        embed_registro.add_field(name="Apodo en servidor", value=message.author.display_name, inline=False)
+        embed_registro.set_thumbnail(url=member.display_avatar.url)
+        embed_registro.add_field(name="Usuario", value=f"{member} (ID: {member.id})", inline=False)
+        embed_registro.add_field(name="Apodo en servidor", value=member.display_name, inline=False)
         embed_registro.add_field(name="Roles asignados", value=", ".join(roles_usuario) or "Sin roles", inline=False)
-        embed_registro.add_field(name="Cuenta creada", value=message.author.created_at.strftime("%d/%m/%Y %H:%M:%S"), inline=False)
-        embed_registro.add_field(name="Se unió al servidor", value=message.author.joined_at.strftime("%d/%m/%Y %H:%M:%S"), inline=False)
+        embed_registro.add_field(name="Cuenta creada", value=member.created_at.strftime("%d/%m/%Y %H:%M:%S"), inline=False)
+        embed_registro.add_field(name="Se unió al servidor", value=member.joined_at.strftime("%d/%m/%Y %H:%M:%S"), inline=False)
         embed_registro.add_field(name="Mensaje de presentación", value=message.content[:1000], inline=False)
 
         await canal_registro.send(embed=embed_registro)
@@ -154,36 +206,13 @@ async def usuario_salio_handle(bot: commands.Bot, member: discord.Member):
     if canal_anuncios:
         await canal_anuncios.send(f"📢 El usuario **{member.display_name}** ha abandonado **The Klub**.")
 
-    # Mensaje privado al usuario
-    try:
-        await member.send("En The Klub no creemos en segundas oportunidades, espero que haya reflexionado muy bien tu decisión.")
-    except discord.Forbidden:
-        # No se pudo enviar mensaje privado
-        pass
-
-async def on_member_join_handle(member: discord.Member):
-    guild = member.guild
-
-    # 1️⃣ Comprobar si está en la blacklist
-    if member.id in config.BLACKLIST_USERS:
-        await castigar_usuario(member)
-        return
-
-    # 2️⃣ Comprobar si aparece en el canal "usuarios-que-nos-dejaron"
-    canal_logs = discord.utils.get(guild.text_channels, name="usuarios-que-nos-dejaron")
-    if canal_logs:
-        async for mensaje in canal_logs.history(limit=200):  # Busca últimos 200 mensajes
-            if str(member.id) in mensaje.content or member.mention in mensaje.content:
-                await castigar_usuario(member)
-                return
-
 async def castigar_usuario(member: discord.Member):
     try:
         # Mensaje privado
         await member.send(
-            "En The Klub no necesitamos gente como tú. "
-            "Y no queremos que la gente como tú entre en nuestro garito, "
-            "así que no te molestes."
+            "Lo siento pero no eres el perfil que buscamos, agradecemos tú interés pero no todo el mundo vale para The Klub,"
+            "estar aquí no es un derecho, es un privilegio."
+            "Buena suerte en tu camino y que vaya bien."
         )
     except discord.Forbidden:
         print(f"No se pudo enviar DM a {member.name}")

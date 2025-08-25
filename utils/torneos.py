@@ -22,6 +22,67 @@ def slugify_challonge(value: str) -> str:
     value = value.lower()
     return re.sub(r'[^a-z0-9]', '', value)
 
+async def new_tournament_assistance_handle(ctx, *, args=None):
+    """Asistente por DM para crear un torneo paso a paso sin pedir deck URL."""
+    await borrar_mensaje_seguro(ctx)
+
+    if not await validar_canal_correcto(ctx, "preguntale-a-el-barbas", "!nuevo-torneo"):
+        return
+
+    if args:
+        await nuevo_torneo(ctx, args=args)
+        return
+
+    try:
+        await ctx.author.send("🎮 ¡Vamos a crear un torneo! Responde a las siguientes preguntas paso a paso. Puedes cancelar escribiendo `cancelar`.")
+
+        def dm_check(m):
+            return m.author == ctx.author and isinstance(m.channel, discord.DMChannel)
+
+        await ctx.author.send("1️⃣ ¿Nombre del torneo?")
+        nombre = await ctx.bot.wait_for("message", check=dm_check, timeout=90.0)
+        if nombre.content.lower() == "cancelar": return
+
+        await ctx.author.send("2️⃣ ¿Formato? (Ej: Premodern, Classic-Legacy, 7Pts, ...)")
+        formato = await ctx.bot.wait_for("message", check=dm_check, timeout=90.0)
+        if formato.content.lower() == "cancelar": return
+
+        await ctx.author.send("3️⃣ ¿Tipo de torneo? (Ej: Swiss, Round Robin, Single elimination)")
+        tipo = await ctx.bot.wait_for("message", check=dm_check, timeout=90.0)
+        if tipo.content.lower() == "cancelar": return
+
+        await ctx.author.send("4️⃣ ¿Número máximo de jugadores?")
+        jugadores = await ctx.bot.wait_for("message", check=dm_check, timeout=90.0)
+        if jugadores.content.lower() == "cancelar": return
+        try:
+            int(jugadores.content)
+        except ValueError:
+            await ctx.author.send("❌ Debe ser un número.")
+            return
+
+        await ctx.author.send("5️⃣ ¿Fecha de inicio? (Formato: DD/MM/AAAA)")
+        fecha = await ctx.bot.wait_for("message", check=dm_check, timeout=90.0)
+        if fecha.content.lower() == "cancelar": return
+        try:
+            datetime.strptime(fecha.content, "%d/%m/%Y")
+        except ValueError:
+            await ctx.author.send("❌ Fecha inválida. Usa el formato DD/MM/AAAA.")
+            return
+
+        await ctx.author.send("6️⃣ ¿Nivel o rol permitido para inscribirse? (Ej: abierto, nivel1, etc.)")
+        nivel = await ctx.bot.wait_for("message", check=dm_check, timeout=90.0)
+        if nivel.content.lower() == "cancelar": return
+
+        # Construir args final sin deck URL
+        args_final = f"{nombre.content} | {formato.content} | {tipo.content} | {jugadores.content} | {fecha.content} | {nivel.content}"
+        await nuevo_torneo(ctx, args=args_final)
+
+    except discord.Forbidden:
+        await ctx.send("❌ No pude enviarte mensajes privados. Asegúrate de tener los DMs habilitados.")
+    except asyncio.TimeoutError:
+        await ctx.author.send("⏰ Tiempo agotado. Puedes volver a intentarlo enviando `!nuevo-torneo` en el servidor.")
+
+
 async def nuevo_torneo(ctx, *, args: str):
     await borrar_mensaje_seguro(ctx)
     if not await validar_canal_correcto(ctx, "preguntale-a-el-barbas", "!nuevo-torneo"):
@@ -35,11 +96,11 @@ async def nuevo_torneo(ctx, *, args: str):
         return
 
     partes = [p.strip() for p in args.split("|")]
-    if len(partes) != 7:
-        await ctx.author.send("❌ Formato incorrecto. Usa:\n`!nuevo-torneo Nombre | Formato | tipo | Jugadores | Fecha | Nivel | DeckURL`")
+    if len(partes) != 6:  # Eliminamos deck URL
+        await ctx.author.send("❌ Formato incorrecto. Usa:\n`!nuevo-torneo Nombre | Formato | tipo | Jugadores | Fecha | Nivel`")
         return
 
-    nombre, formato, tipo_challonge, jugadores, fecha, nivel, deck_url = partes
+    nombre, formato, tipo_challonge, jugadores, fecha, nivel = partes
 
     try:
         jugadores = int(jugadores)
@@ -83,7 +144,6 @@ async def nuevo_torneo(ctx, *, args: str):
                 await ctx.author.send(
                     f"✅ Torneo creado con éxito: **{tournament['name']}**\n"
                     f"🌐 URL: https://challonge.com/{url_challonge}\n"
-                    f"📥 Decklists: {deck_url}"
                 )
 
                 # 📣 Anuncio en canal de torneos
@@ -96,9 +156,7 @@ async def nuevo_torneo(ctx, *, args: str):
                         f"👥 **Jugadores máximos:** {jugadores}\n"
                         f"📅 **Inicio:** {fecha}\n"
                         f"🔒 **Nivel:** {nivel}\n"
-                        f"📥 **Decks:** {deck_url}\n"
                         f" **Código:** {url_challonge}\n"
-                        f"🌐 **Challonge:** https://challonge.com/{url_challonge}"
                     )
                 else:
                     await ctx.author.send("⚠️ No se encontró el canal `anuncios-torneos` en este servidor.")
@@ -116,7 +174,6 @@ async def nuevo_torneo(ctx, *, args: str):
                     f"👥 **Jugadores:** {jugadores}\n"
                     f"📅 **Inicio:** {fecha}\n"
                     f"🎯 **Nivel:** {nivel}\n"
-                    f"📥 **Decks:** {deck_url}"
                 )
 
                 await canal_torneos.send(mensaje_torneo)
@@ -677,66 +734,4 @@ async def finalizar_torneo_handle(ctx, codigo_torneo: str):
     # Publicar clasificación final
     await actualizar_clasificacion_handle(ctx, codigo_torneo, canal_destino="clasificacion-general",  from_chanel = 1 )
 
-async def new_tournament_assistance_handle(ctx, *, args=None):
-    """Asistente por DM para crear un torneo paso a paso."""
-    await borrar_mensaje_seguro(ctx)
 
-    if not await validar_canal_correcto(ctx, "preguntale-a-el-barbas", "!nuevo-torneo"):
-        return
-
-    if args:
-        await nuevo_torneo(ctx, args=args)
-        return
-
-    try:
-        await ctx.author.send("🎮 ¡Vamos a crear un torneo! Responde a las siguientes preguntas paso a paso. Puedes cancelar en cualquier momento escribiendo `cancelar`.")
-
-        def dm_check(m):
-            return m.author == ctx.author and isinstance(m.channel, discord.DMChannel)
-
-        await ctx.author.send("1️⃣ ¿Nombre del torneo?")
-        nombre = await ctx.bot.wait_for("message", check=dm_check, timeout=90.0)
-        if nombre.content.lower() == "cancelar": return
-
-        await ctx.author.send("2️⃣ ¿Formato? (Ej: Premodern, Classic-Legacy, 7Pts, Premodern Bondage, ...)")
-        formato = await ctx.bot.wait_for("message", check=dm_check, timeout=90.0)
-        if formato.content.lower() == "cancelar": return
-
-        await ctx.author.send("3️⃣ ¿Tipo de torneo en Challonge? (Ej: swiss, round robin, Single elimination)")
-        tipo = await ctx.bot.wait_for("message", check=dm_check, timeout=90.0)
-        if tipo.content.lower() == "cancelar": return
-
-        await ctx.author.send("4️⃣ ¿Número máximo de jugadores?")
-        jugadores = await ctx.bot.wait_for("message", check=dm_check, timeout=90.0)
-        if jugadores.content.lower() == "cancelar": return
-        try:
-            int(jugadores.content)
-        except ValueError:
-            await ctx.author.send("❌ Debe ser un número.")
-            return
-
-        await ctx.author.send("5️⃣ ¿Fecha de inicio? (Formato: DD/MM/AAAA)")
-        fecha = await ctx.bot.wait_for("message", check=dm_check, timeout=90.0)
-        if fecha.content.lower() == "cancelar": return
-        try:
-            datetime.strptime(fecha.content, "%d/%m/%Y")
-        except ValueError:
-            await ctx.author.send("❌ Fecha inválida. Usa el formato DD/MM/AAAA.")
-            return
-
-        await ctx.author.send("6️⃣ ¿Nivel o rol permitido para inscribirse? (Ej: abierto, nivel1, etc.)")
-        nivel = await ctx.bot.wait_for("message", check=dm_check, timeout=90.0)
-        if nivel.content.lower() == "cancelar": return
-
-        await ctx.author.send("7️⃣ ¿URL para envío de mazos (decklists)?")
-        deck = await ctx.bot.wait_for("message", check=dm_check, timeout=90.0)
-        if deck.content.lower() == "cancelar": return
-
-        # Construir args para pasar a la función existente
-        args_final = f"{nombre.content} | {formato.content} | {tipo.content} | {jugadores.content} | {fecha.content} | {nivel.content} | {deck.content}"
-        await nuevo_torneo(ctx, args=args_final)
-
-    except discord.Forbidden:
-        await ctx.send("❌ No pude enviarte mensajes privados. Asegúrate de tener los DMs habilitados.")
-    except asyncio.TimeoutError:
-        await ctx.author.send("⏰ Tiempo agotado. Puedes volver a intentarlo enviando `!nuevo-torneo` en el servidor.")
