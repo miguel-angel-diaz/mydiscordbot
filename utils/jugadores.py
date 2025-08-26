@@ -1,6 +1,8 @@
 import aiohttp
 import discord
 import asyncio
+from bs4 import BeautifulSoup
+from urllib.parse import urlparse, parse_qs
 from datetime import datetime, timedelta
 import re
 import config
@@ -17,7 +19,7 @@ intentos_fallidos = {}  # Guardado temporal por usuario
 async def agendar_partida_handle(ctx, fecha=None, hora=None, jugador1=None, _vs=None, jugador2=None):
     await borrar_mensaje_seguro(ctx)
 
-    if not await validar_canal_correcto(ctx, "agenda", "!agendar-partida"):
+    if not await validar_canal_correcto(ctx, "preguntale-a-el-barbas", "!agendar-partida"):
         return
 
     def dm_check(m):
@@ -81,7 +83,6 @@ async def agendar_partida_handle(ctx, fecha=None, hora=None, jugador1=None, _vs=
 
     mensaje_privado = (
         f"✅ Se ha agendado una partida para el `{fecha}` a las `{hora}` entre {jugador1.mention} y {jugador2.mention}."
-        f"\nPuedes consultarlo en el canal `#agenda` con el comando `!partidas-pendientes`."
     )
 
     for jugador in (jugador1, jugador2):
@@ -92,6 +93,8 @@ async def agendar_partida_handle(ctx, fecha=None, hora=None, jugador1=None, _vs=
 
     if ctx.author.id in intentos_fallidos:
         del intentos_fallidos[ctx.author.id]
+    # Publicar partidas agendadas esta semana
+    await actualizar_proximas_partidas(ctx)
 
 async def extraer_mencion(mensaje, ctx):
     if mensaje.mentions:
@@ -102,38 +105,167 @@ async def extraer_mencion(mensaje, ctx):
         except:
             return None
 
-async def manejar_error_de_agendamiento(ctx):
-    ahora = datetime.now()
-    usuario_id = ctx.author.id
+async def modificar_partida_agendada_handle(ctx):
+    await borrar_mensaje_seguro(ctx)
 
-    intentos = intentos_fallidos.get(usuario_id, [])
-    intentos = [t for t in intentos if ahora - t < timedelta(minutes=TIEMPO_LIMITE_MINUTOS)]
-    intentos.append(ahora)
-    intentos_fallidos[usuario_id] = intentos
+    canal_destino = discord.utils.get(ctx.guild.text_channels, name="partidos-agendados")
+    if not canal_destino:
+        await ctx.send("❌ No se encontró el canal `#partidos-agendados`.")
+        return
 
-    intentos_restantes = MAX_ERRORES - len(intentos)
+    mensajes = [m async for m in canal_destino.history(limit=100) if ctx.author.mention in m.content]
+    if not mensajes:
+        await ctx.send("❌ No tienes partidas agendadas recientemente.")
+        return
 
-    mensaje = (
-        f"❌ **Comando incorrecto.** Asegúrate de usar este formato:\n"
-        "`!agendar-partida dd/mm/yyyy hh:mm @Jugador1 vs @Jugador2`\n"
-        f"🔄 Ejemplo: `!agendar-partida 07/07/2025 23:45 @Fizban vs @sete`\n\n"
-        f"⚠️ Tienes {intentos_restantes} intento(s) antes de recibir el rol **Strike**."
+    def dm_check(m): 
+        return m.author == ctx.author and isinstance(m.channel, discord.DMChannel)
+
+    # Selección de partida si hay varias
+    if len(mensajes) > 1:
+        opciones = "\n".join([f"{i+1}. {m.content}" for i, m in enumerate(mensajes[:5])])
+        await ctx.author.send(
+            f"📋 He encontrado varias partidas agendadas por ti:\n{opciones}\n\n"
+            "Responde con el número de la que quieras modificar o eliminar:"
+        )
+        try:
+            resp = await ctx.bot.wait_for("message", check=dm_check, timeout=90)
+            idx = int(resp.content.strip()) - 1
+            mensaje = mensajes[idx]
+        except (asyncio.TimeoutError, ValueError, IndexError):
+            await ctx.author.send("❌ Selección inválida o tiempo agotado. No se modificó ninguna partida.")
+            return
+    else:
+        mensaje = mensajes[0]
+
+    # Extraer datos de la partida seleccionada
+    partes = mensaje.content.split("|")
+    fecha_hora = partes[0].replace("📅 [EVENTO]", "").strip()
+    jugador1_vs = partes[1].strip()
+    jugador1, jugador2 = jugador1_vs.split("vs")
+    fecha, hora = fecha_hora.split(" ")[0], fecha_hora.split(" ")[1]
+
+    # Bucle interactivo
+    while True:
+        dm_embed = discord.Embed(
+            title="⚙️ Modificar/Eliminar partida agendada",
+            description="Actualmente tienes agendada esta partida:",
+            color=discord.Color.blue()
+        )
+        dm_embed.add_field(name="Fecha", value=fecha, inline=False)
+        dm_embed.add_field(name="Hora", value=hora, inline=False)
+        dm_embed.add_field(name="Jugador 1", value=jugador1.strip(), inline=False)
+        dm_embed.add_field(name="Jugador 2", value=jugador2.strip(), inline=False)
+
+        await ctx.author.send(embed=dm_embed)
+        await ctx.author.send(
+            "✏️ ¿Qué deseas hacer?\n"
+            "1️⃣ Modificar fecha\n"
+            "2️⃣ Modificar hora\n"
+            "3️⃣ Modificar jugador 1\n"
+            "4️⃣ Modificar jugador 2\n"
+            "🗑️ Escribe `eliminar` para borrar esta partida\n"
+            "✅ Escribe `ok` para confirmar cambios sin más modificaciones."
+        )
+
+        try:
+            respuesta = await ctx.bot.wait_for("message", check=dm_check, timeout=120.0)
+        except asyncio.TimeoutError:
+            await ctx.author.send("⏰ Tiempo agotado. No se modificó la partida agendada.")
+            return
+
+        opcion = respuesta.content.strip().lower()
+
+        if opcion in ["ok", "confirmar"]:
+            break
+        elif opcion == "eliminar":
+            await mensaje.delete()
+            await ctx.author.send("🗑️ Tu partida agendada ha sido eliminada correctamente.")
+            await actualizar_proximas_partidas(ctx)
+            return
+
+        try:
+            if opcion == "1":
+                await ctx.author.send("📅 Nueva fecha (dd/mm/yyyy):")
+                resp = await ctx.bot.wait_for("message", check=dm_check, timeout=60)
+                fecha = resp.content.strip()
+            elif opcion == "2":
+                await ctx.author.send("⏰ Nueva hora (hh:mm):")
+                resp = await ctx.bot.wait_for("message", check=dm_check, timeout=60)
+                hora = resp.content.strip()
+            elif opcion == "3":
+                await ctx.author.send("👤 Nuevo Jugador 1 (mención o nombre):")
+                resp = await ctx.bot.wait_for("message", check=dm_check, timeout=60)
+                jugador1 = resp.content.strip()
+            elif opcion == "4":
+                await ctx.author.send("👤 Nuevo Jugador 2 (mención o nombre):")
+                resp = await ctx.bot.wait_for("message", check=dm_check, timeout=60)
+                jugador2 = resp.content.strip()
+            else:
+                await ctx.author.send("❌ Opción no válida.")
+        except asyncio.TimeoutError:
+            await ctx.author.send("⏰ Tiempo agotado. No se actualizó esa opción.")
+
+    # Si no se eliminó, actualizamos mensaje
+    nuevo_mensaje = f"📅 [EVENTO] {fecha} {hora} | {jugador1} vs {jugador2} | Agendado por {ctx.author.mention}"
+    await mensaje.edit(content=nuevo_mensaje)
+    await ctx.author.send("✅ Tu partida ha sido modificada correctamente.")
+    await actualizar_proximas_partidas(ctx)
+
+async def actualizar_proximas_partidas(ctx):
+    canal_destino = discord.utils.get(ctx.guild.text_channels, name="partidos-agendados")
+    canal_proximas = discord.utils.get(ctx.guild.text_channels, name="proximas-partidas")
+    if not canal_destino or not canal_proximas:
+        return
+
+    hoy = datetime.now().date()
+    inicio_semana = hoy - timedelta(days=hoy.weekday())
+    fin_semana = inicio_semana + timedelta(days=6)
+
+    eventos_semana = []
+    async for mensaje in canal_destino.history(limit=200):
+        if "[EVENTO]" in mensaje.content:
+            partes = mensaje.content.split("|")
+            fecha_hora = partes[0].replace("📅 [EVENTO]", "").strip()
+            try:
+                fecha_msg, hora_msg = fecha_hora.split(" ")[0], fecha_hora.split(" ")[1]
+                fecha_obj = datetime.strptime(fecha_msg, "%d/%m/%Y").date()
+                if inicio_semana <= fecha_obj <= fin_semana:
+                    jugadores = partes[1].strip()
+                    jugador1, jugador2 = jugadores.split("vs")
+                    eventos_semana.append((fecha_obj, hora_msg, jugador1.strip(), jugador2.strip()))
+            except Exception:
+                continue
+
+    if not eventos_semana:
+        return  # No hay eventos esta semana
+
+    embed = discord.Embed(
+        title="📅 Partidas programadas esta semana",
+        color=discord.Color.blue()
     )
+    for fecha_ev, hora_ev, j1, j2 in sorted(eventos_semana):
+        embed.add_field(name=f"{fecha_ev.strftime('%d/%m/%Y')} {hora_ev}", value=f"{j1} vs {j2}", inline=False)
 
-    await ctx.send(mensaje)
+    # Revisar si ya existe un mensaje de esta semana
+    mensaje_existente = None
+    async for msg in canal_proximas.history(limit=50):
+        if msg.author == ctx.guild.me and "📅 Partidas programadas esta semana" in (msg.embeds[0].title if msg.embeds else ""):
+            mensaje_existente = msg
+            break
 
-    if len(intentos) >= MAX_ERRORES:
-        rol_strike = discord.utils.get(ctx.guild.roles, name="Strike")
-        if rol_strike and rol_strike not in ctx.author.roles:
-            await ctx.author.add_roles(rol_strike)
-            await ctx.send(f"🚫 {ctx.author.mention}, has cometido demasiados errores. Se te ha asignado el rol **Strike**.")
+    if mensaje_existente:
+        await mensaje_existente.edit(embed=embed)
+    else:
+        await canal_proximas.send(embed=embed)
+
 
 async def eventos_hoy_handle(ctx):
     # Intentar eliminar el mensaje del canal público
     await borrar_mensaje_seguro(ctx)
     
     # Validar canal correcto
-    if not await validar_canal_correcto(ctx, "agenda", "!eventos-hoy"):
+    if not await validar_canal_correcto(ctx, "preguntale-a-el-barbas", "!eventos-hoy"):
         return
 
     canal = discord.utils.get(ctx.guild.text_channels, name="partidos-agendados")
@@ -389,17 +521,21 @@ async def inscribirse_handler(ctx, codigo_torneo: str, usuario: discord.Member =
     except (asyncio.TimeoutError, discord.Forbidden):
         await ctx.author.send("⚠️ No pude enviar el mensaje para subir deck. Podrás hacerlo más tarde con el comando adecuado.")
 
-    # Anunciar inscripción en canal público
-    canal_inscripciones = discord.utils.get(ctx.guild.text_channels, name="inscripciones")
-    if canal_inscripciones:
-        plazas_restantes = (total_maximo - total_inscritos - 1) if total_maximo else None
-        if plazas_restantes is not None:
-            mensaje = f"✅ `{apuntado.display_name}` se ha inscrito en {codigo_torneo}. Quedan **{plazas_restantes}** plazas."
+   # Anunciar inscripción en canal público
+    canal_anuncios_torneos = discord.utils.get(ctx.guild.text_channels, name="anuncios-torneos")
+    if canal_anuncios_torneos:
+        plazas_ocupadas = total_inscritos + 1  # el que acaba de inscribirse
+        if total_maximo:
+            plazas_restantes = total_maximo - plazas_ocupadas
+            mensaje = (
+                f"📥 {apuntado.mention} se ha inscrito en el torneo `{codigo_torneo}`.\n"
+                f"🪑 Plazas restantes: {plazas_restantes}/{total_maximo}"
+            )
         else:
-            mensaje = f"✅ `{apuntado.display_name}` se ha inscrito en {codigo_torneo}."
-        await canal_inscripciones.send(mensaje)
+            mensaje = f"📥 {apuntado.mention} se ha inscrito en el torneo `{codigo_torneo}`."
+        await canal_anuncios_torneos.send(mensaje)
     else:
-        await ctx.author.send("⚠️ No encontré el canal `#inscripciones` para anunciar la inscripción.")
+        await ctx.author.send("⚠️ No encontré el canal `#anuncios-torneos` para anunciar la inscripción.")
 
 async def desinscribirse_handler(ctx, codigo_torneo: str, usuario: discord.Member = None):
       # Eliminar mensaje original si es posible
@@ -487,9 +623,9 @@ async def desinscribirse_handler(ctx, codigo_torneo: str, usuario: discord.Membe
 
     # Buscar canal de torneos activos
     canal_torneos = discord.utils.get(ctx.guild.text_channels, name="torneos-activos")
-    canal_inscripciones = discord.utils.get(ctx.guild.text_channels, name="inscripciones")
+    canal_anuncios_torneos = discord.utils.get(ctx.guild.text_channels, name="anuncios-torneos")
 
-    if not canal_torneos or not canal_inscripciones:
+    if not canal_torneos or not canal_anuncios_torneos:
         await ctx.author.send("⚠️ No se encontraron los canales `#torneos-activos` o `#inscripciones` para notificar.")
         return
 
@@ -508,7 +644,7 @@ async def desinscribirse_handler(ctx, codigo_torneo: str, usuario: discord.Membe
 
     if total_maximo is not None:
         plazas_disponibles = total_maximo - (total_inscritos - 1)  # -1 porque ya está desinscrito
-        await canal_inscripciones.send(
+        await canal_anuncios_torneos.send(
             f"📤 {apuntado.mention} se ha desinscrito del torneo `{codigo_torneo}`.\n"
             f"🪑 Plazas disponibles: {plazas_disponibles}/{total_maximo}"
         )
@@ -612,10 +748,10 @@ async def ver_inscritos_handler(ctx, codigo_torneo: str):
     await ctx.author.send(
         f"📋 **Jugadores inscritos en `{codigo_torneo}`:**\n```{inscritos_str}```"
     )
-async def reportar_resultado_handle(ctx, codigo_torneo: str, jugador1: discord.Member, resultado: str, jugador2: discord.Member):
+async def reportar_resultado_handle(ctx, codigo_torneo: str = None, jugador1: discord.Member = None, resultado: str = None, jugador2: discord.Member = None):
     # Eliminar mensaje original si es posible
     await borrar_mensaje_seguro(ctx)
-    if not await validar_canal_correcto(ctx, "resultados", "!reportar-resultado"):
+    if not await validar_canal_correcto(ctx, "preguntale-a-el-barbas", "!reportar-resultado"):
         return
     author = ctx.author
     def dm_check(m):
@@ -655,8 +791,6 @@ async def reportar_resultado_handle(ctx, codigo_torneo: str, jugador1: discord.M
             if not es_mod:
                 await author.send("❌ Solo los jugadores involucrados o un moderador pueden reportar el resultado.")
                 return
-
-        # Aquí continuarías con la lógica que ya tenías: buscar match en Challonge, registrar resultado, etc.
 
     except asyncio.TimeoutError:
         await author.send("⏰ Tiempo agotado. Vuelve a intentar con `!reportar-resultado`.")
@@ -698,65 +832,66 @@ async def reportar_resultado_handle(ctx, codigo_torneo: str, jugador1: discord.M
             matches_data = await resp.json()
 
         match_id = None
+        player1_id = player2_id = None
         for match in matches_data:
             m = match["match"]
-            players = {m["player1_id"], m["player2_id"]}
-            if {id_jugador1, id_jugador2} == players:
+            if {id_jugador1, id_jugador2} == {m["player1_id"], m["player2_id"]}:
                 match_id = m["id"]
-                player1_is_p1 = m["player1_id"] == id_jugador1
+                player1_id = m["player1_id"]
+                player2_id = m["player2_id"]
                 break
 
         if not match_id:
             await author.send("❌ No se encontró un match entre estos dos jugadores.")
             return
 
-        # Procesar el resultado tipo "2-1"
         if not resultado or "-" not in resultado:
             await author.send("❌ El resultado debe tener el formato 'X-Y', por ejemplo '2-1'.")
             return
 
         try:
-            puntos1, puntos2 = map(int, resultado.split("-"))
+            puntos_j1, puntos_j2 = map(int, resultado.split("-"))
         except ValueError:
-            await author.send("❌ El resultado debe tener números válidos, por ejemplo '2-1'.")
+            await author.send("❌ El resultado debe contener números válidos, por ejemplo '2-1'.")
             return
 
-        winner_id = id_jugador1 if puntos1 > puntos2 else id_jugador2
-        scores_csv = f"{puntos1}-{puntos2}" if player1_is_p1 else f"{puntos2}-{puntos1}"
-
-        # Enviar resultado a Challonge
-        url_put = f"https://api.challonge.com/v1/tournaments/{codigo_torneo}/matches/{match_id}.json"
-        if puntos1 == puntos2:
-            payload = {
-                "match": {
-                    "scores_csv": scores_csv,
-                    "winner_id" : "tie"
-                    # No enviar winner_id en caso de empate
-                }
-            }
+        # Normalizar orden según Challonge
+        if player1_id == id_jugador1:
+            scores_csv = f"{puntos_j1}-{puntos_j2}"
+            winner_id = id_jugador1 if puntos_j1 > puntos_j2 else id_jugador2
         else:
-            winner_id = id_jugador1 if puntos1 > puntos2 else id_jugador2
-            payload = {
-                "match": {
-                    "scores_csv": scores_csv,
-                    "winner_id": winner_id
-                }
-            }
+            scores_csv = f"{puntos_j2}-{puntos_j1}"
+            winner_id = id_jugador2 if puntos_j2 > puntos_j1 else id_jugador1
 
+        # Construir payload para Challonge
+        payload = {"match": {"scores_csv": scores_csv}}
+        if puntos_j1 == puntos_j2:
+            payload["match"]["winner_id"] = "tie"  # Empate explícito
+        else:
+            payload["match"]["winner_id"] = winner_id
+
+        url_put = f"https://api.challonge.com/v1/tournaments/{codigo_torneo}/matches/{match_id}.json"
         async with session.put(url_put, json=payload, auth=aiohttp.BasicAuth(config.CHALLONGE_USERNAME, config.CHALLONGE_API_KEY)) as put_resp:
             if put_resp.status not in (200, 202):
                 error = await put_resp.text()
                 await author.send(f"❌ Error al reportar el resultado: {error}")
                 return
 
-    # Mandar mensaje privado a ambos jugadores
+   # Mandar mensaje privado a ambos jugadores
     jugadores = [jugador1, jugador2]
     for jugador in jugadores:
         try:
+            if puntos_j1 == puntos_j2:
+                resultado_texto = "⚖️ Empate"
+            else:
+                ganador = jugador1 if puntos_j1 > puntos_j2 else jugador2
+                resultado_texto = f"🏅 Ganador: {ganador.display_name}"
+
             await jugador.send(
                 f"📢 Se ha reportado el resultado del torneo `{codigo_torneo}`:\n"
                 f"🆚 {jugador1.display_name} vs {jugador2.display_name}\n"
-                f"📊 Resultado: {resultado}"
+                f"📊 Resultado: {resultado}\n"
+                f"{resultado_texto}"
             )
         except discord.Forbidden:
             await author.send(
@@ -770,16 +905,233 @@ async def reportar_resultado_handle(ctx, codigo_torneo: str, jugador1: discord.M
     # Canal de resultados
     canal_resultados = discord.utils.get(ctx.guild.text_channels, name="resultados")
     if canal_resultados:
-        await canal_resultados.send(
-            f"🏆 Resultado reportado en `{codigo_torneo}`:\n"
-            f"**{jugador1.display_name}** {resultado} **{jugador2.display_name}**"
-        )
+        if puntos_j1 == puntos_j2:
+            mensaje = (
+                f"🏆 Resultado reportado en `{codigo_torneo}`:\n"
+                f"**{jugador1.display_name}** {resultado} **{jugador2.display_name}**\n"
+                f"⚖️ Empate"
+            )
+        else:
+            ganador = jugador1 if puntos_j1 > puntos_j2 else jugador2
+            mensaje = (
+                f"🏆 Resultado reportado en `{codigo_torneo}`:\n"
+                f"**{jugador1.display_name}** {resultado} **{jugador2.display_name}**\n"
+                f"🏅 Ganador: {ganador.mention}"
+            )
+        await canal_resultados.send(mensaje)
     await author.send(
         "✅ Resultado reportado correctamente.:\n"
         f"**{jugador1.display_name}** {resultado} **{jugador2.display_name}**"
     )
 
     await partidos_pendientes_handle(ctx, codigo_torneo, 'user')
+
+async def modificar_resultado_handle(ctx, codigo_torneo: str = None):
+    await borrar_mensaje_seguro(ctx)
+    if not await validar_canal_correcto(ctx, "preguntale-a-el-barbas", "!modificar-resultado"):
+        return
+
+    author = ctx.author
+    def dm_check(m): return m.author == author and isinstance(m.channel, discord.DMChannel)
+
+    # 1) Preguntar código si falta
+    try:
+        if not codigo_torneo:
+            await author.send("📌 Indica el **código del torneo** donde quieres modificar un resultado:")
+            msg = await ctx.bot.wait_for("message", check=dm_check, timeout=90.0)
+            codigo_torneo = msg.content.strip()
+    except asyncio.TimeoutError:
+        await author.send("⏰ Tiempo agotado. No se modificó ningún resultado.")
+        return
+    except discord.Forbidden:
+        await ctx.send("❌ No puedo escribirte por DM. Activa mensajes privados para continuar.")
+        return
+
+    # 2) Cargar participantes y matches (API v1)
+    url_participantes = f"https://api.challonge.com/v1/tournaments/{codigo_torneo}/participants.json"
+    url_matches       = f"https://api.challonge.com/v1/tournaments/{codigo_torneo}/matches.json"
+
+    async with aiohttp.ClientSession() as session:
+        # participantes
+        async with session.get(url_participantes, auth=aiohttp.BasicAuth(config.CHALLONGE_USERNAME, config.CHALLONGE_API_KEY)) as resp:
+            if resp.status != 200:
+                await author.send("❌ No se pudieron obtener los participantes del torneo. Verifica el código.")
+                return
+            participantes_data = await resp.json()
+
+        # mapa participante_id -> (discord_member | None, display_text)
+        id_to_member = {}
+        for entry in participantes_data:
+            p = entry.get("participant", {})
+            pid = p.get("id")
+            raw_name = p.get("name", "")
+            display = raw_name
+            member = None
+            # si guardas el ID de Discord en 'name'
+            try:
+                uid = int(raw_name)
+                member = ctx.guild.get_member(uid)
+                if member:
+                    display = member.display_name
+                else:
+                    # si no está en el guild, dejar el id como texto
+                    display = f"<@{uid}>"
+            except:
+                # name no es un ID de Discord
+                display = raw_name or f"Player {pid}"
+            id_to_member[pid] = (member, display)
+
+        # matches
+        async with session.get(url_matches, auth=aiohttp.BasicAuth(config.CHALLONGE_USERNAME, config.CHALLONGE_API_KEY)) as resp:
+            if resp.status != 200:
+                await author.send("❌ No se pudieron obtener los emparejamientos del torneo.")
+                return
+            matches_data = await resp.json()
+
+    # 3) Determinar ronda(s) aún en juego (no completamente finalizada)
+    if not matches_data:
+        await author.send("❌ No hay emparejamientos en este torneo.")
+        return
+
+    # agrupar por ronda y ver cuáles NO están completas
+    rondas = {}
+    for m in matches_data:
+        mm = m["match"]
+        r = mm["round"]
+        rondas.setdefault(r, []).append(mm)
+
+    rondas_incompletas = [r for r, lst in rondas.items() if any(x["state"] != "complete" for x in lst)]
+    if not rondas_incompletas:
+        await author.send("🏁 El torneo no tiene rondas en juego. No es posible modificar resultados.")
+        return
+
+    # “ronda actual” en winners: la menor ronda positiva incompleta
+    # “ronda actual” en losers: la mayor ronda negativa incompleta (más cercana a 0)
+    winners_actual = min((r for r in rondas_incompletas if r > 0), default=None)
+    losers_actual  = max((r for r in rondas_incompletas if r < 0), default=None)
+
+    # 4) De esas rondas actuales, solo permitir modificar matches ya 'complete'
+    modificables = []
+    for m in matches_data:
+        mm = m["match"]
+        r = mm["round"]
+        if mm["state"] == "complete" and (r == winners_actual or r == losers_actual):
+            modificables.append(mm)
+
+    if not modificables:
+        await author.send("⚠️ No hay resultados **de la ronda en juego** que puedan modificarse.")
+        return
+
+    # 5) Listar opciones
+    descripcion = ""
+    opciones = []
+    for i, mm in enumerate(modificables, start=1):
+        p1_id, p2_id = mm["player1_id"], mm["player2_id"]
+        _, n1 = id_to_member.get(p1_id, (None, f"Player {p1_id}"))
+        _, n2 = id_to_member.get(p2_id, (None, f"Player {p2_id}"))
+        score = mm.get("scores_csv") or "?"
+        descripcion += f"{i}️⃣ {n1} vs {n2} → {score} (Ronda {mm['round']})\n"
+        opciones.append(mm)
+
+    embed = discord.Embed(
+        title="🔧 Resultados modificables (ronda en juego)",
+        description=descripcion[:4000],  # por si se hace largo
+        color=discord.Color.orange()
+    )
+    try:
+        await author.send(embed=embed)
+        await author.send("👉 Escribe el **número** del emparejamiento a modificar:")
+        msg_sel = await ctx.bot.wait_for("message", check=dm_check, timeout=120.0)
+        idx = int(msg_sel.content.strip()) - 1
+        if idx < 0 or idx >= len(opciones):
+            await author.send("❌ Número inválido. Cancelado.")
+            return
+    except asyncio.TimeoutError:
+        await author.send("⏰ Tiempo agotado. No se modificó ningún resultado.")
+        return
+    except ValueError:
+        await author.send("❌ Debes escribir un número válido.")
+        return
+
+    match = opciones[idx]
+    match_id = match["id"]
+    p1_id, p2_id = match["player1_id"], match["player2_id"]
+    m1, n1 = id_to_member.get(p1_id, (None, f"Player {p1_id}"))
+    m2, n2 = id_to_member.get(p2_id, (None, f"Player {p2_id}"))
+
+    # 6) Permisos: autor debe ser uno de los jugadores o moderador
+    if author != m1 and author != m2:
+        es_mod = await moderador_permisos_handle(ctx)
+        if not es_mod:
+            await author.send("❌ Solo los jugadores del match o un moderador pueden modificar el resultado.")
+            return
+
+    # 7) Pedir nuevo resultado X-Y
+    try:
+        await author.send(f"📊 Nuevo resultado para **{n1} vs {n2}** (formato `X-Y`):")
+        msg_res = await ctx.bot.wait_for("message", check=dm_check, timeout=120.0)
+        partes = msg_res.content.strip().split("-")
+        if len(partes) != 2 or not all(p.isdigit() for p in partes):
+            await author.send("❌ Formato inválido. Usa `X-Y` con números.")
+            return
+        puntos_j1, puntos_j2 = map(int, partes)
+    except asyncio.TimeoutError:
+        await author.send("⏰ Tiempo agotado. No se modificó el resultado.")
+        return
+
+    # 8) Confirmación
+    try:
+        await author.send(f"🔒 Confirma cambiar a **{puntos_j1}-{puntos_j2}** (sí/no):")
+        msg_ok = await ctx.bot.wait_for("message", check=dm_check, timeout=60.0)
+        if msg_ok.content.lower() not in ("si", "sí", "yes", "y"):
+            await author.send("❌ Modificación cancelada.")
+            return
+    except asyncio.TimeoutError:
+        await author.send("⏰ Tiempo agotado. No se modificó el resultado.")
+        return
+
+    # 9) Payload v1 (orden ya es player1 vs player2 del match)
+    scores_csv = f"{puntos_j1}-{puntos_j2}"
+    if puntos_j1 == puntos_j2:
+        payload = {"match": {"scores_csv": scores_csv, "winner_id": "tie"}}
+    else:
+        winner_id = p1_id if puntos_j1 > puntos_j2 else p2_id
+        payload = {"match": {"scores_csv": scores_csv, "winner_id": winner_id}}
+
+    # 10) PUT v1 para actualizar
+    async with aiohttp.ClientSession() as session:
+        url_put = f"https://api.challonge.com/v1/tournaments/{codigo_torneo}/matches/{match_id}.json"
+        async with session.put(url_put, json=payload, auth=aiohttp.BasicAuth(config.CHALLONGE_USERNAME, config.CHALLONGE_API_KEY)) as put_resp:
+            if put_resp.status not in (200, 202):
+                err_txt = await put_resp.text()
+                await author.send(f"❌ Error al modificar el resultado en Challonge: {err_txt}")
+                return
+
+    # 11) Notificaciones
+    await author.send(f"✅ Resultado actualizado: **{n1} vs {n2} → {scores_csv}**")
+
+    canal_resultados = discord.utils.get(ctx.guild.text_channels, name="resultados")
+    if canal_resultados:
+        await canal_resultados.send(f"🔄 Resultado modificado en `{codigo_torneo}`: **{n1} vs {n2} → {scores_csv}**")
+
+    # Intentar DM a los jugadores (si pudimos mapearlos)
+    for miembro in (m1, m2):
+        if not miembro:
+            continue
+        try:
+            await miembro.send(
+                f"🔄 Se ha **modificado** el resultado en `{codigo_torneo}`:\n"
+                f"🆚 {n1} vs {n2}\n"
+                f"📊 Nuevo resultado: {scores_csv}"
+            )
+        except discord.Forbidden:
+            pass
+
+    # 12) Actualizar panel de pendientes / estado
+    try:
+        await partidos_pendientes_handle(ctx, codigo_torneo, 'user')
+    except Exception:
+        pass
 
 async def inscribirse_sorteo_handle(ctx, codigo: str):
     await borrar_mensaje_seguro(ctx)
@@ -884,121 +1236,533 @@ async def mis_comandos_handle(ctx):
     except discord.Forbidden:
         await ctx.send("❌ No puedo enviarte un mensaje privado. Revisa tus ajustes de privacidad.")
 
-async def submitted_deck_handle(ctx, codigo_torneo: str = None):
-    """Comando para subir un deck a un torneo específico."""
-    await borrar_mensaje_seguro(ctx)
-
-    if not await validar_canal_correcto(ctx, "preguntale-a-el-barbas", "!subir-deck"):
-        return
-
-    author = ctx.author
-
-    def dm_check(m):
-        return m.author == author and isinstance(m.channel, discord.DMChannel)
-
-    try:
-        # 1️⃣ Pedir código del torneo si no se proporcionó
-        if not codigo_torneo:
-            await author.send("📩 Por favor, dime el **código del torneo** al que quieres subir tu deck.")
-            respuesta = await ctx.bot.wait_for("message", check=dm_check, timeout=60.0)
-            codigo_torneo = respuesta.content.strip()
-            if not codigo_torneo:
-                await author.send("❌ El código no puede estar vacío. Cancelando subida de deck.")
-                return
-        # 🔹 Verificar que el usuario está inscrito en el torneo
-        async with aiohttp.ClientSession() as session:
-            url_get = f"https://api.challonge.com/v1/tournaments/{codigo_torneo}/participants.json"
-            async with session.get(url_get, auth=aiohttp.BasicAuth(config.CHALLONGE_USERNAME, config.CHALLONGE_API_KEY)) as resp:
-                if resp.status != 200:
-                    error_text = await resp.text()
-                    await author.send(f"❌ No se pudo comprobar tu inscripción: {error_text}")
-                    return
-                participantes = await resp.json()
-                inscrito = False
-                for participante in participantes:
-                    p = participante.get("participant", {})
-                    if p.get("name") == str(author.id):
-                        inscrito = True
-                        break
-                if not inscrito:
-                    await author.send(f"❌ No estás inscrito en el torneo `{codigo_torneo}`. No puedes subir un deck.")
-                    return
-
-        # 2️⃣ Nombre del deck
-        await author.send("1️⃣ Nombre de tu deck:")
-        nombre_msg = await ctx.bot.wait_for("message", check=dm_check, timeout=120.0)
-        nombre_deck = nombre_msg.content.strip()
-
-        # 3️⃣ Archetype
-        await author.send("2️⃣ ¿Cuál es el **archetype** de tu deck?")
-        archetype_msg = await ctx.bot.wait_for("message", check=dm_check, timeout=120.0)
-        archetype = archetype_msg.content.strip()
-
-        # 4️⃣ Decklist
-        await author.send("3️⃣ Sube tu **decklist** Solo el Main (puedes copiarla aquí):")
-        decklist_msg = await ctx.bot.wait_for("message", check=dm_check, timeout=600.0)
-        decklist_raw = decklist_msg.content.strip()
-        total_cartas = contar_cartas(decklist_raw)
-
-        if total_cartas < 60:
-            await author.send(f"❌ Tu deck tiene {total_cartas} cartas. Debe tener al menos 60 cartas. Cancelando subida.")
-            return
-
-        decklist = decklist_raw  # Guardamos original para el embed
-
-        # 5️⃣ Sideboard
-        await author.send("4️⃣ Sube tu **sideboard** (si no tienes, responde 'N/A'):")
-        sideboard_msg = await ctx.bot.wait_for("message", check=dm_check, timeout=300.0)
-        sideboard_raw = sideboard_msg.content.strip()
-        if not sideboard_raw or sideboard_raw.lower() == "n/a":
-            sideboard = "N/A"
-        else:
-            total_sideboard = contar_cartas(sideboard_raw)
-            if total_sideboard > 15:
-                await author.send(f"❌ Tu sideboard tiene {total_sideboard} cartas. El máximo permitido es 15. Cancelando subida.")
-                return
-            sideboard = sideboard_raw  # Guardamos original para el embed
-
-        # Generar código único del deck: torneo + ID de usuario
-        codigo_deck = f"{codigo_torneo}_{author.id}"
-
-        # Buscar canal submitted-decks
-        canal_submitted = discord.utils.get(ctx.guild.text_channels, name="submitted-decks")
-        if not canal_submitted:
-            await author.send("⚠️ No encontré el canal `submitted-decks` para publicar tu deck.")
-            return
-
-        # Crear embed con la información
-        embed = discord.Embed(
-            title=f"🃏 Deck Subido: {nombre_deck}",
-            description=f"**Código:** `{codigo_deck}`\n**Torneo:** `{codigo_torneo}`",
-            color=discord.Color.purple()
-        )
-        embed.add_field(name="Jugador", value=f"{author} (ID: {author.id})", inline=False)
-        embed.add_field(name="Archetype", value=archetype, inline=False)
-        embed.add_field(name="Decklist", value=decklist[:1000], inline=False)  # Truncar si es muy largo
-        embed.add_field(name="Sideboard", value=sideboard[:1000], inline=False)
-        embed.set_footer(text="Deck subido correctamente.")
-
-        await canal_submitted.send(embed=embed)
-        await author.send(f"✅ Tu deck ha sido enviado con éxito al torneo `{codigo_torneo}` con código `{codigo_deck}`.")
-
-    except asyncio.TimeoutError:
-        await author.send("⏰ Tiempo agotado. Vuelve a intentarlo con `!subir-deck <codigo_torneo>`.")
-    except discord.Forbidden:
-        await ctx.send("❌ No puedo enviarte mensajes privados. Activa los DMs para continuar.")
-
-def contar_cartas(lista_raw: str) -> int:
-    total = 0
+def limpiar_deck_raw(lista_raw: str) -> str:
+    """Devuelve solo las líneas que empiezan con un número, eliminando encabezados y líneas vacías."""
+    lineas_validas = []
     for linea in lista_raw.splitlines():
         linea = linea.strip()
-        if not linea or linea.lower() in ("deck", "sideboard"):
+        if not linea:
             continue
+        if linea[0].isdigit():
+            lineas_validas.append(linea)
+    return "\n".join(lineas_validas)
+
+def contar_cartas(lista_raw: str) -> int:
+    """Cuenta el total de cartas en un deck limpio."""
+    total = 0
+    lista_limpia = limpiar_deck_raw(lista_raw)
+    for linea in lista_limpia.splitlines():
         partes = linea.split(" ", 1)
-        if len(partes) < 2:
-            continue
         try:
             total += int(partes[0].replace("x", ""))
         except ValueError:
             continue
     return total
+
+async def obtener_deck_en_canal(guild: discord.Guild, codigo_deck: str):
+    """
+    Busca en el canal 'submitted-decks' un deck con el código dado.
+    Retorna un dict con 'mensaje', 'nombre_deck', 'archetype', 'decklist', 'sideboard', o None si no existe.
+    """
+    canal_submitted = discord.utils.get(guild.text_channels, name="submitted-decks")
+    if not canal_submitted:
+        return None
+
+    async for mensaje in canal_submitted.history(limit=500):
+        for embed in mensaje.embeds:
+            if embed.description and codigo_deck in embed.description:
+                campos = {field.name.lower(): field.value for field in embed.fields}
+                nombre_deck_extraido = embed.title.replace("🃏 Deck Subido: ", "").replace("🃏 Deck Actualizado: ", "")
+                return {
+                    "mensaje": mensaje,
+                    "nombre_deck": nombre_deck_extraido,
+                    "archetype": campos.get("archetype", ""),
+                    "decklist": campos.get("decklist", ""),
+                    "sideboard": campos.get("sideboard", "N/A")
+                }
+    return None
+
+async def deck_dm_flow(ctx, author: discord.Member, codigo_torneo: str, modo: str = "subir"):
+    """
+    Flujo de DM para subir o editar un deck.
+    Retorna: nombre_deck, archetype, decklist, sideboard, mensaje_deck (solo en edición)
+    """
+    def dm_check(m):
+        return m.author == author and isinstance(m.channel, discord.DMChannel)
+
+    await author.send(f"📝 Vamos a {'subir tu deck' if modo=='subir' else 'editar tu deck'}.")
+
+    if modo == "subir":
+        # ---- Pedir todos los datos ----
+        try:
+            await author.send("1️⃣ Nombre de tu deck:")
+            nombre_deck = (await ctx.bot.wait_for("message", check=dm_check, timeout=120.0)).content.strip()
+
+            await author.send("2️⃣ ¿Cuál es el **archetype** de tu deck?")
+            archetype = (await ctx.bot.wait_for("message", check=dm_check, timeout=120.0)).content.strip()
+
+            await author.send("3️⃣ Sube tu **decklist** Solo el Main (mínimo 60 cartas):")
+            decklist_raw = (await ctx.bot.wait_for("message", check=dm_check, timeout=600.0)).content.strip()
+            decklist = limpiar_deck_raw(decklist_raw)
+            if contar_cartas(decklist) < 60:
+                await author.send("❌ Tu deck tiene menos de 60 cartas. Cancelando.")
+                return None
+
+            await author.send("4️⃣ Sube tu **sideboard** (máx 15 cartas, o 'N/A'):")
+            sideboard_raw = (await ctx.bot.wait_for("message", check=dm_check, timeout=300.0)).content.strip()
+            sideboard = "N/A" if sideboard_raw.lower() == "n/a" else limpiar_deck_raw(sideboard_raw)
+
+            mensaje_deck = None
+        except asyncio.TimeoutError:
+            await author.send("⌛ Se acabó el tiempo. El proceso fue cancelado.")
+            return None
+
+    else:  # modo "editar"
+        codigo_deck = f"{codigo_torneo}_{author.id}"
+        deck_actual = await obtener_deck_en_canal(ctx.guild, codigo_deck)
+        if not deck_actual:
+            await author.send("❌ No se encontró tu deck en `submitted-decks`. Debes subirlo primero.")
+            return None
+
+        # Inicializar datos del deck
+        nombre_deck = deck_actual["nombre_deck"]
+        archetype = deck_actual["archetype"]
+        decklist = deck_actual["decklist"]
+        sideboard = deck_actual["sideboard"]
+        mensaje_deck = deck_actual["mensaje"]
+
+        # ---- Bucle de edición ----
+        while True:
+            dm_embed = discord.Embed(
+                title=f"🃏 Deck actual: {nombre_deck}",
+                description=f"**Código del deck:** `{codigo_deck}`\n**Torneo:** `{codigo_torneo}`",
+                color=discord.Color.orange()
+            )
+            dm_embed.add_field(name="Jugador", value=f"{author} (ID: {author.id})", inline=False)
+            dm_embed.add_field(name="Archetype", value=archetype, inline=False)
+            dm_embed.add_field(name="Decklist", value=decklist[:1000], inline=False)
+            dm_embed.add_field(name="Sideboard", value=sideboard[:1000], inline=False)
+            dm_embed.set_footer(text="Este es un registro privado de tu deck.")
+            await author.send(embed=dm_embed)
+
+            await author.send(
+                "✏️ ¿Qué deseas editar?\n"
+                "1️⃣ Nombre del deck\n2️⃣ Archetype\n3️⃣ Decklist\n4️⃣ Sideboard\n"
+                "Escribe el número correspondiente o `ok` si está todo correcto."
+            )
+
+            try:
+                respuesta = await ctx.bot.wait_for("message", check=dm_check, timeout=300.0)
+            except asyncio.TimeoutError:
+                await author.send("⏰ No respondiste a tiempo. Se mantiene tu deck sin cambios.")
+                break
+
+            contenido = respuesta.content.strip().lower()
+            if contenido in ["ok", "sí", "si", "confirmar"]:
+                break
+
+            elif contenido == "1":
+                await author.send("Escribe el nuevo **nombre del deck**:")
+                try:
+                    msg = await ctx.bot.wait_for("message", check=dm_check, timeout=120.0)
+                    nombre_deck = msg.content.strip()
+                except asyncio.TimeoutError:
+                    await author.send("⏰ Tiempo agotado. No se actualizó el nombre.")
+
+            elif contenido == "2":
+                await author.send("Escribe el nuevo **archetype**:")
+                try:
+                    msg = await ctx.bot.wait_for("message", check=dm_check, timeout=120.0)
+                    archetype = msg.content.strip()
+                except asyncio.TimeoutError:
+                    await author.send("⏰ Tiempo agotado. No se actualizó el archetype.")
+
+            elif contenido == "3":
+                await author.send("Sube la nueva **decklist** (Main, mínimo 60 cartas):")
+                try:
+                    msg = await ctx.bot.wait_for("message", check=dm_check, timeout=600.0)
+                    decklist_raw = msg.content.strip()
+                    decklist_limpia = limpiar_deck_raw(decklist_raw)
+                    if contar_cartas(decklist_limpia) >= 60:
+                        decklist = decklist_limpia
+                    else:
+                        await author.send("❌ La decklist debe tener al menos 60 cartas. No se actualizó.")
+                except asyncio.TimeoutError:
+                    await author.send("⏰ Tiempo agotado. No se actualizó la decklist.")
+
+            elif contenido == "4":
+                await author.send("Sube la nueva **sideboard** (máx 15 cartas, o 'N/A'):")
+                try:
+                    msg = await ctx.bot.wait_for("message", check=dm_check, timeout=300.0)
+                    sideboard_raw = msg.content.strip()
+                    if sideboard_raw.lower() == "n/a":
+                        sideboard = "N/A"
+                    else:
+                        sideboard_limpia = limpiar_deck_raw(sideboard_raw)
+                        if contar_cartas(sideboard_limpia) <= 15:
+                            sideboard = sideboard_limpia
+                        else:
+                            await author.send("❌ La sideboard no puede superar 15 cartas. No se actualizó.")
+                except asyncio.TimeoutError:
+                    await author.send("⏰ Tiempo agotado. No se actualizó la sideboard.")
+                    
+
+        return nombre_deck, archetype, decklist, sideboard, mensaje_deck
+
+
+async def submitted_deck_handle(ctx, codigo_torneo: str = None):
+    await borrar_mensaje_seguro(ctx)
+    author = ctx.author
+    if ctx.guild is None:
+        await author.send("❌ Este comando debe ejecutarse desde el servidor del torneo.")
+        return
+
+    def dm_check(m): return m.author == author and isinstance(m.channel, discord.DMChannel)
+
+    # ✅ Pedir código del torneo si no se proporcionó
+    if not codigo_torneo:
+        await author.send("📩 Por favor, dime el **código del torneo** cuyo deck deseas subir.")
+        try:
+            respuesta = await ctx.bot.wait_for("message", check=dm_check, timeout=60.0)
+            codigo_torneo = respuesta.content.strip()
+            if not codigo_torneo:
+                await author.send("❌ El código no puede estar vacío. Cancelando subida de deck.")
+                return
+        except asyncio.TimeoutError:
+            await author.send("⏰ Tiempo agotado. Intenta de nuevo con `!subir-deck <codigo_torneo>`.")
+            return
+
+    # ✅ Comprobar si el torneo permite subir decks
+    ok, error = await validar_torneo_para_edicion(codigo_torneo, author)
+    if not ok:
+        await author.send(error)
+        return
+
+    # ✅ Comprobar si ya hay un deck subido
+    codigo_deck = f"{codigo_torneo}_{author.id}"
+    deck_existente = await obtener_deck_en_canal(ctx.guild, codigo_deck)
+    if deck_existente:
+        await author.send(f"❌ Ya tienes un deck subido para este torneo. Usa `!editar-deck {codigo_torneo}` si deseas modificarlo.")
+        return
+
+    # Preguntar si quiere importar desde tcdecks
+    await author.send(
+        "📥 Elige cómo quieres subir tu deck:\n"
+        "1️⃣ tcdecks.net\n"
+        "2️⃣ mtgdecks.net\n"
+        "3️⃣ Manual"
+    )
+    try:
+        respuesta = await ctx.bot.wait_for("message", check=dm_check, timeout=60.0)
+        opcion = respuesta.content.strip()
+    except asyncio.TimeoutError:
+        await author.send("⏰ Tiempo agotado. Vuelve a intentarlo.")
+        return
+
+    decklist = ""
+    sideboard = ""
+    nombre_deck = "Deck importado"
+    archetype = "Desconocido"
+
+    if opcion == "1":
+        # Leer deck desde TCDecks
+        nombre_deck, archetype, decklist, sideboard = await leer_deck_tc_decks(ctx)
+        if decklist is None:
+            await author.send("❌ Error al leer el deck desde tcdecks.net. Intenta subirlo manualmente.")
+            return
+    elif opcion == "2":
+        # Leer deck desde MTGDecks
+        nombre_deck, archetype, decklist, sideboard = await leer_deck_mtgdecks(ctx)
+        if decklist is None:
+            await author.send("❌ Error al leer el deck desde mtgdecks.net. Intenta subirlo manualmente.")
+            return
+    elif opcion == "3":
+            datos = await deck_dm_flow(ctx, author, codigo_torneo, modo="subir")
+            if not datos:
+                return
+            nombre_deck, archetype, decklist_input, sideboard_input, _ = datos
+            decklist = decklist_input
+            sideboard = sideboard_input
+
+    # ✅ Publicar embed en submitted-decks
+    canal_submitted = discord.utils.get(ctx.guild.text_channels, name="submitted-decks")
+    if canal_submitted:
+        embed_final = discord.Embed(
+            title=f"🃏 Deck Subido: {nombre_deck}",
+            description=f"**Código:** `{codigo_deck}`\n**Torneo:** `{codigo_torneo}`",
+            color=discord.Color.purple()
+        )
+        embed_final.add_field(name="Jugador", value=f"{author} (ID: {author.id})", inline=False)
+        embed_final.add_field(name="Archetype", value=archetype, inline=False)
+        embed_final.add_field(name="Decklist", value=decklist[:1000], inline=False)
+        embed_final.add_field(name="Sideboard", value=sideboard[:1000], inline=False)
+        embed_final.set_footer(text="Deck subido correctamente.")
+        await canal_submitted.send(embed=embed_final)
+        await author.send(f"✅ Tu deck ha sido enviado con éxito al torneo `{codigo_torneo}`.")
+        await author.send(embed=embed_final)
+
+
+async def editar_deck_handle(ctx, codigo_torneo: str = None):
+    await borrar_mensaje_seguro(ctx)
+    author = ctx.author
+    def dm_check(m): return m.author == author and isinstance(m.channel, discord.DMChannel)
+
+    # Pedir código del torneo si no se proporcionó
+    if not codigo_torneo:
+        await author.send("📩 Por favor, dime el **código del torneo** cuyo deck deseas editar.")
+        try:
+            respuesta = await ctx.bot.wait_for("message", check=dm_check, timeout=60.0)
+            codigo_torneo = respuesta.content.strip()
+            if not codigo_torneo:
+                await author.send("❌ El código no puede estar vacío. Cancelando edición de deck.")
+                return
+        except asyncio.TimeoutError:
+            await author.send("⏰ Tiempo agotado. Intenta de nuevo con `!editar-deck <codigo_torneo>`.")
+            return
+
+    ok, error = await validar_torneo_para_edicion(codigo_torneo, author)
+    if not ok:
+        await author.send(error)
+        return
+
+    datos = await deck_dm_flow(ctx, author, codigo_torneo, modo="editar")
+    if not datos:
+        return
+    nombre_deck, archetype, decklist, sideboard, mensaje_deck = datos
+
+    # Publicar embed actualizado (edita el mensaje si existe)
+    codigo_deck = f"{codigo_torneo}_{author.id}"
+    embed_final = discord.Embed(
+        title=f"🃏 Deck Actualizado: {nombre_deck}",
+        description=f"**Código:** `{codigo_deck}`\n**Torneo:** `{codigo_torneo}`",
+        color=discord.Color.blue()
+    )
+    embed_final.add_field(name="Jugador", value=f"{author} (ID: {author.id})", inline=False)
+    embed_final.add_field(name="Archetype", value=archetype, inline=False)
+    embed_final.add_field(name="Decklist", value=decklist[:1000], inline=False)
+    embed_final.add_field(name="Sideboard", value=sideboard[:1000], inline=False)
+    embed_final.set_footer(text="Deck editado correctamente.")
+
+    if mensaje_deck:
+        await mensaje_deck.edit(embed=embed_final)
+    else:
+        canal_submitted = discord.utils.get(ctx.guild.text_channels, name="submitted-decks")
+        if canal_submitted:
+            await canal_submitted.send(embed=embed_final)
+
+    await author.send("✅ Tu deck ha sido actualizado correctamente.")
+    await author.send(embed=embed_final)
+
+async def validar_torneo_para_edicion(codigo_torneo: str, author: discord.Member):
+    async with aiohttp.ClientSession() as session:
+        # Verificar inscripción
+        url_get = f"https://api.challonge.com/v1/tournaments/{codigo_torneo}/participants.json"
+        async with session.get(url_get, auth=aiohttp.BasicAuth(config.CHALLONGE_USERNAME, config.CHALLONGE_API_KEY)) as resp:
+            if resp.status != 200:
+                return False, f"❌ No se pudo comprobar tu inscripción: {await resp.text()}"
+            participantes = await resp.json()
+            inscrito = any(p["participant"]["name"] == str(author.id) for p in participantes)
+            if not inscrito:
+                return False, f"❌ No estás inscrito en el torneo `{codigo_torneo}`."
+
+        # Verificar fecha de inicio
+        url_torneo = f"https://api.challonge.com/v1/tournaments/{codigo_torneo}.json"
+        async with session.get(url_torneo, auth=aiohttp.BasicAuth(config.CHALLONGE_USERNAME, config.CHALLONGE_API_KEY)) as resp:
+            if resp.status != 200:
+                return False, "❌ No se pudo obtener la información del torneo."
+            torneo_data = await resp.json()
+            fecha_inicio = torneo_data["tournament"].get("start_at")
+            if fecha_inicio:
+                from datetime import datetime, timezone
+                fecha_inicio_dt = datetime.fromisoformat(fecha_inicio.replace("Z", "+00:00"))
+                ahora = datetime.now(timezone.utc)
+                if ahora >= fecha_inicio_dt:
+                    return False, "❌ El torneo ya ha comenzado. No puedes editar tu deck."
+
+    return True, None
+
+async def leer_deck_tc_decks(ctx):
+    author = ctx.author
+   
+    def dm_check(m): 
+        return m.author == author and isinstance(m.channel, discord.DMChannel)
+
+    # Pedir URL del deck
+    await author.send("🔗 Por favor envíame la URL del deck (tcdecks.net):")
+    try:
+        respuesta = await ctx.bot.wait_for("message", check=dm_check, timeout=120)
+        url = respuesta.content.strip()
+    except asyncio.TimeoutError:
+        await author.send("⏰ Tiempo agotado. Vuelve a intentarlo.")
+        return None, None, None, None
+
+    # Extraer iddeck automáticamente
+    try:
+        parsed_url = urlparse(url)
+        query_params = parse_qs(parsed_url.query)
+        iddeck = query_params.get("iddeck", [None])[0]
+        if not iddeck:
+            await author.send("❌ No se pudo encontrar el parámetro `iddeck` en la URL.")
+            return None, None, None, None
+    except Exception as e:
+        await author.send(f"❌ Error al procesar la URL: {e}")
+        return None, None, None, None
+
+    # Pedir nombre del deck
+    await author.send("✏️ Por favor ingresa el **nombre de tu deck**:")
+    try:
+        respuesta = await ctx.bot.wait_for("message", check=dm_check, timeout=60.0)
+        nombre_deck = respuesta.content.strip() or "Deck importado"
+    except asyncio.TimeoutError:
+        await author.send("⏰ Tiempo agotado. Usando nombre por defecto: Deck importado")
+        nombre_deck = "Deck importado"
+
+    # Pedir arquetipo
+    await author.send("🧩 Por favor ingresa el **arquetipo de tu deck**:")
+    try:
+        respuesta = await ctx.bot.wait_for("message", check=dm_check, timeout=60.0)
+        archetype = respuesta.content.strip() or "Desconocido"
+    except asyncio.TimeoutError:
+        await author.send("⏰ Tiempo agotado. Usando arquetipo por defecto: Desconocido")
+        archetype = "Desconocido"
+
+    # Llamada a tcdecks
+    print_url = f"https://www.tcdecks.net/print.php?iddeck={iddeck}"
+    
+
+    async with aiohttp.ClientSession(headers=config.headers) as session:
+        async with session.get(print_url) as resp:
+            if resp.status != 200:
+                await author.send(f"❌ No se pudo acceder a la URL proporcionada. Código HTTP: {resp.status}")
+                return nombre_deck, archetype, None, None
+            html = await resp.text()
+
+    soup = BeautifulSoup(html, "html.parser")
+
+    def limpiar_texto(td):
+        texto = td.get_text(separator="\n", strip=True)
+        lineas = [line for line in texto.split("\n") if line and not re.search(r'Number|Card Name', line)]
+        lineas = [re.sub(r'\xa0', ' ', line) for line in lineas]
+        return "\n".join(lineas)
+
+    # Inicializar valores
+    decklist = "No se pudo obtener la decklist."
+    sideboard = "No hay sideboard."
+
+    # Buscar h3 para Main Deck y Sideboard
+    for h3 in soup.find_all("h3"):
+        if "Main Deck" in h3.text:
+            tabla = h3.find_next("table")
+            if tabla:
+                td = tabla.find("td")
+                if td:
+                    decklist = limpiar_texto(td)
+        elif "Sideboard" in h3.text:
+            tabla = h3.find_next("table")
+            if tabla:
+                td = tabla.find("td")
+                if td:
+                    sideboard = limpiar_texto(td)
+
+    return nombre_deck, archetype, decklist, sideboard
+
+async def leer_deck_mtgdecks(ctx):
+    author = ctx.author
+
+    def dm_check(m):
+        return m.author == author and isinstance(m.channel, discord.DMChannel)
+
+    await author.send("🔗 Por favor envíame la URL de tu deck de mtgdecks.net:")
+
+    try:
+        respuesta = await ctx.bot.wait_for("message", check=dm_check, timeout=120.0)
+        url = respuesta.content.strip()
+    except asyncio.TimeoutError:
+        await author.send("⏰ Tiempo agotado. Vuelve a intentarlo.")
+        return
+
+    # Leer decklist y sideboard
+    try:
+        deck_data = await extract_deck_from_mtgdecks(url)
+        decklist = deck_data["decklist"]
+        sideboard = deck_data["sideboard"]
+    except Exception as e:
+        await author.send(f"❌ Error al leer el deck: {e}")
+        return
+
+    # Pedir nombre del deck
+    await author.send("✏️ Por favor ingresa el nombre de tu deck:")
+    try:
+        nombre_deck_msg = await ctx.bot.wait_for("message", check=dm_check, timeout=60.0)
+        nombre_deck = nombre_deck_msg.content.strip() or "Deck importado"
+    except asyncio.TimeoutError:
+        nombre_deck = "Deck importado"
+        await author.send("⏰ Tiempo agotado. Usando nombre por defecto: Deck importado")
+
+    # Pedir arquetipo
+    await author.send("🧩 Por favor ingresa el arquetipo de tu deck:")
+    try:
+        archetype_msg = await ctx.bot.wait_for("message", check=dm_check, timeout=60.0)
+        archetype = archetype_msg.content.strip() or "Desconocido"
+    except asyncio.TimeoutError:
+        archetype = "Desconocido"
+        await author.send("⏰ Tiempo agotado. Usando arquetipo por defecto: Desconocido")
+
+    return nombre_deck, archetype, decklist, sideboard
+
+async def extract_deck_from_mtgdecks(url: str):
+    """
+    Lee un deck desde mtgdecks.net y devuelve decklist y sideboard.
+    """
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+
+    async with aiohttp.ClientSession(headers=headers) as session:
+        async with session.get(url) as resp:
+            if resp.status != 200:
+                raise ValueError(f"No se pudo acceder a la URL. Código HTTP: {resp.status}")
+            html = await resp.text()
+
+    soup = BeautifulSoup(html, "html.parser")
+
+    # El primer div.col-sm-6 contiene el deck principal
+    main_div = soup.select_one(".cards .row .col-sm-6:first-child")
+    if not main_div:
+        raise ValueError("No se encontró el deck en la página.")
+
+    def parse_table(tabla):
+        """
+        Extrae las cartas de una tabla (<table>) y devuelve lista tipo '3 Grim Lavamancer'
+        """
+        cartas = []
+        for tr in tabla.find_all("tr", class_="cardItem"):
+            num = tr.find("td", class_="number")
+            if not num:
+                continue
+            # La cantidad de cartas (el primer número dentro del td)
+            cantidad_match = re.search(r'\d+', num.get_text())
+            cantidad = int(cantidad_match.group()) if cantidad_match else 1
+
+            # Nombre de la carta
+            a_tag = num.find("a")
+            nombre = a_tag.text.strip() if a_tag else "Desconocido"
+            cartas.append(f"{cantidad} {nombre}")
+        return cartas
+
+    decklist = []
+    sideboard = []
+
+    # Cada tabla dentro del div principal
+    for tabla in main_div.find_all("table"):
+        decklist.extend(parse_table(tabla))
+
+    # En mtgdecks.net el sideboard suele estar en otro div o sección
+    # Si quieres, podemos intentar capturarlo buscando un div con clase 'sideboard'
+    side_div = soup.select_one(".cards .row .col-sm-6:last-child")
+    if side_div:
+        for tabla in side_div.find_all("table"):
+            sideboard.extend(parse_table(tabla))
+
+    return {
+        "decklist": "\n".join(decklist),
+        "sideboard": "\n".join(sideboard) if sideboard else "N/A"
+    }

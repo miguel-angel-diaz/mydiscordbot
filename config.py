@@ -147,3 +147,6 @@ BLACKLIST_USERS = [
     336174154984325120,
     691061830818332733
 ]
+headers = {
+   "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
+}

@@ -1,5 +1,5 @@
 from discord.ext import tasks, commands
-from datetime import datetime
+from datetime import datetime, timedelta
 import discord
 import re
 import asyncio
@@ -13,42 +13,43 @@ ultima_ejecucion_torneos = None
 ultima_ejecucion = None
 
 def cargar_tareas(bot):
-    publicar_eventos_diarios.start(bot)
+    publicar_eventos_semanales.start(bot)
     limpiar_partidos_pasados.start(bot)
 
 
 @tasks.loop(minutes=1)
-async def publicar_eventos_diarios(bot):
+async def publicar_eventos_semanales(bot):
     global ultima_ejecucion_eventos
 
     ahora = datetime.now()
 
-    # Solo entre las 10:00 y 10:15
-    if not (ahora.hour == 10 and ahora.minute <= 25):
+    # Solo ejecutar una vez al día, por ejemplo a las 10:00-10:25
+    if not (ahora.hour == 12 and ahora.minute <= 35):
         return
 
     hoy = ahora.date()
 
-    # Ya se ejecutó hoy
     if ultima_ejecucion_eventos == hoy:
         return
-
-    # Marca que ya se ejecutó
     ultima_ejecucion_eventos = hoy
 
     for guild in bot.guilds:
         canal_origen = discord.utils.get(guild.text_channels, name="partidos-agendados")
-        canal_destino = discord.utils.get(guild.text_channels, name="proximas-partidas")
+        canal_proximas = discord.utils.get(guild.text_channels, name="proximas-partidas")
 
-        if not canal_origen or not canal_destino:
+        if not canal_origen or not canal_proximas:
             continue
 
-        eventos_hoy = []
+        # Calcular rango de semana
+        inicio_semana = hoy - timedelta(days=hoy.weekday())
+        fin_semana = inicio_semana + timedelta(days=6)
+
+        eventos_semana = []
         patron = re.compile(
             r"\[EVENTO\]\s+(\d{2}/\d{2}/\d{4})\s+(\d{2}:\d{2})\s+\|\s+(.+?)\s+vs\s+(.+?)\s+\|"
         )
 
-        async for mensaje in canal_origen.history(limit=100):
+        async for mensaje in canal_origen.history(limit=200):
             if not mensaje.content.startswith("📅 [EVENTO]"):
                 continue
 
@@ -58,25 +59,35 @@ async def publicar_eventos_diarios(bot):
 
             fecha_str, hora_str, jugador1, jugador2 = match.groups()
             try:
-                fecha_completa = datetime.strptime(f"{fecha_str} {hora_str}", "%d/%m/%Y %H:%M")
-            except ValueError:
+                fecha_obj = datetime.strptime(fecha_str, "%d/%m/%Y").date()
+                if inicio_semana <= fecha_obj <= fin_semana:
+                    eventos_semana.append((fecha_obj, hora_str, jugador1.strip(), jugador2.strip()))
+            except Exception:
                 continue
 
-            if fecha_completa.date() == hoy:
-                eventos_hoy.append((fecha_completa.strftime("%H:%M"), jugador1.strip(), jugador2.strip()))
+        if not eventos_semana:
+            continue  # No hay eventos esta semana
 
-        if not eventos_hoy:
-            await canal_destino.send("📭 No hay partidas programadas para hoy.")
-            continue
-
+        # Crear embed
         embed = discord.Embed(
-            title="📅 Partidas programadas para hoy",
+            title="📅 Partidas programadas esta semana",
             color=discord.Color.blue()
         )
-        for hora, jugador1, jugador2 in sorted(eventos_hoy):
-            embed.add_field(name=hora, value=f"{jugador1} vs {jugador2}", inline=False)
+        for fecha_ev, hora_ev, j1, j2 in sorted(eventos_semana):
+            embed.add_field(name=f"{fecha_ev.strftime('%d/%m/%Y')} {hora_ev}", value=f"{j1} vs {j2}", inline=False)
 
-        await canal_destino.send(embed=embed)
+        # Revisar si ya existe un mensaje de esta semana
+        mensaje_existente = None
+        async for msg in canal_proximas.history(limit=50):
+            if msg.author == guild.me and msg.embeds:
+                if msg.embeds[0].title == "📅 Partidas programadas esta semana":
+                    mensaje_existente = msg
+                    break
+
+        if mensaje_existente:
+            await mensaje_existente.edit(embed=embed)
+        else:
+            await canal_proximas.send(embed=embed)
 
 @tasks.loop(minutes=1)
 async def limpiar_partidos_pasados(bot):

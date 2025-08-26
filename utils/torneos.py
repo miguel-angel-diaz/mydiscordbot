@@ -256,13 +256,23 @@ async def iniciar_torneo_handle(ctx, codigo_torneo: str):
         except (ValueError, discord.NotFound):
             id_to_member[participant["id"]] = participant["name"]
 
-    # Preparar emparejamientos
+   # Preparar emparejamientos
     emparejamientos = []
     for match in matches_data:
         m = match.get("match", {})
-        p1 = id_to_member.get(m.get("player1_id"), "TBD")
-        p2 = id_to_member.get(m.get("player2_id"), "TBD")
-        emparejamientos.append(f"🆚 {p1} vs {p2}")
+        p1 = id_to_member.get(m.get("player1_id"))
+        p2 = id_to_member.get(m.get("player2_id"))
+
+        # Si no hay jugador asignado todavía
+        if not p1 or not p2:
+            emparejamientos.append(f"• Ronda {m.get('round')}: TBD vs TBD")
+            continue
+
+        # Mostrar "Nombre (@Mención)"
+        p1_texto = f"{p1.display_name} ({p1.mention})"
+        p2_texto = f"{p2.display_name} ({p2.mention})"
+
+        emparejamientos.append(f"• Ronda {m.get('round')}: {p1_texto} vs {p2_texto}")
 
     # Buscar canal de emparejamientos
     canal_emparejamientos = discord.utils.get(ctx.guild.text_channels, name="emparejamientos")
@@ -275,7 +285,7 @@ async def iniciar_torneo_handle(ctx, codigo_torneo: str):
         f"📢 **Emparejamientos de la primera ronda - Torneo `{codigo_torneo}`:**\n" +
         "\n".join(emparejamientos)
     )
-    # Obtener clasificación actual del torneo
+   # Obtener clasificación inicial del torneo
     url_participants = f"https://api.challonge.com/v1/tournaments/{codigo_torneo}/participants.json"
 
     async with aiohttp.ClientSession() as session:
@@ -288,19 +298,27 @@ async def iniciar_torneo_handle(ctx, codigo_torneo: str):
                     part = p.get("participant", {})
                     nombre = part.get("name", "Desconocido")
                     seed = part.get("seed")
+
+                    # Intentamos mostrar como mención si es un ID válido
                     try:
                         miembro = await ctx.guild.fetch_member(int(nombre))
-                        nombre_mostrado = f"{miembro.display_name} (<@{miembro.id}>)"
+                        nombre_mostrado = f"(@{miembro.display_name})"
                     except (ValueError, discord.NotFound):
-                        nombre_mostrado = nombre
+                        nombre_mostrado = f"(@{nombre})"
 
                     clasificacion.append((seed, nombre_mostrado))
 
                 clasificacion.sort()
 
-                mensaje_clasificacion = f"📊 **Clasificación inicial del torneo `{codigo_torneo}`:**\n"
+                # Generar tabla estilo Markdown
+                mensaje_clasificacion = f"📊 Clasificación del torneo `{codigo_torneo}`:\n\n"
+                mensaje_clasificacion += (
+                    "Rango | Participante           | G-P-E | Pts | TB%   | Buchholz | Dif\n"
+                    "------|------------------------|-------|-----|-------|----------|-----\n"
+                )
+
                 for i, (seed, nombre) in enumerate(clasificacion, 1):
-                    mensaje_clasificacion += f"{i}. {nombre}\n"
+                    mensaje_clasificacion += f"{i:<5} | {nombre:<22} | 0-0-0 | 0.0 | 0.000 | 0.00000  | +0\n"
 
                 canal_clasificaciones = discord.utils.get(ctx.guild.text_channels, name="clasificaciones-torneos")
                 if canal_clasificaciones:
@@ -346,29 +364,31 @@ async def actualizar_clasificacion_handle(ctx, codigo_torneo: str, canal_destino
         if not await moderador_permisos_handle(ctx):
             return
         
-        if codigo_torneo is None:
-            try:
-                await ctx.author.send(
-                    "📩 No escribiste el código del torneo.\n"
-                    "Por favor, respóndeme con el **código del torneo** al que quieres actualizar la clasificacion. Tienes 60 segundos."
-                )
+     # 🔹 independientemente de from_chanel, si no hay código, lo pedimos por DM
+    if codigo_torneo is None:
+        try:
+            await ctx.author.send(
+                "📩 No escribiste el código del torneo.\n"
+                "Por favor, respóndeme con el **código del torneo** al que quieres actualizar la clasificación. Tienes 60 segundos."
+            )
 
-                def dm_check(m):
-                    return m.author == ctx.author and isinstance(m.channel, discord.DMChannel)
+            def dm_check(m):
+                return m.author == ctx.author and isinstance(m.channel, discord.DMChannel)
 
-                respuesta = await ctx.bot.wait_for("message", check=dm_check, timeout=60.0)
-                codigo_torneo = respuesta.content.strip()
+            respuesta = await ctx.bot.wait_for("message", check=dm_check, timeout=60.0)
+            codigo_torneo = respuesta.content.strip()
 
-                if not codigo_torneo:
-                    await ctx.author.send("❌ El código no puede estar vacío. Cancelo la inscripción.")
-                    return
-
-            except asyncio.TimeoutError:
-                await ctx.author.send("⏰ Tiempo agotado. Intenta de nuevo con `!actualizar-clasificacion <código_torneo>`.")
+            if not codigo_torneo:
+                await ctx.author.send("❌ El código no puede estar vacío. Cancelo la inscripción.")
                 return
-            except discord.Forbidden:
-                await ctx.send("❌ No puedo enviarte mensajes privados. Activa los DMs para continuar.")
-                return
+
+        except asyncio.TimeoutError:
+            await ctx.author.send("⏰ Tiempo agotado. Intenta de nuevo con `!actualizar-clasificacion <código_torneo>`.")
+            return
+        except discord.Forbidden:
+            await ctx.send("❌ No puedo enviarte mensajes privados. Activa los DMs para continuar.")
+            return
+        
     
     url_participants = f"https://api.challonge.com/v1/tournaments/{codigo_torneo}/participants.json"
     url_matches = f"https://api.challonge.com/v1/tournaments/{codigo_torneo}/matches.json"
@@ -606,8 +626,8 @@ async def partidos_pendientes_handle(ctx, codigo_torneo: str, type: str):
                 except discord.Forbidden:
                     pass
 
-        
-        await actualizar_clasificacion_handle(ctx, codigo_torneo, canal_destino = "clasificaciones-torneos",  from_chanel = 1)
+
+    await actualizar_clasificacion_handle(ctx, codigo_torneo, canal_destino = "clasificaciones-torneos",  from_chanel = 1)
 
 async def forzar_ronda_handle(ctx, codigo_torneo: str):
     await borrar_mensaje_seguro(ctx)
