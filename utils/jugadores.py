@@ -1012,15 +1012,29 @@ async def modificar_resultado_handle(ctx, codigo_torneo: str = None):
 
     # 4) De esas rondas actuales, solo permitir modificar matches ya 'complete'
     modificables = []
+
+    # comprobar si autor es moderador/admin
+    es_mod = await moderador_permisos_handle(ctx, only_check=True)
+
     for m in matches_data:
         mm = m["match"]
         r = mm["round"]
         if mm["state"] == "complete" and (r == winners_actual or r == losers_actual):
-            modificables.append(mm)
+            p1_id = mm["player1_id"]
+            p2_id = mm["player2_id"]
+
+            # Mapeamos a los miembros de Discord desde id_to_member
+            m1, _ = id_to_member.get(p1_id, (None, f"Player {p1_id}"))
+            m2, _ = id_to_member.get(p2_id, (None, f"Player {p2_id}"))
+
+            # Condición: o es jugador del match o es moderador
+            if author == m1 or author == m2 or es_mod:
+                modificables.append(mm)
 
     if not modificables:
-        await author.send("⚠️ No hay resultados **de la ronda en juego** que puedan modificarse.")
+        await author.send("⚠️ No tienes ningún resultado modificable en esta ronda (o no eres jugador/admin).")
         return
+    
 
     # 5) Listar opciones
     descripcion = ""

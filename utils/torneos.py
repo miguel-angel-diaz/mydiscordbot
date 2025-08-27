@@ -354,161 +354,149 @@ async def iniciar_torneo_handle(ctx, codigo_torneo: str):
                     await ctx.author.send(f"⚠️ No se pudo eliminar un mensaje de `#inscripciones`: {e}")
                     break
 
-async def actualizar_clasificacion_handle(ctx, codigo_torneo: str, canal_destino: str = "clasificaciones-torneos", from_chanel: int = 0):
-    if from_chanel == 0: 
-        await borrar_mensaje_seguro(ctx)
-        if not await validar_canal_correcto(ctx, "preguntale-a-el-barbas", "!iniciar-torneo"):
-            return
-    
-        # Verificar permisos de moderador
-        if not await moderador_permisos_handle(ctx):
-            return
-        
-     # 🔹 independientemente de from_chanel, si no hay código, lo pedimos por DM
-    if codigo_torneo is None:
-        try:
-            await ctx.author.send(
-                "📩 No escribiste el código del torneo.\n"
-                "Por favor, respóndeme con el **código del torneo** al que quieres actualizar la clasificación. Tienes 60 segundos."
-            )
+async def actualizar_clasificacion_handle(ctx, codigo_torneo: str, canal_destino: str = "clasificaciones-torneos"):
+    await borrar_mensaje_seguro(ctx)
+    if not await moderador_permisos_handle(ctx):
+        return
 
-            def dm_check(m):
-                return m.author == ctx.author and isinstance(m.channel, discord.DMChannel)
+    if not codigo_torneo:
+        await ctx.author.send("❌ Necesitas enviar el código del torneo.")
+        return
 
-            respuesta = await ctx.bot.wait_for("message", check=dm_check, timeout=60.0)
-            codigo_torneo = respuesta.content.strip()
-
-            if not codigo_torneo:
-                await ctx.author.send("❌ El código no puede estar vacío. Cancelo la inscripción.")
-                return
-
-        except asyncio.TimeoutError:
-            await ctx.author.send("⏰ Tiempo agotado. Intenta de nuevo con `!actualizar-clasificacion <código_torneo>`.")
-            return
-        except discord.Forbidden:
-            await ctx.send("❌ No puedo enviarte mensajes privados. Activa los DMs para continuar.")
-            return
-        
-    
+    # 🔹 Obtener datos
     url_participants = f"https://api.challonge.com/v1/tournaments/{codigo_torneo}/participants.json"
     url_matches = f"https://api.challonge.com/v1/tournaments/{codigo_torneo}/matches.json"
 
     async with aiohttp.ClientSession() as session:
-        # Participantes
         async with session.get(url_participants, auth=aiohttp.BasicAuth(config.CHALLONGE_USERNAME, config.CHALLONGE_API_KEY)) as resp:
-            if resp.status != 200:
-                await ctx.send("❌ Error al obtener participantes.")
-                return
+            if resp.status != 200: return await ctx.send("❌ Error al obtener participantes.")
             participantes_raw = await resp.json()
 
-        # Emparejamientos
         async with session.get(url_matches, auth=aiohttp.BasicAuth(config.CHALLONGE_USERNAME, config.CHALLONGE_API_KEY)) as resp:
-            if resp.status != 200:
-                await ctx.send("❌ Error al obtener emparejamientos.")
-                return
+            if resp.status != 200: return await ctx.send("❌ Error al obtener emparejamientos.")
             matches_raw = await resp.json()
 
-    participantes_map = {}
+    # 🔹 Inicializar jugadores
+    jugadores = {}
     for p in participantes_raw:
         part = p["participant"]
-        participantes_map[part["id"]] = {
+        jugadores[part["id"]] = {
             "name": part["name"],
+            "mp": 0,
+            "games_won": 0,
+            "games_played": 0,
             "wins": 0,
             "losses": 0,
             "draws": 0,
-            "points": 0.0,
-            "diff": 0,
-            "opponents": [],
+            "opponents": []
         }
 
+    # 🔹 Procesar matches
     for m in matches_raw:
         match = m["match"]
-        if match["state"] != "complete":
-            continue
+        if match["state"] != "complete": continue
 
-        p1_id = match["player1_id"]
-        p2_id = match["player2_id"]
+        p1, p2 = match["player1_id"], match["player2_id"]
         scores = match.get("scores_csv", "")
-
         try:
             s1, s2 = map(int, scores.strip().split("-"))
-        except:
-            continue
+        except: continue
 
-        participantes_map[p1_id]["opponents"].append(p2_id)
-        participantes_map[p2_id]["opponents"].append(p1_id)
+        jugadores[p1]["opponents"].append(p2)
+        jugadores[p2]["opponents"].append(p1)
 
-        participantes_map[p1_id]["diff"] += s1 - s2
-        participantes_map[p2_id]["diff"] += s2 - s1
+        # Games
+        jugadores[p1]["games_won"] += s1
+        jugadores[p1]["games_played"] += s1 + s2
+        jugadores[p2]["games_won"] += s2
+        jugadores[p2]["games_played"] += s1 + s2
 
+        # Match Points y G-P-E
         if s1 > s2:
-            participantes_map[p1_id]["wins"] += 1
-            participantes_map[p2_id]["losses"] += 1
-            participantes_map[p1_id]["points"] += 3
+            jugadores[p1]["mp"] += 3
+            jugadores[p1]["wins"] += 1
+            jugadores[p2]["losses"] += 1
         elif s2 > s1:
-            participantes_map[p2_id]["wins"] += 1
-            participantes_map[p1_id]["losses"] += 1
-            participantes_map[p2_id]["points"] += 3
+            jugadores[p2]["mp"] += 3
+            jugadores[p2]["wins"] += 1
+            jugadores[p1]["losses"] += 1
         else:
-            participantes_map[p1_id]["draws"] += 1
-            participantes_map[p2_id]["draws"] += 1
-            participantes_map[p1_id]["points"] += 1
-            participantes_map[p2_id]["points"] += 1
+            jugadores[p1]["mp"] += 1
+            jugadores[p2]["mp"] += 1
+            jugadores[p1]["draws"] += 1
+            jugadores[p2]["draws"] += 1
 
+    # 🔹 Calcular desempates y construir clasificación
     clasificacion = []
-    for pid, datos in participantes_map.items():
-        total = datos["wins"] + datos["losses"] + datos["draws"]
-        tb = (datos["points"] / total) if total > 0 else 0
+    for pid, datos in jugadores.items():
+        # OMW%
+        omw = 0
+        for o in datos["opponents"]:
+            opp = jugadores[o]
+            total_matches = opp["games_played"] // 2
+            mp_opp = opp["mp"]
+            omw += (mp_opp / (total_matches * 3)) if total_matches else 0
+        omw = omw / len(datos["opponents"]) if datos["opponents"] else 0
 
-        buchholz_sum = 0
-        valid_opp = 0
-        for opp_id in datos["opponents"]:
-            opp = participantes_map.get(opp_id)
-            if not opp:
-                continue
-            opp_total = opp["wins"] + opp["losses"] + opp["draws"]
-            if opp_total == 0:
-                continue
-            buchholz_sum += opp["points"] / opp_total
-            valid_opp += 1
-        buchholz = buchholz_sum / valid_opp if valid_opp > 0 else 0
+        # GW%
+        gw = (datos["games_won"] / datos["games_played"]) if datos["games_played"] else 0
+
+        # OGW%
+        ogw = 0
+        for o in datos["opponents"]:
+            opp = jugadores[o]
+            ogw += (opp["games_won"] / opp["games_played"]) if opp["games_played"] else 0
+        ogw = ogw / len(datos["opponents"]) if datos["opponents"] else 0
 
         try:
             miembro = await ctx.guild.fetch_member(int(datos["name"]))
-            nombre_mostrado = f"(@{miembro.display_name})"
+            nombre = f"@{miembro.display_name}"
         except (ValueError, discord.NotFound):
-            nombre_mostrado = datos["name"]
+            nombre = datos["name"]
 
         clasificacion.append({
-            "nombre": nombre_mostrado,
-            "g": datos["wins"],
-            "p": datos["losses"],
-            "e": datos["draws"],
-            "puntos": datos["points"],
-            "tb": tb,
-            "buchholz": buchholz,
-            "diff": datos["diff"],
+            "nombre": nombre,
+            "mp": datos["mp"],
+            "omw": omw,
+            "gw": gw,
+            "ogw": ogw,
+            "wins": datos["wins"],
+            "losses": datos["losses"],
+            "draws": datos["draws"]
         })
 
-    clasificacion.sort(key=lambda x: (-x["puntos"], -x["diff"], -x["tb"], -x["buchholz"]))
+    # Ordenar por MP, OMW%, GW%, OGW%
+    clasificacion.sort(key=lambda x: (-x["mp"], -x["omw"], -x["gw"], -x["ogw"]))
 
-    # Construir tabla en Markdown
+  # Construir tabla en Markdown con tamaños fijos
     mensaje = f"📊 **Clasificación del torneo `{codigo_torneo}`:**\n"
     mensaje += "```markdown\n"
-    mensaje += "Rango | Participante           | G-P-E | Pts | TB%   | Buchholz | Dif\n"
-    mensaje += "------|------------------------|-------|-----|-------|----------|-----\n"
+    mensaje += "Rango | Participante           | G-P-E | MP  | OMW%   | GW%    | OGW%\n"
+    mensaje += "------|------------------------|-------|-----|--------|--------|-------\n"
 
     for i, p in enumerate(clasificacion, 1):
-        linea = f"{i:<5} | {p['nombre'][:22]:<22} | {p['g']}-{p['p']}-{p['e']} | {p['puntos']:.1f} | {p['tb']:.3f} | {p['buchholz']:.5f}  | {p['diff']:+}"
+        gpe = f"{p['wins']}-{p['losses']}-{p['draws']}"
+        linea = f"{i:<5} | {p['nombre'][:22]:<22} | {gpe:<5} | {p['mp']:<3} | {p['omw']:.3f}  | {p['gw']:.3f}  | {p['ogw']:.3f}"
         mensaje += linea + "\n"
 
     mensaje += "```"
+    # 🔹 Canal de destino
+    canal = discord.utils.get(ctx.guild.text_channels, name=canal_destino)
+    if not canal:
+        return await ctx.send("⚠️ No se encontró el canal de clasificaciones.")
 
-    canal_clasificaciones = discord.utils.get(ctx.guild.text_channels, name=canal_destino)
-    if canal_clasificaciones:
-        await canal_clasificaciones.send(mensaje)
+  # Revisar si ya existe un mensaje con el mismo torneo
+    mensaje_existente = None
+    async for msg in canal.history(limit=50):
+        if msg.author == ctx.guild.me and not msg.embeds:
+            if msg.content.startswith(f"📊 **Clasificación del torneo `{codigo_torneo}`:**"):
+                mensaje_existente = msg
+                break
+
+    if mensaje_existente:
+        await mensaje_existente.edit(content=mensaje)
     else:
-        await ctx.send("⚠️ No se encontró el canal `#clasificaciones-torneos`.")
+        await canal.send(mensaje)
 
 async def partidos_pendientes_handle(ctx, codigo_torneo: str, type: str):
     await borrar_mensaje_seguro(ctx)
@@ -594,8 +582,21 @@ async def partidos_pendientes_handle(ctx, codigo_torneo: str, type: str):
     for ronda, p1, p2, _, _ in pendientes:
         mensaje += f"• Ronda {ronda}: {p1} vs {p2}\n"
 
+    # Canal de emparejamientos
     canal_emparejamientos = discord.utils.get(ctx.guild.text_channels, name="emparejamientos")
     if canal_emparejamientos:
+        # Buscar mensajes existentes con el mismo torneo y eliminarlos
+        async for msg in canal_emparejamientos.history(limit=50):
+            if msg.author == ctx.guild.me and not msg.embeds:
+                if msg.content.startswith(f"📋 **Partidos pendientes del torneo `{codigo_torneo}`:**"):
+                    try:
+                        await msg.delete()
+                    except discord.Forbidden:
+                        pass  # No tenemos permisos para borrar
+                    except discord.NotFound:
+                        pass  # Mensaje ya borrado
+
+        # Enviar nuevo mensaje
         await canal_emparejamientos.send(mensaje)
     else:
         await ctx.author.send("⚠️ No se encontró el canal `#emparejamientos`.")

@@ -397,18 +397,18 @@ async def sorteo_torneo_handle(ctx, codigo_torneo: str, premio: str = "Premio de
     except discord.Forbidden:
         await ctx.send(f"⚠️ No pude enviar mensaje privado a {ganador.display_name}.")
 
-async def moderador_permisos_handle(ctx):
+async def moderador_permisos_handle(ctx, only_check: bool = False) -> bool:
     autor = ctx.author
     servidor = ctx.guild
     es_dueno = autor == servidor.owner
     rol_moderador = discord.utils.get(servidor.roles, name="admin")
     tiene_permiso = es_dueno | (rol_moderador and rol_moderador in autor.roles)
 
-    if not tiene_permiso:
+    if not tiene_permiso and not only_check:
         await asignar_strike_automatico(ctx)
         return False
 
-    return True
+    return tiene_permiso
 
 async def nuevo_sorteo_handle(ctx, *, args: str = None):
     await borrar_mensaje_seguro(ctx)
