@@ -8,7 +8,7 @@ import re
 import config
 from utils.torneos import generar_codigo_unico, partidos_pendientes_handle
 from utils.admin import moderador_permisos_handle
-from utils.commons import borrar_mensaje_seguro, validar_canal_correcto, buscar_usuario_en_servidor
+from utils.commons import borrar_mensaje_seguro, validar_canal_correcto, buscar_usuario_en_servidor, obtener_torneo_usuario
 
 import config
 
@@ -543,29 +543,14 @@ async def desinscribirse_handler(ctx, codigo_torneo: str, usuario: discord.Membe
     if not await validar_canal_correcto(ctx, "preguntale-a-el-barbas", "!desinscribirse"):
         return
     
-    if codigo_torneo is None:
-        try:
-            await ctx.author.send(
-                "📩 No escribiste el código del torneo.\n"
-                "Por favor, respóndeme con el **código del torneo** del que quieres desinscribirte. Tienes 60 segundos."
-            )
-
-            def dm_check(m):
-                return m.author == ctx.author and isinstance(m.channel, discord.DMChannel)
-
-            respuesta = await ctx.bot.wait_for("message", check=dm_check, timeout=60.0)
-            codigo_torneo = respuesta.content.strip()
-
-            if not codigo_torneo:
-                await ctx.author.send("❌ El código no puede estar vacío. Cancelo la inscripción.")
-                return
-
-        except asyncio.TimeoutError:
-            await ctx.author.send("⏰ Tiempo agotado. Intenta de nuevo con `!desinscribirse <código_torneo>`.")
-            return
-        except discord.Forbidden:
-            await ctx.send("❌ No puedo enviarte mensajes privados. Activa los DMs para continuar.")
-            return
+    if not codigo_torneo:
+        codigo_torneo = await obtener_torneo_usuario(
+            ctx,
+            mensaje_inicial="📩 No escribiste el código del torneo.\n"
+                            "Elige uno de los torneos en los que estás inscrito para desinscribirte:"
+        )
+        if not codigo_torneo:
+            return  # Si devuelve None, se cancela la operación
     
     apuntado = usuario or ctx.author
 
@@ -691,63 +676,86 @@ async def desinscribirse_handler(ctx, codigo_torneo: str, usuario: discord.Membe
                                 break
 
 async def ver_inscritos_handler(ctx, codigo_torneo: str):
-    # Eliminar mensaje original si es posible
     await borrar_mensaje_seguro(ctx)
     if not await validar_canal_correcto(ctx, "preguntale-a-el-barbas", "!ver-inscritos"):
         return
-    
-    if codigo_torneo is None:
-        try:
-            await ctx.author.send(
-                "📩 No escribiste el código del torneo.\n"
-                "Por favor, respóndeme con el **código del torneo** del torneo que quieres ver los inscritos. Tienes 60 segundos."
-            )
 
-            def dm_check(m):
-                return m.author == ctx.author and isinstance(m.channel, discord.DMChannel)
-
-            respuesta = await ctx.bot.wait_for("message", check=dm_check, timeout=60.0)
-            codigo_torneo = respuesta.content.strip()
-
-            if not codigo_torneo:
-                await ctx.author.send("❌ El código no puede estar vacío. Cancelo la inscripción.")
-                return
-
-        except asyncio.TimeoutError:
-            await ctx.author.send("⏰ Tiempo agotado. Intenta de nuevo con `!ver-inscritos <código_torneo>`.")
+    # 1️⃣ Obtener código de torneo si no se proporcionó
+    if not codigo_torneo:
+        codigo_torneo = await obtener_torneo_usuario(
+            ctx,
+            mensaje_inicial="📩 No escribiste el código del torneo.\n"
+                            "Elige uno de los torneos en los que estás inscrito para ver los jugadores:"
+        )
+        if not codigo_torneo:
             return
-        except discord.Forbidden:
-            await ctx.send("❌ No puedo enviarte mensajes privados. Activa los DMs para continuar.")
-            return
+
+    # 2️⃣ Obtener participantes del torneo
     url = f"https://api.challonge.com/v1/tournaments/{codigo_torneo}/participants.json"
-
     async with aiohttp.ClientSession() as session:
         async with session.get(url, auth=aiohttp.BasicAuth(config.CHALLONGE_USERNAME, config.CHALLONGE_API_KEY)) as resp:
             if resp.status != 200:
                 error_text = await resp.text()
                 await ctx.author.send(f"❌ Error al obtener los participantes: {error_text}")
                 return
-
             data = await resp.json()
 
     if not data:
-        await ctx.send(f"📭 No hay jugadores inscritos en el torneo `{codigo_torneo}`.")
+        await ctx.author.send(f"📭 No hay jugadores inscritos en el torneo `{codigo_torneo}`.")
         return
 
-    inscritos = []
-    for i, p in enumerate(data, 1):
-        nombre = p.get("participant", {}).get("name", "Desconocido")
+    # 3️⃣ Preparar diccionario de jugadores {id_usuario: nombre_mostrado}
+    jugadores = {}
+    for p in data:
+        participante = p.get("participant", {})
+        nombre = participante.get("name", "Desconocido")
         try:
             miembro = await ctx.guild.fetch_member(int(nombre))
+            jugadores[miembro.id] = miembro.display_name
         except (ValueError, discord.NotFound):
-            nombre_mostrado = nombre  # No era un ID o no se encontró en el servidor
+            jugadores[nombre] = nombre  # No es un ID válido, usar nombre tal cual
 
-        inscritos.append(f"{i}. {miembro.display_name} (<@{miembro.id}>)")
+    # 4️⃣ Revisar qué jugadores han subido deck
+    canal_decks = discord.utils.get(ctx.guild.text_channels, name="submitted-decks")
+    decks_subidos = set()
+    if canal_decks:
+        async for msg in canal_decks.history(limit=500):
+            for embed in msg.embeds:
+                if embed.title and "Deck Subido" in embed.title:
+                    contenido = ""
+                    if embed.description:
+                        contenido += embed.description + "\n"
+                    for field in embed.fields:
+                        contenido += f"{field.name}: {field.value}\n"
 
-        inscritos_str = "\n".join(inscritos)
-    await ctx.author.send(
-        f"📋 **Jugadores inscritos en `{codigo_torneo}`:**\n```{inscritos_str}```"
-    )
+                    # Buscar línea con "Código:"
+                    for linea in contenido.splitlines():
+                        if "Código:" in linea:
+                            match = re.search(r'`(.+?)`', linea)
+                            if match:
+                                codigo_embed = match.group(1)
+                                decks_subidos.add(codigo_embed)
+
+    # 5️⃣ Verificar si el usuario es moderador
+    es_moderador = await moderador_permisos_handle(ctx, only_check=True)
+
+    # 6️⃣ Construir lista con ticks
+    inscritos_lista = []
+    for jugador_id, nombre_mostrado in jugadores.items():
+        tick = ""
+        if es_moderador:
+            # Construir string que debe existir en decks_subidos
+            deck_key = f"{codigo_torneo}_{jugador_id}" if isinstance(jugador_id, int) else None
+            if deck_key and deck_key in decks_subidos:
+                tick = "✅"
+            elif deck_key:
+                tick = "❌"
+        inscritos_lista.append(f"{nombre_mostrado} {tick}")
+
+    # 7️⃣ Enviar al usuario por privado
+    mensaje_final = "\n".join(inscritos_lista)
+    await ctx.author.send(f"📋 **Jugadores inscritos en `{codigo_torneo}`:**\n```{mensaje_final}```")
+
 async def reportar_resultado_handle(ctx, codigo_torneo: str = None, jugador1: discord.Member = None, resultado: str = None, jugador2: discord.Member = None):
     # Eliminar mensaje original si es posible
     await borrar_mensaje_seguro(ctx)
@@ -760,12 +768,14 @@ async def reportar_resultado_handle(ctx, codigo_torneo: str = None, jugador1: di
     try:
         if not all([codigo_torneo, jugador1, resultado, jugador2]):
             await author.send("📊 Vamos a reportar un resultado. Responde a las siguientes preguntas:")
-
             if not codigo_torneo:
-                await author.send("1️⃣ ¿Cuál es el **código del torneo**?")
-                respuesta_codigo = await ctx.bot.wait_for("message", check=dm_check, timeout=90)
-                codigo_torneo = respuesta_codigo.content.strip()
-
+                codigo_torneo = await obtener_torneo_usuario(
+                    ctx,
+                    mensaje_inicial="1️⃣ ¿Cuál es el **código del torneo**?.\n"
+                                    "Elige uno de los torneos en los que estás inscrito para reportar el resultado:"
+                )
+                if not codigo_torneo:
+                    return  # Se cancela si no selecciona ningún torneo
             if not jugador1:
                 await author.send("2️⃣ Escribe el nombre o apodo del **jugador 1** (tal como aparece en el servidor):")
                 respuesta_j1 = await ctx.bot.wait_for("message", check=dm_check, timeout=90)
@@ -934,12 +944,17 @@ async def modificar_resultado_handle(ctx, codigo_torneo: str = None):
     author = ctx.author
     def dm_check(m): return m.author == author and isinstance(m.channel, discord.DMChannel)
 
-    # 1) Preguntar código si falta
+   # 1) Preguntar código si falta
     try:
         if not codigo_torneo:
-            await author.send("📌 Indica el **código del torneo** donde quieres modificar un resultado:")
-            msg = await ctx.bot.wait_for("message", check=dm_check, timeout=90.0)
-            codigo_torneo = msg.content.strip()
+            codigo_torneo = await obtener_torneo_usuario(
+                ctx,
+                mensaje_inicial="📌 Indica el **código del torneo** donde quieres modificar un resultado:\n"
+                                "Elige uno de los torneos en los que estás inscrito:"
+            )
+            if not codigo_torneo:
+                await author.send("❌ No seleccionaste ningún torneo. Se cancela la modificación.")
+                return
     except asyncio.TimeoutError:
         await author.send("⏰ Tiempo agotado. No se modificó ningún resultado.")
         return
@@ -1156,7 +1171,7 @@ async def inscribirse_sorteo_handle(ctx, codigo: str):
     if codigo is None:
         try:
             await ctx.author.send(
-                "📩 No escribiste el código del torneo.\n"
+                "📩 No escribiste el código del Sorteo.\n"
                 "Por favor, respóndeme con el **código del sorteo** para apuntarte al sorteo. Tienes 60 segundos."
             )
 
@@ -1236,8 +1251,20 @@ async def mis_comandos_handle(ctx):
             comandos_disponibles.append(f"!{comando['comando']} - {comando['descripcion']}")
 
     if not comandos_disponibles:
-        await ctx.author.send("❌ No tienes acceso a ningún comando.")
+        await ctx.author.send(
+            "❌ No tienes acceso a ningún comando.\n"
+            "Si crees que deberías tener acceso, contacta con un moderador del servidor."
+        )
         return
+
+    # Mensaje introductorio
+    mensaje_intro = (
+        "👋 ¡Hola! Aquí tienes los comandos que puedes usar en el servidor:\n\n"
+        "Para usar un comando, simplemente escríbelo en el canal preguntale-a-el-barbas "
+        "yo te ayudare a que todo vaya en su sitio. Por ejemplo:\n"
+        "`!reportar-resultado`, `!ver-inscritos`, `!subir-deck`, etc.\n\n"
+        "📋 Lista de comandos disponibles según tus roles:"
+    )
 
     embed = discord.Embed(
         title="📋 Tus comandos disponibles",
@@ -1246,9 +1273,13 @@ async def mis_comandos_handle(ctx):
     )
 
     try:
+        await ctx.author.send(mensaje_intro)
         await ctx.author.send(embed=embed)
     except discord.Forbidden:
-        await ctx.send("❌ No puedo enviarte un mensaje privado. Revisa tus ajustes de privacidad.")
+        await ctx.send(
+            "❌ No puedo enviarte un mensaje privado. "
+            "Revisa tus ajustes de privacidad o contacta con un moderador."
+        )
 
 def limpiar_deck_raw(lista_raw: str) -> str:
     """Devuelve solo las líneas que empiezan con un número, eliminando encabezados y líneas vacías."""
@@ -1435,22 +1466,20 @@ async def submitted_deck_handle(ctx, codigo_torneo: str = None):
 
     # ✅ Pedir código del torneo si no se proporcionó
     if not codigo_torneo:
-        await author.send("📩 Por favor, dime el **código del torneo** cuyo deck deseas subir.")
-        try:
-            respuesta = await ctx.bot.wait_for("message", check=dm_check, timeout=60.0)
-            codigo_torneo = respuesta.content.strip()
-            if not codigo_torneo:
-                await author.send("❌ El código no puede estar vacío. Cancelando subida de deck.")
-                return
-        except asyncio.TimeoutError:
-            await author.send("⏰ Tiempo agotado. Intenta de nuevo con `!subir-deck <codigo_torneo>`.")
+        codigo_torneo = await obtener_torneo_usuario(
+            ctx,
+            mensaje_inicial="📩 Por favor, dime el **código del torneo** cuyo deck deseas subir:\n"
+                            "Elige uno de los torneos en los que estás inscrito:"
+        )
+        if not codigo_torneo:
+            await author.send("❌ No seleccionaste ningún torneo. Cancelando subida de deck.")
             return
 
     # ✅ Comprobar si el torneo permite subir decks
-    ok, error = await validar_torneo_para_edicion(codigo_torneo, author)
-    if not ok:
-        await author.send(error)
-        return
+    # ok, error = await validar_torneo_para_edicion(codigo_torneo, author)
+    # if not ok:
+    #     await author.send(error)
+    #     return
 
     # ✅ Comprobar si ya hay un deck subido
     codigo_deck = f"{codigo_torneo}_{author.id}"
@@ -1521,17 +1550,15 @@ async def editar_deck_handle(ctx, codigo_torneo: str = None):
     author = ctx.author
     def dm_check(m): return m.author == author and isinstance(m.channel, discord.DMChannel)
 
-    # Pedir código del torneo si no se proporcionó
+   # ✅ Pedir código del torneo si no se proporcionó
     if not codigo_torneo:
-        await author.send("📩 Por favor, dime el **código del torneo** cuyo deck deseas editar.")
-        try:
-            respuesta = await ctx.bot.wait_for("message", check=dm_check, timeout=60.0)
-            codigo_torneo = respuesta.content.strip()
-            if not codigo_torneo:
-                await author.send("❌ El código no puede estar vacío. Cancelando edición de deck.")
-                return
-        except asyncio.TimeoutError:
-            await author.send("⏰ Tiempo agotado. Intenta de nuevo con `!editar-deck <codigo_torneo>`.")
+        codigo_torneo = await obtener_torneo_usuario(
+            ctx,
+            mensaje_inicial="📩 Por favor, dime el **código del torneo** cuyo deck deseas editar:\n"
+                            "Elige uno de los torneos en los que estás inscrito:"
+        )
+        if not codigo_torneo:
+            await author.send("❌ No seleccionaste ningún torneo. Cancelando subida de deck.")
             return
 
     ok, error = await validar_torneo_para_edicion(codigo_torneo, author)

@@ -562,3 +562,80 @@ async def realizar_sorteo_handle(ctx, codigo: str):
                 continue
 
     await ctx.send(f"✅ Sorteo `{codigo}` finalizado. {eliminados} inscritos eliminados y sorteo activo eliminado.")
+
+async def listar_torneos_handle(ctx):
+    await borrar_mensaje_seguro(ctx)
+   
+    if not await moderador_permisos_handle(ctx):
+        return
+
+    await ctx.author.send("📋 Obteniendo lista de torneos...")
+
+    async with aiohttp.ClientSession() as session:
+        async with session.get(
+            "https://api.challonge.com/v1/tournaments.json",
+            auth=aiohttp.BasicAuth(config.CHALLONGE_USERNAME, config.CHALLONGE_API_KEY)
+        ) as resp:
+            if resp.status != 200:
+                await ctx.author.send("❌ Error al obtener torneos de Challonge.")
+                return
+            torneos = await resp.json()
+
+    # 🔹 Filtrar torneos válidos
+    torneos_validos = []
+    for t in torneos:
+        torneo = t["tournament"]
+        state = torneo.get("state")
+        open_matches = torneo.get("open_match_count", 0)
+
+        if state == "pending" or (state == "complete" and open_matches == 0):
+            torneos_validos.append(torneo)
+
+    if not torneos_validos:
+        await ctx.author.send("❌ No hay torneos válidos para eliminar.")
+        return
+
+    mensaje = "📋 **Torneos válidos para eliminar:**\n"
+
+    for i, t in enumerate(torneos_validos):
+        mensaje += f"{i+1}. {t['name']} (Estado: {t['state']})\n"  # fallback a números normales
+
+    mensaje += "✏️ Escribe el número del torneo que deseas eliminar:"
+
+    await ctx.author.send(mensaje)
+
+    def dm_check(m):
+        return m.author == ctx.author and isinstance(m.channel, discord.DMChannel)
+
+    try:
+        respuesta = await ctx.bot.wait_for("message", check=dm_check, timeout=90.0)
+        seleccion = respuesta.content.strip()
+        if not seleccion.isdigit() or int(seleccion) < 1 or int(seleccion) > len(torneos_validos):
+            await ctx.author.send("❌ Selección inválida. Cancelando.")
+            return
+        torneo_elegido = torneos_validos[int(seleccion)-1]
+    except asyncio.TimeoutError:
+        await ctx.author.send("⏰ Tiempo agotado. Cancelando operación.")
+        return
+
+    # 🔹 Confirmar eliminación
+    await ctx.author.send(f"⚠️ Estás a punto de eliminar el torneo `{torneo_elegido['name']}`. ¿Confirmas? (sí/no)")
+    try:
+        confirmacion = await ctx.bot.wait_for("message", check=dm_check, timeout=60.0)
+        if confirmacion.content.lower() not in ["sí", "si", "s"]:
+            await ctx.author.send("❌ Operación cancelada.")
+            return
+    except asyncio.TimeoutError:
+        await ctx.author.send("⏰ Tiempo agotado. Cancelando operación.")
+        return
+
+    # 🔹 Eliminar torneo
+    async with aiohttp.ClientSession() as session:
+        async with session.delete(
+            f"https://api.challonge.com/v1/tournaments/{torneo_elegido['id']}.json",
+            auth=aiohttp.BasicAuth(config.CHALLONGE_USERNAME, config.CHALLONGE_API_KEY)
+        ) as resp:
+            if resp.status == 200:
+                await ctx.author.send(f"✅ Torneo `{torneo_elegido['name']}` eliminado correctamente.")
+            else:
+                await ctx.author.send(f"❌ Error al eliminar el torneo. Status: {resp.status}")

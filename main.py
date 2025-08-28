@@ -8,7 +8,8 @@ from utils.admin import (
   cerrar_peticion_handle, 
   sorteo_torneo_handle, 
   nuevo_sorteo_handle, 
-  realizar_sorteo_handle
+  realizar_sorteo_handle,
+  listar_torneos_handle
 )
 
 from utils.jugadores import (
@@ -217,6 +218,11 @@ async def forzar_ronda(ctx, codigo_torneo: str):
     """Se termina la rondar actual con empate de las partidas no jugadas y se inicia la siguiente - !forzar-ronda <código_torneo>"""
     await forzar_ronda_handle(ctx, codigo_torneo)
 
+@bot.command(name="eliminar-torneo")
+@comando_roles_permitidos("admin")
+async def listar_torneos(ctx):
+        await listar_torneos_handle(ctx)
+
 #########################################################################################################
 
 @bot.command(name="mis-comandos")
@@ -246,7 +252,7 @@ async def on_member_remove(member: discord.Member):
     await usuario_salio_handle(bot, member)
     
     
-webserver.keep_alive()  
-bot.run(DISCORD_TOKEN)
+# webserver.keep_alive()  
+# bot.run(DISCORD_TOKEN)
 
-# bot.run(config.TOKEN)
+bot.run(config.TOKEN)

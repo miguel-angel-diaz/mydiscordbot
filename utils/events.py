@@ -103,40 +103,68 @@ async def bienvenida_y_comandos_handle(message: discord.Message):
         except discord.Forbidden:
             print(f"[WARN] No tengo permisos para asignar rol 'miembro' a {member.display_name}")
             return
-
-    # Simula que tiene el rol definitivo
+     # Simula que tiene el rol definitivo
     roles_simulados = roles_usuario | {"miembro"}
 
-    # Comandos a los que tendrá acceso como miembro
+    # 📌 Comandos disponibles
     comandos_disponibles = []
     for comando in config.COMANDOS_INFO:
         roles_permitidos = comando["roles_permitidos"]
         if any(rol in roles_simulados for rol in roles_permitidos):
             comandos_disponibles.append(f"!{comando['comando']} - {comando['descripcion']}")
 
-    # Mensaje de bienvenida
+    # 📌 Torneos activos
+    canal_torneos = discord.utils.get(guild.text_channels, name="torneos-activos")
+    torneos_activos = []
+    if canal_torneos:
+        async for msg in canal_torneos.history(limit=50):  # ajusta el límite si quieres más
+            if msg.pinned:  # no contar fijados
+                continue
+            # opcional: comprobar roles en el mensaje (si los torneos tienen esa info)
+            torneos_activos.append(msg.content)
+
+    # 📌 Sorteos activos
+    canal_sorteos = discord.utils.get(guild.text_channels, name="sorteos-activos")
+    sorteos_activos = []
+    if canal_sorteos:
+        async for msg in canal_sorteos.history(limit=50):
+            if msg.pinned:
+                continue
+            sorteos_activos.append(msg.content)
+
+    # ✅ Enviar bienvenida
     try:
         await member.send(f"👋 ¡Bienvenido/a al servidor, {member.display_name}! 🎉")
     except discord.Forbidden:
         print(f"[INFO] No pude enviar bienvenida a {member}")
         return
 
-    # Enviar comandos disponibles
+    # ✅ Enviar comandos
     if comandos_disponibles:
-        embed = discord.Embed(
+        embed_comandos = discord.Embed(
             title="📋 Tus comandos disponibles",
             description="\n".join(comandos_disponibles),
             color=discord.Color.green()
         )
-        try:
-            await member.send(embed=embed)
-        except discord.Forbidden:
-            print(f"[INFO] No pude enviar comandos a {member}")
-    else:
-        try:
-            await member.send("❌ No tienes acceso a ningún comando.")
-        except discord.Forbidden:
-            pass
+        await member.send(embed=embed_comandos)
+
+    # ✅ Enviar torneos
+    if torneos_activos:
+        embed_torneos = discord.Embed(
+            title="🎮 Torneos activos",
+            description="\n\n".join(torneos_activos[:5]),  # los primeros 5
+            color=discord.Color.blue()
+        )
+        await member.send(embed=embed_torneos)
+
+    # ✅ Enviar sorteos
+    if sorteos_activos:
+        embed_sorteos = discord.Embed(
+            title="🎁 Sorteos activos",
+            description="\n\n".join(sorteos_activos[:5]),  # los primeros 5
+            color=discord.Color.purple()
+        )
+        await member.send(embed=embed_sorteos)
 
     # 5️⃣ Registrar en canal #registro-de-usuarios
     canal_registro = discord.utils.get(message.guild.text_channels, name="registro-de-usuarios")

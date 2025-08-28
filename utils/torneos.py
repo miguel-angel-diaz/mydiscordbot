@@ -213,6 +213,77 @@ async def iniciar_torneo_handle(ctx, codigo_torneo: str):
         except discord.Forbidden:
             await ctx.send("❌ No puedo enviarte mensajes privados. Activa los DMs para continuar.")
             return
+    # 🔹 Revisar qué jugadores han subido deck
+    canal_decks = discord.utils.get(ctx.guild.text_channels, name="submitted-decks")
+    decks_subidos = set()
+    if canal_decks:
+        async for msg in canal_decks.history(limit=500):
+            for embed in msg.embeds:
+                if embed.title and "Deck Subido" in embed.title:
+                    contenido = ""
+                    if embed.description:
+                        contenido += embed.description + "\n"
+                    for field in embed.fields:
+                        contenido += f"{field.name}: {field.value}\n"
+                    for linea in contenido.splitlines():
+                        if linea.startswith("Código:"):
+                            codigo_embed = linea.replace("Código:", "").strip()
+                            decks_subidos.add(codigo_embed)
+
+    # 🔹 Obtener participantes del torneo
+    url_participants = f"https://api.challonge.com/v1/tournaments/{codigo_torneo}/participants.json"
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url_participants, auth=aiohttp.BasicAuth(config.CHALLONGE_USERNAME, config.CHALLONGE_API_KEY)) as resp:
+            if resp.status != 200:
+                await ctx.author.send("⚠️ No se pudo obtener la lista de participantes.")
+                return
+            data = await resp.json()
+
+    participantes = []
+    no_subieron = []
+    for p in data:
+        participant = p.get("participant", {})
+        user_id_str = str(participant.get("name"))  # Suponemos que el name es el ID de Discord
+        codigo_completo = f"{codigo_torneo}_{user_id_str}"
+        if codigo_completo in decks_subidos:
+            participantes.append(f"{participant.get('name')} ✅")
+        else:
+            no_subieron.append(f"{participant.get('name')} ❌")
+
+    # 🔹 Enviar DM al que ejecutó el comando
+    mensaje_dm = "**Revisión de decks antes de iniciar el torneo:**\n\n"
+    mensaje_dm += "Jugadores con deck subido:\n" + "\n".join(participantes) + "\n\n"
+    mensaje_dm += "Jugadores SIN deck subido:\n" + "\n".join(no_subieron) + "\n\n"
+    mensaje_dm += "Responde con 'continuar' para iniciar el torneo de todos modos, o 'eliminar' para quitar a los que no subieron el deck. Tienes 90 segundos."
+
+    try:
+        await ctx.author.send(mensaje_dm)
+
+        def dm_check(m):
+            return m.author == ctx.author and isinstance(m.channel, discord.DMChannel)
+
+        respuesta = await ctx.bot.wait_for("message", check=dm_check, timeout=90.0)
+        accion = respuesta.content.lower().strip()
+        if accion == "eliminar":
+            # Eliminar participantes sin deck
+            for p in no_subieron:
+                user_id = int(p.split()[0])
+                url_delete = f"https://api.challonge.com/v1/tournaments/{codigo_torneo}/participants/{user_id}.json"
+                async with aiohttp.ClientSession() as session:
+                    async with session.delete(url_delete, auth=aiohttp.BasicAuth(config.CHALLONGE_USERNAME, config.CHALLONGE_API_KEY)) as resp:
+                        if resp.status in (200, 204):
+                            await ctx.author.send(f"✅ Eliminado del torneo: {p.split()[0]}")
+                        else:
+                            await ctx.author.send(f"⚠️ No se pudo eliminar: {p.split()[0]}")
+        elif accion == "continuar":
+            await ctx.author.send("✅ Se iniciará el torneo con todos los participantes, aunque algunos no hayan subido deck.")
+        else:
+            await ctx.author.send("❌ Opción no reconocida. Cancelo la operación.")
+            return
+
+    except asyncio.TimeoutError:
+        await ctx.author.send("⏰ Tiempo agotado. Cancelo la operación.")
+        return
 
     # Iniciar el torneo en Challonge
     url_start = f"https://api.challonge.com/v1/tournaments/{codigo_torneo}/start.json"
