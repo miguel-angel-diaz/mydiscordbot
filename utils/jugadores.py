@@ -214,7 +214,7 @@ async def modificar_partida_agendada_handle(ctx):
 
 async def actualizar_proximas_partidas(ctx):
     canal_destino = discord.utils.get(ctx.guild.text_channels, name="partidos-agendados")
-    canal_proximas = discord.utils.get(ctx.guild.text_channels, name="proximas-partidas")
+    canal_proximas = discord.utils.get(ctx.guild.text_channels, name="🎭-cartelera‐")
     if not canal_destino or not canal_proximas:
         return
 
@@ -389,62 +389,68 @@ async def inscribirse_handler(ctx, codigo_torneo: str, usuario: discord.Member =
     
     if not codigo_torneo:
         try:
-            # Mostrar torneos disponibles antes de preguntar por el código
+            # Recoger torneos disponibles en #torneos-activos
             canal_torneos = discord.utils.get(ctx.guild.text_channels, name="torneos-activos")
-            if canal_torneos:
-                torneos_disponibles = []
-                async for mensaje in canal_torneos.history(limit=100):
-                    lineas = mensaje.content.splitlines()
-                    codigo = None
-                    nivel = "Todos"
-
-                    for linea in lineas:
-                        if "**Código:**" in linea:
-                            codigo = linea.split("**Código:**")[-1].strip().strip("`")
-                        if "Nivel:" in linea or "Roles permitidos:" in linea:
-                            linea_limpia = linea.replace("*", "").lower()
-                            if "nivel:" in linea_limpia:
-                                nivel = linea_limpia.split("nivel:")[-1].strip()
-                            elif "roles permitidos:" in linea_limpia:
-                                nivel = linea_limpia.split("roles permitidos:")[-1].strip()
-
-                    if not codigo:
-                        continue
-
-                    roles_permitidos = config.ROLES_SOCIOS if nivel == "socios" else config.ROLES_TODOS
-
-                    if tiene_rol_permitido(ctx.author, roles_permitidos):
-                        torneos_disponibles.append(f"• `{codigo}` — Nivel: {nivel.capitalize()}")
-
-                if torneos_disponibles:
-                    texto_torneos = "\n".join(torneos_disponibles)
-                    await ctx.author.send(f"🎯 **Torneos disponibles:**\n{texto_torneos}")
-                else:
-                    await ctx.author.send("⚠️ No hay torneos activos disponibles.")
-                    return
-            else:
+            if not canal_torneos:
                 await ctx.author.send("⚠️ No encontré el canal `#torneos-activos`.")
                 return
 
-            # Pedir código
-            await ctx.author.send(
-                "📩 Por favor, respóndeme con el **código del torneo** al que deseas inscribirte. Tienes 60 segundos."
-            )
-            def dm_check(m): return m.author == ctx.author and isinstance(m.channel, discord.DMChannel)
-            respuesta = await ctx.bot.wait_for("message", check=dm_check, timeout=60.0)
-            codigo_torneo = respuesta.content.strip()
+            torneos_disponibles = []
+            async for mensaje in canal_torneos.history(limit=100):
+                lineas = mensaje.content.splitlines()
+                codigo = None
+                nivel = "Todos"
 
-            if not codigo_torneo:
-                await ctx.author.send("❌ El código no puede estar vacío. Cancelo la inscripción.")
+                for linea in lineas:
+                    if "**Código:**" in linea:
+                        codigo = linea.split("**Código:**")[-1].strip().strip("`")
+                    if "Nivel:" in linea or "Roles permitidos:" in linea:
+                        linea_limpia = linea.replace("*", "").lower()
+                        if "nivel:" in linea_limpia:
+                            nivel = linea_limpia.split("nivel:")[-1].strip()
+                        elif "roles permitidos:" in linea_limpia:
+                            nivel = linea_limpia.split("roles permitidos:")[-1].strip()
+
+                if not codigo:
+                    continue
+
+                roles_permitidos = config.ROLES_SOCIOS if nivel == "socios" else config.ROLES_TODOS
+                if tiene_rol_permitido(ctx.author, roles_permitidos):
+                    torneos_disponibles.append((codigo, nivel.capitalize()))
+
+            if not torneos_disponibles:
+                await ctx.author.send("⚠️ No hay torneos activos disponibles.")
                 return
 
+            # Mostrar lista con números
+            mensaje_lista = "🎯 **Torneos disponibles:**\n"
+            for idx, (codigo, nivel) in enumerate(torneos_disponibles, 1):
+                mensaje_lista += f"{idx}. `{codigo}` — Nivel: {nivel}\n"
+            mensaje_lista += "\nResponde con el **número** del torneo que deseas."
+
+            await ctx.author.send(mensaje_lista)
+
+            # Esperar respuesta con número
+            def dm_check(m):
+                return m.author == ctx.author and isinstance(m.channel, discord.DMChannel)
+
+            respuesta = await ctx.bot.wait_for("message", check=dm_check, timeout=60.0)
+            seleccion = int(respuesta.content.strip())
+            if seleccion < 1 or seleccion > len(torneos_disponibles):
+                await ctx.author.send("❌ Opción no válida. Cancelo la operación.")
+                return
+
+            codigo_torneo = torneos_disponibles[seleccion - 1][0]
+
+        except ValueError:
+            await ctx.author.send("❌ Debes responder con un número válido. Cancelo la operación.")
+            return
         except asyncio.TimeoutError:
-            await ctx.author.send("⏰ Tiempo agotado. Intenta de nuevo con `!inscribirse <código>`.")
+            await ctx.author.send("⏰ Tiempo agotado. Intenta de nuevo con `!inscribirse`.")
             return
         except discord.Forbidden:
             await ctx.send("❌ No puedo enviarte mensajes privados. Activa los DMs para continuar.")
             return
-
     apuntado = usuario or ctx.author
 
     tipo_torneo_socios = "socio" in codigo_torneo.lower()
@@ -522,7 +528,7 @@ async def inscribirse_handler(ctx, codigo_torneo: str, usuario: discord.Member =
         await ctx.author.send("⚠️ No pude enviar el mensaje para subir deck. Podrás hacerlo más tarde con el comando adecuado.")
 
    # Anunciar inscripción en canal público
-    canal_anuncios_torneos = discord.utils.get(ctx.guild.text_channels, name="anuncios-torneos")
+    canal_anuncios_torneos = discord.utils.get(ctx.guild.text_channels, name="📰-cartelera‐torneos")
     if canal_anuncios_torneos:
         plazas_ocupadas = total_inscritos + 1  # el que acaba de inscribirse
         if total_maximo:
@@ -535,7 +541,7 @@ async def inscribirse_handler(ctx, codigo_torneo: str, usuario: discord.Member =
             mensaje = f"📥 {apuntado.mention} se ha inscrito en el torneo `{codigo_torneo}`."
         await canal_anuncios_torneos.send(mensaje)
     else:
-        await ctx.author.send("⚠️ No encontré el canal `#anuncios-torneos` para anunciar la inscripción.")
+        await ctx.author.send("⚠️ No encontré el canal `#📰-cartelera‐torneos` para anunciar la inscripción.")
 
 async def desinscribirse_handler(ctx, codigo_torneo: str, usuario: discord.Member = None):
       # Eliminar mensaje original si es posible
@@ -608,7 +614,7 @@ async def desinscribirse_handler(ctx, codigo_torneo: str, usuario: discord.Membe
 
     # Buscar canal de torneos activos
     canal_torneos = discord.utils.get(ctx.guild.text_channels, name="torneos-activos")
-    canal_anuncios_torneos = discord.utils.get(ctx.guild.text_channels, name="anuncios-torneos")
+    canal_anuncios_torneos = discord.utils.get(ctx.guild.text_channels, name="📰-cartelera‐torneos")
 
     if not canal_torneos or not canal_anuncios_torneos:
         await ctx.author.send("⚠️ No se encontraron los canales `#torneos-activos` o `#inscripciones` para notificar.")
@@ -837,7 +843,7 @@ async def reportar_resultado_handle(ctx, codigo_torneo: str = None, jugador1: di
         url_matches = f"https://api.challonge.com/v1/tournaments/{codigo_torneo}/matches.json"
         async with session.get(url_matches, auth=aiohttp.BasicAuth(config.CHALLONGE_USERNAME, config.CHALLONGE_API_KEY)) as resp:
             if resp.status != 200:
-                await author.send("❌ No se pudieron obtener los emparejamientos.")
+                await author.send("❌ No se pudieron obtener las 🍸-citas‐a‐ciegas.")
                 return
             matches_data = await resp.json()
 
@@ -913,7 +919,7 @@ async def reportar_resultado_handle(ctx, codigo_torneo: str = None, jugador1: di
                 f"⚠️ No se pudo enviar el mensaje a {jugador.display_name} por un error inesperado: {str(e)}"
             )
     # Canal de resultados
-    canal_resultados = discord.utils.get(ctx.guild.text_channels, name="resultados")
+    canal_resultados = discord.utils.get(ctx.guild.text_channels, name="🍺-quién‐se‐lleva‐la‐ronda")
     if canal_resultados:
         if puntos_j1 == puntos_j2:
             mensaje = (
@@ -930,7 +936,7 @@ async def reportar_resultado_handle(ctx, codigo_torneo: str = None, jugador1: di
             )
         await canal_resultados.send(mensaje)
     await author.send(
-        "✅ Resultado reportado correctamente.:\n"
+        "✅ resultado reportado correctamente.:\n"
         f"**{jugador1.display_name}** {resultado} **{jugador2.display_name}**"
     )
 
@@ -999,13 +1005,13 @@ async def modificar_resultado_handle(ctx, codigo_torneo: str = None):
         # matches
         async with session.get(url_matches, auth=aiohttp.BasicAuth(config.CHALLONGE_USERNAME, config.CHALLONGE_API_KEY)) as resp:
             if resp.status != 200:
-                await author.send("❌ No se pudieron obtener los emparejamientos del torneo.")
+                await author.send("❌ No se pudieron obtener las 🍸-citas‐a‐ciegas del torneo.")
                 return
             matches_data = await resp.json()
 
     # 3) Determinar ronda(s) aún en juego (no completamente finalizada)
     if not matches_data:
-        await author.send("❌ No hay emparejamientos en este torneo.")
+        await author.send("❌ No hay 🍸-citas‐a‐ciegas en este torneo.")
         return
 
     # agrupar por ronda y ver cuáles NO están completas
@@ -1139,7 +1145,7 @@ async def modificar_resultado_handle(ctx, codigo_torneo: str = None):
     # 11) Notificaciones
     await author.send(f"✅ Resultado actualizado: **{n1} vs {n2} → {scores_csv}**")
 
-    canal_resultados = discord.utils.get(ctx.guild.text_channels, name="resultados")
+    canal_resultados = discord.utils.get(ctx.guild.text_channels, name="🍺-quién‐se‐lleva‐la‐ronda")
     if canal_resultados:
         await canal_resultados.send(f"🔄 Resultado modificado en `{codigo_torneo}`: **{n1} vs {n2} → {scores_csv}**")
 
@@ -1356,7 +1362,6 @@ async def deck_dm_flow(ctx, author: discord.Member, codigo_torneo: str, modo: st
             await author.send("4️⃣ Sube tu **sideboard** (máx 15 cartas, o 'N/A'):")
             sideboard_raw = (await ctx.bot.wait_for("message", check=dm_check, timeout=300.0)).content.strip()
             sideboard = "N/A" if sideboard_raw.lower() == "n/a" else limpiar_deck_raw(sideboard_raw)
-
             mensaje_deck = None
         except asyncio.TimeoutError:
             await author.send("⌛ Se acabó el tiempo. El proceso fue cancelado.")
@@ -1450,19 +1455,18 @@ async def deck_dm_flow(ctx, author: discord.Member, codigo_torneo: str, modo: st
                             await author.send("❌ La sideboard no puede superar 15 cartas. No se actualizó.")
                 except asyncio.TimeoutError:
                     await author.send("⏰ Tiempo agotado. No se actualizó la sideboard.")
-                    
 
-        return nombre_deck, archetype, decklist, sideboard, mensaje_deck
+    return nombre_deck, archetype, decklist, sideboard, mensaje_deck
 
 
 async def submitted_deck_handle(ctx, codigo_torneo: str = None):
     await borrar_mensaje_seguro(ctx)
+    if not await validar_canal_correcto(ctx, "preguntale-a-el-barbas", "!mis-comandos"):
+        return
     author = ctx.author
     if ctx.guild is None:
         await author.send("❌ Este comando debe ejecutarse desde el servidor del torneo.")
         return
-
-    def dm_check(m): return m.author == author and isinstance(m.channel, discord.DMChannel)
 
     # ✅ Pedir código del torneo si no se proporcionó
     if not codigo_torneo:
@@ -1476,10 +1480,10 @@ async def submitted_deck_handle(ctx, codigo_torneo: str = None):
             return
 
     # ✅ Comprobar si el torneo permite subir decks
-    # ok, error = await validar_torneo_para_edicion(codigo_torneo, author)
-    # if not ok:
-    #     await author.send(error)
-    #     return
+    ok, error = await validar_torneo_para_edicion(codigo_torneo, author)
+    if not ok:
+        await author.send(error)
+        return
 
     # ✅ Comprobar si ya hay un deck subido
     codigo_deck = f"{codigo_torneo}_{author.id}"
@@ -1519,13 +1523,35 @@ async def submitted_deck_handle(ctx, codigo_torneo: str = None):
         if decklist is None:
             await author.send("❌ Error al leer el deck desde mtgdecks.net. Intenta subirlo manualmente.")
             return
+   
     elif opcion == "3":
-            datos = await deck_dm_flow(ctx, author, codigo_torneo, modo="subir")
-            if not datos:
-                return
-            nombre_deck, archetype, decklist_input, sideboard_input, _ = datos
-            decklist = decklist_input
-            sideboard = sideboard_input
+        print("➡️ Opción 3 seleccionada: subir deck")  # Marca que entramos en esta opción
+
+        datos = await deck_dm_flow(ctx, author, codigo_torneo, modo="subir")
+        print(f"🔹 deck_dm_flow devolvió: {datos}")  # Muestra lo que devuelve
+
+        if not datos:
+            print("⚠️ deck_dm_flow devolvió None o lista vacía, saliendo")
+            return
+
+        try:
+            nombre_deck, archetype, decklist_input, sideboard_input, extra = datos
+            print(f"🔹 Desempaquetado:")
+            print(f"    nombre_deck = {nombre_deck}")
+            print(f"    archetype = {archetype}")
+            print(f"    decklist_input = {decklist_input}")
+            print(f"    sideboard_input = {sideboard_input}")
+            print(f"    extra = {extra}")
+        except Exception as e:
+            print(f"❌ Error al desempaquetar datos: {e}")
+            return
+
+        decklist = decklist_input
+        sideboard = sideboard_input
+
+        print(f"✅ Decklist y Sideboard asignados correctamente")
+        print(f"Decklist:\n{decklist}")
+        print(f"Sideboard:\n{sideboard}")
 
     # ✅ Publicar embed en submitted-decks
     canal_submitted = discord.utils.get(ctx.guild.text_channels, name="submitted-decks")
@@ -1547,8 +1573,12 @@ async def submitted_deck_handle(ctx, codigo_torneo: str = None):
 
 async def editar_deck_handle(ctx, codigo_torneo: str = None):
     await borrar_mensaje_seguro(ctx)
+    if not await validar_canal_correcto(ctx, "preguntale-a-el-barbas", "!mis-comandos"):
+        return
     author = ctx.author
-    def dm_check(m): return m.author == author and isinstance(m.channel, discord.DMChannel)
+    if ctx.guild is None:
+        await author.send("❌ Este comando debe ejecutarse desde el servidor del torneo.")
+        return
 
    # ✅ Pedir código del torneo si no se proporcionó
     if not codigo_torneo:

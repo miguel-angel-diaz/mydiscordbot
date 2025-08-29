@@ -44,7 +44,7 @@ async def bienvenida_y_comandos_handle(message: discord.Message):
         return
 
     # Asegúrate de que es el canal #presentation
-    canal_presentaciones = discord.utils.get(message.guild.text_channels, name="presentation")
+    canal_presentaciones = discord.utils.get(message.guild.text_channels, name="🪞-vestíbulo‐")
     if not canal_presentaciones or message.channel.id != canal_presentaciones.id:
         return
 
@@ -230,7 +230,7 @@ async def usuario_salio_handle(bot: commands.Bot, member: discord.Member):
         await canal_info.send(embed=embed)
 
     # Canal de anuncios
-    canal_anuncios = discord.utils.get(member.guild.text_channels, name="anuncios")
+    canal_anuncios = discord.utils.get(member.guild.text_channels, name="📰-tablón‐")
     if canal_anuncios:
         await canal_anuncios.send(f"📢 El usuario **{member.display_name}** ha abandonado **The Klub**.")
 

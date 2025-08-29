@@ -9,7 +9,7 @@ from datetime import datetime
 import random
 import string
 
-from utils.commons import borrar_mensaje_seguro, validar_canal_correcto
+from utils.commons import borrar_mensaje_seguro, validar_canal_correcto, obtener_torneo_usuario
 from utils.admin import moderador_permisos_handle
 
 CHALLONGE_API_KEY = "DwMmC03iVa5UKm377ZaScn6omJ3EA6jWRcPvzZOJ"
@@ -147,7 +147,7 @@ async def nuevo_torneo(ctx, *, args: str):
                 )
 
                 # 📣 Anuncio en canal de torneos
-                canal_anuncios = discord.utils.get(ctx.guild.text_channels, name="anuncios-torneos")
+                canal_anuncios = discord.utils.get(ctx.guild.text_channels, name="📰-cartelera‐torneos")
                 if canal_anuncios:
                     await canal_anuncios.send(
                         f"📢 **Nuevo torneo creado!**\n"
@@ -159,7 +159,7 @@ async def nuevo_torneo(ctx, *, args: str):
                         f" **Código:** {url_challonge}\n"
                     )
                 else:
-                    await ctx.author.send("⚠️ No se encontró el canal `anuncios-torneos` en este servidor.")
+                    await ctx.author.send("⚠️ No se encontró el canal `📰-cartelera‐torneos` en este servidor.")
                             # Buscar el canal de torneos activos
                 canal_torneos = discord.utils.get(ctx.guild.text_channels, name="torneos-activos")
                 if canal_torneos is None:
@@ -190,30 +190,16 @@ async def iniciar_torneo_handle(ctx, codigo_torneo: str):
     if not await moderador_permisos_handle(ctx):
         return
 
+  # 🔹 Obtener código de torneo si no se pasó como argumento
     if codigo_torneo is None:
-        try:
-            await ctx.author.send(
-                "📩 No escribiste el código del torneo.\n"
-                "Por favor, respóndeme con el **código del torneo** que quieres iniciar. Tienes 60 segundos."
-            )
-
-            def dm_check(m):
-                return m.author == ctx.author and isinstance(m.channel, discord.DMChannel)
-
-            respuesta = await ctx.bot.wait_for("message", check=dm_check, timeout=60.0)
-            codigo_torneo = respuesta.content.strip()
-
-            if not codigo_torneo:
-                await ctx.author.send("❌ El código no puede estar vacío. Cancelo la inscripción.")
-                return
-
-        except asyncio.TimeoutError:
-            await ctx.author.send("⏰ Tiempo agotado. Intenta de nuevo con `!iniciar-torneo <código_torneo>`.")
-            return
-        except discord.Forbidden:
-            await ctx.send("❌ No puedo enviarte mensajes privados. Activa los DMs para continuar.")
-            return
-    # 🔹 Revisar qué jugadores han subido deck
+        mensaje_inicial = (
+            "📩 No escribiste el código del torneo.\n"
+            "Por favor, selecciona el torneo en el que deseas iniciar."
+        )
+        codigo_torneo = await obtener_torneo_usuario(ctx, mensaje_inicial=mensaje_inicial, timeout=60)
+        if not codigo_torneo:
+            return  # Usuario canceló o no está en ningún torneo
+    # 4️⃣ Revisar qué jugadores han subido deck
     canal_decks = discord.utils.get(ctx.guild.text_channels, name="submitted-decks")
     decks_subidos = set()
     if canal_decks:
@@ -225,12 +211,16 @@ async def iniciar_torneo_handle(ctx, codigo_torneo: str):
                         contenido += embed.description + "\n"
                     for field in embed.fields:
                         contenido += f"{field.name}: {field.value}\n"
-                    for linea in contenido.splitlines():
-                        if linea.startswith("Código:"):
-                            codigo_embed = linea.replace("Código:", "").strip()
-                            decks_subidos.add(codigo_embed)
 
-    # 🔹 Obtener participantes del torneo
+                    # Buscar línea con "Código:"
+                    for linea in contenido.splitlines():
+                        if "Código:" in linea:
+                            match = re.search(r'`(.+?)`', linea)
+                            if match:
+                                codigo_embed = match.group(1)
+                                decks_subidos.add(codigo_embed)
+
+   # 🔹 Obtener participantes del torneo
     url_participants = f"https://api.challonge.com/v1/tournaments/{codigo_torneo}/participants.json"
     async with aiohttp.ClientSession() as session:
         async with session.get(url_participants, auth=aiohttp.BasicAuth(config.CHALLONGE_USERNAME, config.CHALLONGE_API_KEY)) as resp:
@@ -241,20 +231,29 @@ async def iniciar_torneo_handle(ctx, codigo_torneo: str):
 
     participantes = []
     no_subieron = []
+
     for p in data:
         participant = p.get("participant", {})
-        user_id_str = str(participant.get("name"))  # Suponemos que el name es el ID de Discord
+        user_id_str = str(participant.get("name"))  # Suponemos que es el ID de Discord
         codigo_completo = f"{codigo_torneo}_{user_id_str}"
         if codigo_completo in decks_subidos:
             participantes.append(f"{participant.get('name')} ✅")
         else:
-            no_subieron.append(f"{participant.get('name')} ❌")
+            no_subieron.append({
+                "name": participant.get("name"),        # Discord ID o lo que uses
+                "challonge_id": participant.get("id")   # ID real de Challonge
+            })
 
-    # 🔹 Enviar DM al que ejecutó el comando
+    # 🔹 Preparar mensaje DM
     mensaje_dm = "**Revisión de decks antes de iniciar el torneo:**\n\n"
     mensaje_dm += "Jugadores con deck subido:\n" + "\n".join(participantes) + "\n\n"
-    mensaje_dm += "Jugadores SIN deck subido:\n" + "\n".join(no_subieron) + "\n\n"
-    mensaje_dm += "Responde con 'continuar' para iniciar el torneo de todos modos, o 'eliminar' para quitar a los que no subieron el deck. Tienes 90 segundos."
+    mensaje_dm += "Jugadores SIN deck subido:\n" + "\n".join([p['name'] + " ❌" for p in no_subieron]) + "\n\n"
+   # 🔹 Preguntar qué hacer con los participantes sin deck
+    mensaje_dm += (
+        "❓ ¿Qué deseas hacer con los jugadores que NO subieron deck?\n"
+        "Responde con **'continuar'** para iniciar el torneo con todos los participantes, \n"
+        "o **'eliminar'** para quitar a los que no subieron el deck. Tienes 90 segundos."
+    )
 
     try:
         await ctx.author.send(mensaje_dm)
@@ -264,25 +263,40 @@ async def iniciar_torneo_handle(ctx, codigo_torneo: str):
 
         respuesta = await ctx.bot.wait_for("message", check=dm_check, timeout=90.0)
         accion = respuesta.content.lower().strip()
+
         if accion == "eliminar":
-            # Eliminar participantes sin deck
-            for p in no_subieron:
-                user_id = int(p.split()[0])
-                url_delete = f"https://api.challonge.com/v1/tournaments/{codigo_torneo}/participants/{user_id}.json"
+            # Eliminar participantes sin deck usando el ID de Challonge
+            for participant in no_subieron:
+                url_delete = f"https://api.challonge.com/v1/tournaments/{codigo_torneo}/participants/{participant['challonge_id']}.json"
                 async with aiohttp.ClientSession() as session:
                     async with session.delete(url_delete, auth=aiohttp.BasicAuth(config.CHALLONGE_USERNAME, config.CHALLONGE_API_KEY)) as resp:
                         if resp.status in (200, 204):
-                            await ctx.author.send(f"✅ Eliminado del torneo: {p.split()[0]}")
+                            await ctx.author.send(f"✅ Eliminado del torneo: {participant['name']}")
                         else:
-                            await ctx.author.send(f"⚠️ No se pudo eliminar: {p.split()[0]}")
+                            await ctx.author.send(f"⚠️ No se pudo eliminar: {participant['name']} (status {resp.status})")
+
         elif accion == "continuar":
             await ctx.author.send("✅ Se iniciará el torneo con todos los participantes, aunque algunos no hayan subido deck.")
         else:
             await ctx.author.send("❌ Opción no reconocida. Cancelo la operación.")
             return
 
+        # 🔹 Confirmación de inicio del torneo
+        confirmacion_msg = (
+            "Se han actualizado los participantes según tu elección.\n"
+            "¿Deseas iniciar el torneo ahora? Responde con **'sí'** para continuar o **'no'** para cancelar. Tienes 60 segundos."
+        )
+        await ctx.author.send(confirmacion_msg)
+
+        respuesta_confirmacion = await ctx.bot.wait_for("message", check=dm_check, timeout=60.0)
+        accion_inicio = respuesta_confirmacion.content.lower().strip()
+
+        if accion_inicio != "sí" and accion_inicio != "si":
+            await ctx.author.send("❌ Inicio de torneo cancelado por el usuario.")
+            return
+
     except asyncio.TimeoutError:
-        await ctx.author.send("⏰ Tiempo agotado. Cancelo la operación.")
+        await ctx.author.send("⏰ Tiempo agotado. Cancelando operación.")
         return
 
     # Iniciar el torneo en Challonge
@@ -303,7 +317,7 @@ async def iniciar_torneo_handle(ctx, codigo_torneo: str):
         async with session.get(url_matches, auth=aiohttp.BasicAuth(config.CHALLONGE_USERNAME, config.CHALLONGE_API_KEY)) as resp:
             if resp.status != 200:
                 error_text = await resp.text()
-                await ctx.author.send(f"⚠️ Error al obtener emparejamientos: {error_text}")
+                await ctx.author.send(f"⚠️ Error al obtener 🍸-citas‐a‐ciegas: {error_text}")
                 return
             matches_data = await resp.json()
 
@@ -316,18 +330,26 @@ async def iniciar_torneo_handle(ctx, codigo_torneo: str):
                 return
             participants_data = await resp.json()
 
-    # Mapear IDs de participantes a nombres
+    # 🔹 Mapear IDs de participantes a nombres o miembros de Discord
     id_to_member = {}
     for p in participants_data:
         participant = p.get("participant", {})
         try:
             user_id = int(participant["name"])
             member = await ctx.guild.fetch_member(user_id)
-            id_to_member[participant["id"]] = member.display_name
+            id_to_member[participant["id"]] = member  # Guardamos el Member real
         except (ValueError, discord.NotFound):
+            # Si no se puede obtener el miembro, guardamos el string
             id_to_member[participant["id"]] = participant["name"]
 
-   # Preparar emparejamientos
+    # 🔹 Función para mostrar participante de manera segura
+    def formato_participante(member_or_name):
+        if isinstance(member_or_name, discord.Member):
+            return f"{member_or_name.display_name} ({member_or_name.mention})"
+        else:
+            return f"{member_or_name} (no en el servidor)"
+
+    # 🔹 Preparar emparejamientos
     emparejamientos = []
     for match in matches_data:
         m = match.get("match", {})
@@ -339,23 +361,22 @@ async def iniciar_torneo_handle(ctx, codigo_torneo: str):
             emparejamientos.append(f"• Ronda {m.get('round')}: TBD vs TBD")
             continue
 
-        # Mostrar "Nombre (@Mención)"
-        p1_texto = f"{p1.display_name} ({p1.mention})"
-        p2_texto = f"{p2.display_name} ({p2.mention})"
+        # Mostrar "Nombre (@Mención)" usando la función segura
+        p1_texto = formato_participante(p1)
+        p2_texto = formato_participante(p2)
 
         emparejamientos.append(f"• Ronda {m.get('round')}: {p1_texto} vs {p2_texto}")
 
-    # Buscar canal de emparejamientos
-    canal_emparejamientos = discord.utils.get(ctx.guild.text_channels, name="emparejamientos")
+    # 🔹 Buscar canal de emparejamientos
+    canal_emparejamientos = discord.utils.get(ctx.guild.text_channels, name="🍸-citas‐a‐ciegas")
     if not canal_emparejamientos:
-        await ctx.author.send("⚠️ No se encontró el canal `#emparejamientos`.")
-        return
-
-    # Publicar los emparejamientos
-    await canal_emparejamientos.send(
-        f"📢 **Emparejamientos de la primera ronda - Torneo `{codigo_torneo}`:**\n" +
-        "\n".join(emparejamientos)
-    )
+        await ctx.author.send("⚠️ No se encontró el canal `#🍸-citas‐a‐ciegas`.")
+    else:
+        # Publicar los emparejamientos
+        await canal_emparejamientos.send(
+            f"📢 **🍸-citas‐a‐ciegas de la primera ronda - Torneo `{codigo_torneo}`:**\n" +
+            "\n".join(emparejamientos)
+        )
    # Obtener clasificación inicial del torneo
     url_participants = f"https://api.challonge.com/v1/tournaments/{codigo_torneo}/participants.json"
 
@@ -373,29 +394,33 @@ async def iniciar_torneo_handle(ctx, codigo_torneo: str):
                     # Intentamos mostrar como mención si es un ID válido
                     try:
                         miembro = await ctx.guild.fetch_member(int(nombre))
-                        nombre_mostrado = f"(@{miembro.display_name})"
+                        nombre_mostrado = f"{miembro.display_name} ({miembro.mention})"
                     except (ValueError, discord.NotFound):
-                        nombre_mostrado = f"(@{nombre})"
+                        nombre_mostrado = f"{nombre} (no en el servidor)"
 
                     clasificacion.append((seed, nombre_mostrado))
 
                 clasificacion.sort()
 
-                # Generar tabla estilo Markdown
-                mensaje_clasificacion = f"📊 Clasificación del torneo `{codigo_torneo}`:\n\n"
-                mensaje_clasificacion += (
-                    "Rango | Participante           | G-P-E | Pts | TB%   | Buchholz | Dif\n"
-                    "------|------------------------|-------|-----|-------|----------|-----\n"
-                )
+                # Construir tabla en Markdown con tamaños fijos
+                mensaje = f"📊 **Clasificación del torneo `{codigo_torneo}`:**\n"
+                mensaje += "```"
+                mensaje += "Rango | Participante           | G-P-E | MP  | OMW%   | GW%    | OGW%\n"
+                mensaje += "------|------------------------|-------|-----|--------|--------|-------\n"
 
                 for i, (seed, nombre) in enumerate(clasificacion, 1):
-                    mensaje_clasificacion += f"{i:<5} | {nombre:<22} | 0-0-0 | 0.0 | 0.000 | 0.00000  | +0\n"
+                    gpe = "0-0-0"
+                    linea = f"{i:<5} | {nombre[:22]:<22} | {gpe:<5} | {0:<3} | {0:.3f}  | {0:.3f}  | {0:.3f}"
+                    mensaje += linea + "\n"
 
-                canal_clasificaciones = discord.utils.get(ctx.guild.text_channels, name="clasificaciones-torneos")
+                mensaje += "```"
+
+                # 🔹 Canal de destino
+                canal_clasificaciones = discord.utils.get(ctx.guild.text_channels, name="🍺-el‐ranking‐de‐la‐barra")
                 if canal_clasificaciones:
-                    await canal_clasificaciones.send(mensaje_clasificacion)
+                    await canal_clasificaciones.send(mensaje)
                 else:
-                    await ctx.author.send("⚠️ No se encontró el canal `#clasificaciones-torneos`.")
+                    await ctx.author.send("⚠️ No se encontró el canal `#🍺-el‐ranking‐de‐la‐barra`.")
             else:
                 await ctx.author.send("❌ Error al obtener la clasificación del torneo.")
                 
@@ -425,7 +450,7 @@ async def iniciar_torneo_handle(ctx, codigo_torneo: str):
                     await ctx.author.send(f"⚠️ No se pudo eliminar un mensaje de `#inscripciones`: {e}")
                     break
 
-async def actualizar_clasificacion_handle(ctx, codigo_torneo: str, canal_destino: str = "clasificaciones-torneos"):
+async def actualizar_clasificacion_handle(ctx, codigo_torneo: str):
     await borrar_mensaje_seguro(ctx)
     if not await moderador_permisos_handle(ctx):
         return
@@ -444,7 +469,7 @@ async def actualizar_clasificacion_handle(ctx, codigo_torneo: str, canal_destino
             participantes_raw = await resp.json()
 
         async with session.get(url_matches, auth=aiohttp.BasicAuth(config.CHALLONGE_USERNAME, config.CHALLONGE_API_KEY)) as resp:
-            if resp.status != 200: return await ctx.send("❌ Error al obtener emparejamientos.")
+            if resp.status != 200: return await ctx.send("❌ Error al obtener 🍸-citas‐a‐ciegas.")
             matches_raw = await resp.json()
 
     # 🔹 Inicializar jugadores
@@ -552,7 +577,7 @@ async def actualizar_clasificacion_handle(ctx, codigo_torneo: str, canal_destino
 
     mensaje += "```"
     # 🔹 Canal de destino
-    canal = discord.utils.get(ctx.guild.text_channels, name=canal_destino)
+    canal = discord.utils.get(ctx.guild.text_channels, name="🍺-el‐ranking‐de‐la‐barra")
     if not canal:
         return await ctx.send("⚠️ No se encontró el canal de clasificaciones.")
 
@@ -613,7 +638,7 @@ async def partidos_pendientes_handle(ctx, codigo_torneo: str, type: str):
         # Obtener emparejamientos
         async with session.get(url_matches, auth=aiohttp.BasicAuth(config.CHALLONGE_USERNAME, config.CHALLONGE_API_KEY)) as resp_match:
             if resp_match.status != 200:
-                await ctx.author.send("❌ Error al obtener los emparejamientos del torneo.")
+                await ctx.author.send("❌ Error al obtener las 🍸-citas‐a‐ciegas del torneo.")
                 return
             matches_raw = await resp_match.json()
 
@@ -649,17 +674,17 @@ async def partidos_pendientes_handle(ctx, codigo_torneo: str, type: str):
     pendientes.sort(key=lambda x: x[0])
 
     # Enviar mensaje general al canal de emparejamientos
-    mensaje = f"📋 **Partidos pendientes del torneo `{codigo_torneo}`:**\n"
+    mensaje = f"📋 **🍸-citas‐a‐ciegas del torneo `{codigo_torneo}`:**\n"
     for ronda, p1, p2, _, _ in pendientes:
         mensaje += f"• Ronda {ronda}: {p1} vs {p2}\n"
 
     # Canal de emparejamientos
-    canal_emparejamientos = discord.utils.get(ctx.guild.text_channels, name="emparejamientos")
+    canal_emparejamientos = discord.utils.get(ctx.guild.text_channels, name="🍸-citas‐a‐ciegas")
     if canal_emparejamientos:
         # Buscar mensajes existentes con el mismo torneo y eliminarlos
         async for msg in canal_emparejamientos.history(limit=50):
             if msg.author == ctx.guild.me and not msg.embeds:
-                if msg.content.startswith(f"📋 **Partidos pendientes del torneo `{codigo_torneo}`:**"):
+                if msg.content.startswith(f"📋 **🍸-citas‐a‐ciegas pendientes del torneo `{codigo_torneo}`:**"):
                     try:
                         await msg.delete()
                     except discord.Forbidden:
@@ -670,7 +695,7 @@ async def partidos_pendientes_handle(ctx, codigo_torneo: str, type: str):
         # Enviar nuevo mensaje
         await canal_emparejamientos.send(mensaje)
     else:
-        await ctx.author.send("⚠️ No se encontró el canal `#emparejamientos`.")
+        await ctx.author.send("⚠️ No se encontró el canal `#🍸-citas‐a‐ciegas`.")
 
     if type == 'torneos':
         # Enviar mensajes privados a los jugadores
@@ -699,7 +724,7 @@ async def partidos_pendientes_handle(ctx, codigo_torneo: str, type: str):
                     pass
 
 
-    await actualizar_clasificacion_handle(ctx, codigo_torneo, canal_destino = "clasificaciones-torneos",  from_chanel = 1)
+    await actualizar_clasificacion_handle(ctx, codigo_torneo)
 
 async def forzar_ronda_handle(ctx, codigo_torneo: str):
     await borrar_mensaje_seguro(ctx)
@@ -744,7 +769,7 @@ async def forzar_ronda_handle(ctx, codigo_torneo: str):
         # Obtener matches
         async with session.get(url_matches, auth=aiohttp.BasicAuth(config.CHALLONGE_USERNAME, config.CHALLONGE_API_KEY)) as resp_matches:
             if resp_matches.status != 200:
-                await ctx.send("❌ Error al obtener los emparejamientos del torneo.")
+                await ctx.send("❌ Error al obtener las 🍸-citas‐a‐ciegas del torneo.")
                 return
             matches_data = await resp_matches.json()
 
@@ -787,11 +812,8 @@ async def forzar_ronda_handle(ctx, codigo_torneo: str):
 
 async def finalizar_torneo_handle(ctx, codigo_torneo: str):
     canales_a_limpiar = [
-        "clasificaciones-torneos",
-        "resultados",
-        "emparejamientos",
-        "torneos-activos",
-        "agenda"
+        "🍺-quién‐se‐lleva‐la‐ronda",
+        "🍸-citas‐a‐ciegas"
     ]
 
     for nombre_canal in canales_a_limpiar:
@@ -799,31 +821,25 @@ async def finalizar_torneo_handle(ctx, codigo_torneo: str):
         if not canal:
             await ctx.send(f"⚠️ No se encontró el canal `{nombre_canal}`.")
             continue
-
         try:
-            if nombre_canal == "clasificaciones-torneos":
-                # Eliminar todo en clasificaciones
-                await canal.purge()
-            else:
-                # Eliminar solo los mensajes que contienen el código del torneo
-                def filtro(msg):
-                    return codigo_torneo in msg.content
-                await canal.purge(check=filtro)
+            def filtro(msg):
+                return codigo_torneo in msg.content
+            await canal.purge(check=filtro)
         except Exception as e:
             await ctx.send(f"⚠️ No se pudo limpiar el canal `{nombre_canal}`: {e}")
      # Enviar anuncio al canal #anuncios
-    canal_anuncios = discord.utils.get(ctx.guild.text_channels, name="anuncios-torneos")
+    canal_anuncios = discord.utils.get(ctx.guild.text_channels, name="📰-cartelera‐torneos")
     if canal_anuncios:
         try:
             await canal_anuncios.send(
                 f"📢 @everyone\n"
                 f"🏁 El torneo `{codigo_torneo}` ha finalizado. ¡Gracias por participar!\n"
-                f"Consulta la clasificación final en `#clasificaciones-torneos`."
+                f"Consulta la clasificación final en `#🍺-el‐ranking‐de‐la‐barra`."
             )
         except Exception as e:
             await ctx.send(f"⚠️ No se pudo enviar el mensaje en `#anuncios`: {e}")
 
     # Publicar clasificación final
-    await actualizar_clasificacion_handle(ctx, codigo_torneo, canal_destino="clasificacion-general",  from_chanel = 1 )
+    await actualizar_clasificacion_handle(ctx, codigo_torneo)
 
 

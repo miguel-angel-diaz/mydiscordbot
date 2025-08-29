@@ -51,7 +51,7 @@ async def publicar_eventos_semanales(bot):
 
     for guild in bot.guilds:
         canal_origen = discord.utils.get(guild.text_channels, name="partidos-agendados")
-        canal_proximas = discord.utils.get(guild.text_channels, name="proximas-partidas")
+        canal_proximas = discord.utils.get(guild.text_channels, name="🎭-cartelera‐")
         if not canal_origen or not canal_proximas:
             continue
 

@@ -63,7 +63,7 @@ async def aplicar_strike(ctx, miembro: discord.Member):
 
     await ctx.author.send(f"✅ {miembro.mention} ha recibido un **Strike**.")
     
-    canal_anuncios = discord.utils.get(ctx.guild.text_channels, name="anuncios")
+    canal_anuncios = discord.utils.get(ctx.guild.text_channels, name="📰-tablón‐")
     await canal_anuncios.send(f"⚠️ Hemos decidido que {miembro.mention} Permanezca una semana en el Hielo, la proxima vez le invitaremos a que abandone The Klub")
 
 async def aplicar_out(ctx, miembro: discord.Member):
@@ -134,7 +134,7 @@ async def aplicar_out(ctx, miembro: discord.Member):
 
     await ctx.author.send(f"✅ {miembro.mention} ha sido expulsado de la comunidad.")
     
-    canal_anuncios = discord.utils.get(ctx.guild.text_channels, name="anuncios")
+    canal_anuncios = discord.utils.get(ctx.guild.text_channels, name="📰-tablón‐")
     await canal_anuncios.send(f"⚠️ Hemos invitado a abandonar el servidor a {miembro.mention}, ya no podra volver a entrar a The Klub.")
 
 async def eliminar_mensajes(ctx, canal: discord.TextChannel = None, cantidad: int = None):
@@ -208,7 +208,7 @@ async def asignar_strike_automatico(ctx):
     except discord.Forbidden:
         await ctx.send("⚠️ No tengo permisos para asignar el rol.")
     
-    canal_anuncios = discord.utils.get(ctx.guild.text_channels, name="anuncios")
+    canal_anuncios = discord.utils.get(ctx.guild.text_channels, name="📰-tablón‐")
     await canal_anuncios.send(f"⚠️ Hemos decidido que {autor.mention} Permanezca una semana en el Hielo, la proxima vez le invitaremos a que abandone The Klub")
 
 def get_mensaje_strike():
@@ -458,7 +458,7 @@ async def nuevo_sorteo_handle(ctx, *, args: str = None):
     )
     embed.set_footer(text="¡Participa antes de que finalice el sorteo!")
 
-    canal_anuncios = discord.utils.get(ctx.guild.text_channels, name="anuncios")
+    canal_anuncios = discord.utils.get(ctx.guild.text_channels, name="📰-tablón‐")
     if canal_anuncios:
         await canal_anuncios.send(embed=embed)
     else:

@@ -47,6 +47,7 @@ from utils.watchers import cargar_tareas;
 
 import config
 import os
+import unicodedata
 import webserver
 DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
 
@@ -55,11 +56,27 @@ intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True 
 
-bot = commands.Bot(command_prefix='!', intents=intents)
+bot = commands.Bot(
+    command_prefix='!', 
+    intents=intents,
+    case_insensitive=True 
+)
+
+def normalize_string(s: str) -> str:
+    """Convierte a minúsculas y elimina acentos"""
+    s = s.lower()
+    s = ''.join(
+        c for c in unicodedata.normalize('NFD', s)
+        if unicodedata.category(c) != 'Mn'
+    )
+    return s
 
 def comando_roles_permitidos(*roles):
+    # Normalizamos los roles al definir el decorador
+    roles_normalizados = [normalize_string(r) for r in roles]
+    
     def decorator(func):
-        setattr(func, "roles_permitidos", roles)
+        setattr(func, "roles_permitidos", roles_normalizados)
         return func
     return decorator
 
@@ -91,7 +108,7 @@ async def cerrar_peticion(ctx, codigo: str = None, *, respuesta: str = None):
 
 @bot.command(name="sorteo-torneo")
 @comando_roles_permitidos("admin")
-async def sorteo_torneo(ctx, codigo_torneo: str, *, premio: str = "Premio del sorteo"):
+async def sorteo_torneo(ctx, codigo_torneo: str = None, *, premio: str = "Premio del sorteo"):
     """Realiza un sorteo entre los inscritos de un torneo - !sorteo-torneo <código_torneo> <premio>"""
     await sorteo_torneo_handle(ctx, codigo_torneo, premio)
 
@@ -102,7 +119,7 @@ async def nuevo_sorteo(ctx, *, args: str = None):
 
 @bot.command(name="realizar-sorteo")
 @comando_roles_permitidos("admin")
-async def realizar_sorteo(ctx, codigo: str):
+async def realizar_sorteo(ctx, codigo: str = None):
     await realizar_sorteo_handle(ctx, codigo.strip())
 
 #########################################################################################################
@@ -161,19 +178,19 @@ async def reportar_resultado(ctx, codigo_torneo: str = None, jugador1: discord.M
 
 @bot.command(name="modificar-resultado")
 @comando_roles_permitidos("socio", "second-chance-socio", "miembro", "second-chance-miembro")
-async def modificar_resultado(ctx, codigo=None):
+async def modificar_resultado(ctx, codigo: str = None):
     """Permite cambiar el resultado de un encuentro mientras la ronda siga en juego - !modificar-resultado"""
     await modificar_resultado_handle(ctx, codigo)
 
 @bot.command(name="partidos-pendientes")
 @comando_roles_permitidos("socio", "second-chance-socio", "miembro", "second-chance-miembro")
-async def partidos_pendientes(ctx, codigo_torneo: str, type='user'):
+async def partidos_pendientes(ctx, codigo_torneo: str = None , type='user'):
     """Muestra los partidos pendientes de esa ronda de un torneo - !partidos-pendientes <código_torneo>"""
     await partidos_pendientes_handle(ctx, codigo_torneo, type)
 
 @bot.command(name="inscribirse-sorteo")
 @comando_roles_permitidos("socio", "second-chance-socio", "miembro", "second-chance-miembro")
-async def inscribirse_sorteo(ctx, codigo: str):
+async def inscribirse_sorteo(ctx, codigo: str = None):
     await inscribirse_sorteo_handle(ctx, codigo)
 
 @bot.command(name="subir-deck")
@@ -201,20 +218,20 @@ async def new_tournament(ctx, *, args=None):
 
 @bot.command(name="iniciar-torneo")
 @comando_roles_permitidos("admin")
-async def iniciar_torneo(ctx, codigo_torneo: str):
+async def iniciar_torneo(ctx, codigo_torneo: str = None):
     """Inicia un torneo con el código proporcionado - !iniciar-torneo <código_torneo>"""
     await iniciar_torneo_handle(ctx, codigo_torneo)
 
 @bot.command(name="actualizar-clasificacion")
 @comando_roles_permitidos("admin")
-async def actualizar_clasificacion(ctx, codigo_torneo: str):
-    """Actualiza la clasificación con criterios estilo MTG y la publica en #clasificaciones-torneos - !actualizar-clasificacion <código_torneo>"""
+async def actualizar_clasificacion(ctx, codigo_torneo: str = None):
+    """Actualiza la clasificación con criterios estilo MTG y la publica en #🍺-el‐ranking‐de‐la‐barra - !actualizar-clasificacion <código_torneo>"""
     await actualizar_clasificacion_handle(ctx, codigo_torneo)
 
 
 @bot.command(name="forzar-ronda")
 @comando_roles_permitidos("admin")
-async def forzar_ronda(ctx, codigo_torneo: str):
+async def forzar_ronda(ctx, codigo_torneo: str = None):
     """Se termina la rondar actual con empate de las partidas no jugadas y se inicia la siguiente - !forzar-ronda <código_torneo>"""
     await forzar_ronda_handle(ctx, codigo_torneo)
 
