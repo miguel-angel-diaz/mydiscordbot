@@ -1593,10 +1593,10 @@ async def editar_deck_handle(ctx, codigo_torneo: str = None):
             await author.send("❌ No seleccionaste ningún torneo. Cancelando subida de deck.")
             return
 
-    ok, error = await validar_torneo_para_edicion(codigo_torneo, author)
-    if not ok:
-        await author.send(error)
-        return
+    # ok, error = await validar_torneo_para_edicion(codigo_torneo, author)
+    # if not ok:
+    #    await author.send(error)
+    #    return
 
     datos = await deck_dm_flow(ctx, author, codigo_torneo, modo="editar")
     if not datos:
