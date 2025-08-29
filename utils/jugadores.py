@@ -1467,7 +1467,8 @@ async def submitted_deck_handle(ctx, codigo_torneo: str = None):
     if ctx.guild is None:
         await author.send("❌ Este comando debe ejecutarse desde el servidor del torneo.")
         return
-
+    def dm_check(m):
+        return m.author == ctx.author and isinstance(m.channel, discord.DMChannel)
     # ✅ Pedir código del torneo si no se proporcionó
     if not codigo_torneo:
         codigo_torneo = await obtener_torneo_usuario(
@@ -1579,8 +1580,9 @@ async def editar_deck_handle(ctx, codigo_torneo: str = None):
     if ctx.guild is None:
         await author.send("❌ Este comando debe ejecutarse desde el servidor del torneo.")
         return
-
-   # ✅ Pedir código del torneo si no se proporcionó
+    def dm_check(m):
+        return m.author == ctx.author and isinstance(m.channel, discord.DMChannel)
+    # ✅ Pedir código del torneo si no se proporcionó
     if not codigo_torneo:
         codigo_torneo = await obtener_torneo_usuario(
             ctx,
