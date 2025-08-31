@@ -231,6 +231,8 @@ async def reconocer_comando_handle(bot: commands.Bot, message: discord.Message):
                 await ctx.invoke(bot.get_command(sugerido))
             else:
                 await dm.send("❌ Comando cancelado.")
+        except asyncio.TimeoutError:
+            await dm.send("⏰ Tiempo agotado. Comando cancelado automáticamente.")
         except Exception as e:
             print(f"Error en wizard: {e}")
 
