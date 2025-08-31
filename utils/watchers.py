@@ -6,22 +6,25 @@ import asyncio
 
 ultima_ejecucion_eventos = None
 ultima_ejecucion_partidos = None
-ultima_ejecucion_torneos = None
 ultima_ejecucion_torneos_vencidos = None
 
+# 🔹 Función auxiliar para esperar hasta las 10:00
+async def esperar_hasta_las_10():
+    ahora = datetime.now()
+    proxima = ahora.replace(hour=10, minute=0, second=0, microsecond=0)
 
-def cargar_tareas(bot):
-    limpiar_canal_diario.start(bot)
-    publicar_eventos_semanales.start(bot)
-    limpiar_partidos_pasados.start(bot)
-    limpiar_torneos_vencidos.start(bot)
+    if ahora >= proxima:
+        proxima += timedelta(days=1)
 
+    espera = (proxima - ahora).total_seconds()
+    await asyncio.sleep(espera)
 
-# 🔹 Limpieza diaria del canal "preguntale-a-el-barbas"
-@tasks.loop(hours=24)
+# ==============================
+# 🔹 TAREAS INDIVIDUALES
+# ==============================
+
 async def limpiar_canal_diario(bot):
-    await bot.wait_until_ready()
-    guild = discord.utils.get(bot.guilds, name="Nombre de tu servidor")
+    guild = discord.utils.get(bot.guilds, name="Nombre de tu servidor")  # cambia el nombre del server
     if not guild:
         return
 
@@ -33,16 +36,13 @@ async def limpiar_canal_diario(bot):
         async for mensaje in canal.history(limit=None):
             if not mensaje.pinned:
                 await mensaje.delete()
-                await asyncio.sleep(0.3)  # Evitar rate limits
+                await asyncio.sleep(0.3)  # evitar rate limits
     except Exception as e:
         print(f"Error al limpiar el canal: {e}")
 
 
-# 🔹 Publicar eventos semanales
-@tasks.loop(hours=24)
 async def publicar_eventos_semanales(bot):
     global ultima_ejecucion_eventos
-    await bot.wait_until_ready()
     hoy = datetime.now().date()
 
     if ultima_ejecucion_eventos == hoy:
@@ -87,7 +87,6 @@ async def publicar_eventos_semanales(bot):
         for fecha_ev, hora_ev, j1, j2 in sorted(eventos_semana):
             embed.add_field(name=f"{fecha_ev.strftime('%d/%m/%Y')} {hora_ev}", value=f"{j1} vs {j2}", inline=False)
 
-        # Revisar si ya existe un mensaje de esta semana
         mensaje_existente = None
         async for msg in canal_proximas.history(limit=50):
             if msg.author == guild.me and msg.embeds:
@@ -101,11 +100,8 @@ async def publicar_eventos_semanales(bot):
             await canal_proximas.send(embed=embed)
 
 
-# 🔹 Limpiar partidos pasados
-@tasks.loop(hours=24)
 async def limpiar_partidos_pasados(bot):
     global ultima_ejecucion_partidos
-    await bot.wait_until_ready()
     hoy = datetime.now().date()
 
     if ultima_ejecucion_partidos == hoy:
@@ -140,13 +136,11 @@ async def limpiar_partidos_pasados(bot):
                 except Exception as e:
                     print(f"Error borrando mensaje: {e}")
 
-@tasks.loop(hours=24)
+
 async def limpiar_torneos_vencidos(bot):
     global ultima_ejecucion_torneos_vencidos
-    await bot.wait_until_ready()
     hoy = datetime.now().date()
 
-    # Evitar ejecución repetida en el mismo día
     if ultima_ejecucion_torneos_vencidos == hoy:
         return
     ultima_ejecucion_torneos_vencidos = hoy
@@ -158,7 +152,7 @@ async def limpiar_torneos_vencidos(bot):
 
         async for mensaje in canal.history(limit=200):
             if mensaje.pinned:
-                continue  # 🔹 No borrar mensajes fijados
+                continue
 
             for linea in mensaje.content.splitlines():
                 if "Inicio" in linea:
@@ -174,16 +168,36 @@ async def limpiar_torneos_vencidos(bot):
                         print(f"⚠️ Error parseando '{fecha_str}' ({e})")
                         continue
 
-                    # 🔹 Verificar si está vencido hace más de 2 días
                     limite = hoy - timedelta(days=2)
 
                     if fecha_torneo <= limite:
                         try:
                             await mensaje.delete()
-                            await asyncio.sleep(0.3)  # evitar rate limits
+                            await asyncio.sleep(0.3)
                         except discord.Forbidden:
                             print(f"🚫 No tengo permisos para borrar en {canal.name} ({guild.name})")
                         except discord.NotFound:
                             print("⚠️ Mensaje ya borrado")
                         except Exception as e:
                             print(f"🔥 Error borrando mensaje: {e}")
+
+
+# ==============================
+# 🔹 LOOP PRINCIPAL A LAS 10:00
+# ==============================
+@tasks.loop(hours=24)
+async def ejecutar_tareas(bot):
+    await bot.wait_until_ready()
+
+    # Esperar hasta las 10:00 cada día
+    await esperar_hasta_las_10()
+
+    # Ejecutar todas las tareas
+    await limpiar_canal_diario(bot)
+    await publicar_eventos_semanales(bot)
+    await limpiar_partidos_pasados(bot)
+    await limpiar_torneos_vencidos(bot)
+
+# 🔹 Arrancar el loop
+def cargar_tareas(bot):
+    ejecutar_tareas.start(bot)
