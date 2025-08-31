@@ -40,7 +40,8 @@ from utils.events import (
   registrar_mensaje_borrado_handle, 
   bienvenida_y_comandos_handle, 
   evento_socio_handle, 
-  usuario_salio_handle
+  usuario_salio_handle,
+  reconocer_comando_handle
 )
 
 from utils.watchers import cargar_tareas;
@@ -279,8 +280,12 @@ async def on_message_delete(message):
 
 @bot.event
 async def on_message(message: discord.Message):
+    if message.author.bot:
+        return
     await bienvenida_y_comandos_handle(message)
-    await bot.process_commands(message)  # Esto es importante para que los comandos funcionen
+    manejado = await reconocer_comando_handle(bot, message)
+    if not manejado:
+        await bot.process_commands(message)
 
 @bot.event
 async def on_member_update(before, after):
