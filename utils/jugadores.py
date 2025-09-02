@@ -1481,10 +1481,10 @@ async def submitted_deck_handle(ctx, codigo_torneo: str = None):
             return
 
     # ✅ Comprobar si el torneo permite subir decks
-    ok, error = await validar_torneo_para_edicion(codigo_torneo, author)
-    if not ok:
-        await author.send(error)
-        return
+    # ok, error = await validar_torneo_para_edicion(codigo_torneo, author)
+    # if not ok:
+    #     await author.send(error)
+    #     return
 
     # ✅ Comprobar si ya hay un deck subido
     codigo_deck = f"{codigo_torneo}_{author.id}"

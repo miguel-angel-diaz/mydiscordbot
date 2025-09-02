@@ -6,7 +6,7 @@ import aiohttp
 import random
 import config
 
-from utils.commons import borrar_mensaje_seguro, validar_canal_correcto 
+from utils.commons import borrar_mensaje_seguro, validar_canal_correcto, buscar_usuario_en_servidor
 
 async def aplicar_strike(ctx, miembro: discord.Member):
      # Intentar eliminar el mensaje del canal público

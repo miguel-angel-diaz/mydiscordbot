@@ -182,6 +182,60 @@ async def bienvenida_y_comandos_handle(message: discord.Message):
         embed_registro.add_field(name="Mensaje de presentación", value=message.content[:1000], inline=False)
 
         await canal_registro.send(embed=embed_registro)
+        
+async def reconocer_comando_handle(bot: commands.Bot, message: discord.Message):
+    if not message.content.startswith("!"):
+        return False  # No es comando, seguimos
+
+    comandos_alias = {
+        "mis comandos": "mis-comandos",
+        "ver inscritos": "ver-inscritos",
+        "reportar resultado": "reportar-resultado",
+        "modificar resultado": "modificar-resultado",
+        "partidos pendientes": "partidos-pendientes",
+        "inscribirse sorteo": "inscribirse-sorteo",
+        "subir deck": "subir-deck",
+        "editar deck": "editar-deck",
+        "agendar partida": "agendar-partida",
+        "modificar agenda": "modificar-agenda",
+        "eventos hoy": "eventos-hoy",
+        "nueva peticion": "nueva-peticion"
+    }
+
+    comando_texto = message.content[1:].lower().strip()
+
+    if comando_texto in comandos_alias:
+        sugerido = comandos_alias[comando_texto]
+
+        try:
+            dm = await message.author.create_dm()
+            embed = discord.Embed(
+                title="⚡ He detectado tu comando",
+                description=f"¿Querías usar `!{sugerido}`? (responde con **sí** o **no**)",
+                color=0x00ffcc
+            )
+            await dm.send(embed=embed)
+
+            def check(m):
+                return (
+                    m.author == message.author
+                    and m.channel == dm
+                    and m.content.lower() in ["sí", "si", "no"]
+                )
+
+            respuesta = await bot.wait_for("message", timeout=30.0, check=check)
+
+            if respuesta.content.lower() in ["sí", "si"]:
+                # Crear contexto y ejecutar comando sin mutar el mensaje original
+                ctx = await bot.get_context(message)
+                await ctx.invoke(bot.get_command(sugerido))
+            else:
+                await dm.send("❌ Comando cancelado.")
+        except Exception as e:
+            print(f"Error en wizard: {e}")
+
+        return True  # Indicamos que el mensaje fue manejado
+    return False
 
 async def evento_socio_handle(before: discord.Member, after: discord.Member):
     # Nombre del rol que quieres detectar
