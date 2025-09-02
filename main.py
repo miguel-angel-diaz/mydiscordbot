@@ -9,7 +9,8 @@ from utils.admin import (
   sorteo_torneo_handle, 
   nuevo_sorteo_handle, 
   realizar_sorteo_handle,
-  listar_torneos_handle
+  listar_torneos_handle,
+  nuevo_comunicado_handle
 )
 
 from utils.jugadores import (
@@ -127,6 +128,13 @@ async def nuevo_sorteo(ctx, *, args: str = None):
 @comando_roles_permitidos("admin")
 async def realizar_sorteo(ctx, codigo: str = None):
     await realizar_sorteo_handle(ctx, codigo.strip())
+
+@bot.command(name="nuevo-comunicado",
+    aliases=["nuevo_comunicado"])
+@comando_roles_permitidos("admin")
+async def forzar_ronda(ctx, mensaje: str = None):
+    """Se termina la rondar actual con empate de las partidas no jugadas y se inicia la siguiente - !forzar-ronda <código_torneo>"""
+    await nuevo_comunicado_handle(ctx, mensaje)
 
 #########################################################################################################
 
@@ -296,8 +304,8 @@ async def on_member_remove(member: discord.Member):
     await usuario_salio_handle(bot, member)
     
     
-webserver.keep_alive()  
-bot.run(DISCORD_TOKEN)
+# webserver.keep_alive()  
+# bot.run(DISCORD_TOKEN)
 
-# bot.run(config.TOKEN)
+bot.run(config.TOKEN)
 

@@ -67,9 +67,11 @@ def buscar_usuario_en_servidor(guild, nombre_busqueda: str):
 
 async def obtener_torneo_usuario(ctx, mensaje_inicial: str = None, timeout: int = 90):
     """
-    Devuelve el código de torneo elegido por el usuario.
-    Si no está en ningún torneo o hay error → devuelve None.
+    Devuelve el código (tournament url/slug) del torneo elegido por el usuario.
+    Muestra TODOS los torneos devueltos por la API de Challonge.
+    Retorna None en caso de error / cancelación.
     """
+    # 1) Mensaje inicial opcional
     if mensaje_inicial:
         try:
             await ctx.author.send(mensaje_inicial)
@@ -77,8 +79,8 @@ async def obtener_torneo_usuario(ctx, mensaje_inicial: str = None, timeout: int 
             await ctx.send("❌ No puedo enviarte mensajes privados. Activa los DMs para continuar.")
             return None
 
+    # 2) Pedir la lista de torneos (state=all)
     url_torneos = "https://api.challonge.com/v1/tournaments.json?state=all"
-
     async with aiohttp.ClientSession() as session:
         async with session.get(url_torneos, auth=aiohttp.BasicAuth(config.CHALLONGE_USERNAME, config.CHALLONGE_API_KEY)) as resp:
             if resp.status != 200:
@@ -86,38 +88,49 @@ async def obtener_torneo_usuario(ctx, mensaje_inicial: str = None, timeout: int 
                 return None
             torneos_raw = await resp.json()
 
-        torneos_usuario = []
-        for t in torneos_raw:
-            torneo = t["tournament"]
+    # 3) Construir lista (tid = torneo['url'] preferido, si no existe usar id)
+    torneos = []
+    for entry in torneos_raw:
+        t = entry.get("tournament", {})
+        tid = t.get("url") or str(t.get("id"))
+        nombre = t.get("name") or "(sin nombre)"
+        torneos.append((tid, nombre))
 
-            url_participants = f"https://api.challonge.com/v1/tournaments/{torneo['id']}/participants.json"
-            async with session.get(url_participants, auth=aiohttp.BasicAuth(config.CHALLONGE_USERNAME, config.CHALLONGE_API_KEY)) as resp_part:
-                if resp_part.status != 200:
-                    continue
-                participantes = await resp_part.json()
-
-            for p in participantes:
-                participante = p["participant"]
-                if participante["name"] in [str(ctx.author.id), ctx.author.display_name]:
-                    torneos_usuario.append((torneo["url"], torneo["name"]))  # <-- Aquí usamos el tournamentId legible
-                    break
-
-    if not torneos_usuario:
-        await ctx.author.send("📭 No estás inscrito en ningún torneo.")
+    if not torneos:
+        await ctx.author.send("📭 No hay torneos disponibles en Challonge.")
         return None
 
-    # 🔹 Emojis numerados del 1️⃣ al 20️⃣
-    numeros_emoji = ["1️⃣","2️⃣","3️⃣","4️⃣","5️⃣","6️⃣","7️⃣","8️⃣","9️⃣","🔟",
-                     "1️⃣1️⃣","1️⃣2️⃣","1️⃣3️⃣","1️⃣4️⃣","1️⃣5️⃣","1️⃣6️⃣","1️⃣7️⃣","1️⃣8️⃣","1️⃣9️⃣","2️⃣0️⃣"]
+    # 4) Emojis numerados (hasta 20)
+    numeros_emoji = [
+        "1️⃣","2️⃣","3️⃣","4️⃣","5️⃣","6️⃣","7️⃣","8️⃣","9️⃣","🔟",
+        "1️⃣1️⃣","1️⃣2️⃣","1️⃣3️⃣","1️⃣4️⃣","1️⃣5️⃣","1️⃣6️⃣","1️⃣7️⃣","1️⃣8️⃣","1️⃣9️⃣","2️⃣0️⃣"
+    ]
 
-    # Mostrar lista de torneos
-    mensaje_lista = "📋 Estás inscrito en estos torneos:\n"
-    for idx, (tid, nombre) in enumerate(torneos_usuario, 0):
-        emoji = numeros_emoji[idx] if idx < len(numeros_emoji) else f"{idx+1}."
-        mensaje_lista += f"{emoji} `{tid}` → {nombre}\n"
-    mensaje_lista += "\nResponde con el **número** del torneo que quieras usar."
+    # 5) Enviar la lista por DM en trozos de 20 para no pasarnos del tamaño
+    chunk_size = 20
+    total = len(torneos)
+    header_base = f"📋 Se han encontrado **{total}** torneos disponibles.\n"
+    for start in range(0, total, chunk_size):
+        chunk = torneos[start:start + chunk_size]
+        texto = header_base if start == 0 else ""
+        for idx, (tid, nombre) in enumerate(chunk, start=start):
+            emoji = numeros_emoji[idx] if idx < len(numeros_emoji) else f"{idx+1}."
+            texto += f"{emoji} `{tid}` → {nombre}\n"
+        # Indicar índice global cuando no haya emoji (por si hay >20)
+        if total > len(numeros_emoji):
+            texto += f"\n(Selecciona el número del torneo: 1 - {total})"
+        try:
+            await ctx.author.send(texto)
+        except discord.Forbidden:
+            await ctx.send("❌ No puedo enviarte mensajes privados. Activa los DMs para continuar.")
+            return None
 
-    await ctx.author.send(mensaje_lista)
+    # 6) Pedir selección por número
+    try:
+        await ctx.author.send(f"✏️ Responde con el **número** del torneo que quieras usar (1 - {total}). Tienes {timeout} segundos.")
+    except discord.Forbidden:
+        await ctx.send("❌ No puedo enviarte mensajes privados. Activa los DMs para continuar.")
+        return None
 
     def dm_check(m):
         return m.author == ctx.author and isinstance(m.channel, discord.DMChannel)
@@ -125,11 +138,13 @@ async def obtener_torneo_usuario(ctx, mensaje_inicial: str = None, timeout: int 
     try:
         respuesta = await ctx.bot.wait_for("message", check=dm_check, timeout=timeout)
         seleccion = int(respuesta.content.strip())
-        if seleccion < 1 or seleccion > len(torneos_usuario):
-            raise IndexError
-        return torneos_usuario[seleccion - 1][0]
-    except (ValueError, IndexError):
-        await ctx.author.send("❌ Opción no válida. Cancelo la operación.")
+        if seleccion < 1 or seleccion > total:
+            await ctx.author.send("❌ Opción no válida. Cancelo la operación.")
+            return None
+        elegido = torneos[seleccion - 1][0]  # devuelve el tournament url/slug
+        return elegido
+    except ValueError:
+        await ctx.author.send("❌ Debes responder con un número válido. Cancelo la operación.")
         return None
     except asyncio.TimeoutError:
         await ctx.author.send("⏰ Tiempo agotado. Intenta de nuevo.")

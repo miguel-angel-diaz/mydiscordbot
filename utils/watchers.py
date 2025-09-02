@@ -1,61 +1,97 @@
+# tareas_diarias.py
 from discord.ext import tasks, commands
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date, time as dtime
 import discord
 import re
 import asyncio
 
-ultima_ejecucion_eventos = None
-ultima_ejecucion_partidos = None
-ultima_ejecucion_torneos_vencidos = None
-
-# 🔹 Función auxiliar para esperar hasta las 10:00
-async def esperar_hasta_las_10():
-    ahora = datetime.now()
-    proxima = ahora.replace(hour=10, minute=0, second=0, microsecond=0)
-
-    if ahora >= proxima:
-        proxima += timedelta(days=1)
-
-    espera = (proxima - ahora).total_seconds()
-    await asyncio.sleep(espera)
+try:
+    # Ajusta a tu zona horaria si quieres control exacto
+    from zoneinfo import ZoneInfo
+    TZ = ZoneInfo("Europe/Madrid")
+except Exception:
+    TZ = None  # usa hora local del sistema
 
 # ==============================
-# 🔹 TAREAS INDIVIDUALES
+#   ESTADO / GUARDAS DIARIAS
 # ==============================
+ultima_ejecucion_eventos: date | None = None
+ultima_ejecucion_partidos: date | None = None
+ultima_ejecucion_torneos_vencidos: date | None = None
+ultima_ejecucion_canal_diario: date | None = None
+ultima_ejecucion_global: date | None = None  # guarda global para el disparo único
 
-async def limpiar_canal_diario(bot):
-    guild = discord.utils.get(bot.guilds, name="Nombre de tu servidor")  # cambia el nombre del server
+_scheduler_started = False  # evitar dobles inicios
+
+# ==============================
+#   UTILIDADES
+# ==============================
+def now():
+    return datetime.now(TZ) if TZ else datetime.now()
+
+def hoy():
+    return now().date()
+
+def log(msg: str):
+    print(f"[TAREAS {now().strftime('%Y-%m-%d %H:%M:%S')}] {msg}")
+
+async def contar_historial(canal: discord.TextChannel, limite=None):
+    """Itera para contar sin borrar: útil para traza previa."""
+    n = 0
+    async for _ in canal.history(limit=limite):
+        n += 1
+    return n
+
+# ==============================
+#   TAREAS INDIVIDUALES
+# ==============================
+async def limpiar_canal_diario(bot: commands.Bot):
+    global ultima_ejecucion_canal_diario
+    if ultima_ejecucion_canal_diario == hoy():
+        return
+    
+    guild = discord.utils.get(bot.guilds, name="The Klub")  # <-- cámbialo
     if not guild:
+      
         return
 
     canal = discord.utils.get(guild.text_channels, name="preguntale-a-el-barbas")
     if not canal:
+      
         return
 
+    borrados = 0
+    vistos = 0
     try:
         async for mensaje in canal.history(limit=None):
+            vistos += 1
             if not mensaje.pinned:
-                await mensaje.delete()
-                await asyncio.sleep(0.3)  # evitar rate limits
+                try:
+                    await mensaje.delete()
+                    borrados += 1
+                    await asyncio.sleep(0.3)  # evitar rate limits
+                except Exception as e:
+                    log(f"limpiar_canal_diario: error borrando mensaje {mensaje.id}: {e}")
+        ultima_ejecucion_canal_diario = hoy()
     except Exception as e:
-        print(f"Error al limpiar el canal: {e}")
+        log(f"limpiar_canal_diario: error general: {e}")
 
-
-async def publicar_eventos_semanales(bot):
+async def publicar_eventos_semanales(bot: commands.Bot):
     global ultima_ejecucion_eventos
-    hoy = datetime.now().date()
-
-    if ultima_ejecucion_eventos == hoy:
+    if ultima_ejecucion_eventos == hoy():
+        
         return
-    ultima_ejecucion_eventos = hoy
+
+    dia_hoy = hoy()
+    ejecutados_guilds = 0
 
     for guild in bot.guilds:
         canal_origen = discord.utils.get(guild.text_channels, name="partidos-agendados")
-        canal_proximas = discord.utils.get(guild.text_channels, name="🎭-cartelera‐")
+        canal_proximas = discord.utils.get(guild.text_channels, name="🎭-cartelera‐proximas-partidas")
         if not canal_origen or not canal_proximas:
             continue
 
-        inicio_semana = hoy - timedelta(days=hoy.weekday())
+        inicio_semana = dia_hoy - timedelta(days=dia_hoy.weekday())
         fin_semana = inicio_semana + timedelta(days=6)
 
         eventos_semana = []
@@ -63,7 +99,7 @@ async def publicar_eventos_semanales(bot):
             r"\[EVENTO\]\s+(\d{2}/\d{2}/\d{4})\s+(\d{2}:\d{2})\s+\|\s+(.+?)\s+vs\s+(.+?)\s+\|"
         )
 
-        async for mensaje in canal_origen.history(limit=200):
+        async for mensaje in canal_origen.history(limit=300):
             if not mensaje.content.startswith("📅 [EVENTO]"):
                 continue
             match = patron.search(mensaje.content)
@@ -87,117 +123,145 @@ async def publicar_eventos_semanales(bot):
         for fecha_ev, hora_ev, j1, j2 in sorted(eventos_semana):
             embed.add_field(name=f"{fecha_ev.strftime('%d/%m/%Y')} {hora_ev}", value=f"{j1} vs {j2}", inline=False)
 
+        # Buscar si ya hay mensaje del bot para esta semana
         mensaje_existente = None
         async for msg in canal_proximas.history(limit=50):
             if msg.author == guild.me and msg.embeds:
-                if msg.embeds[0].title == "📅 Partidas programadas esta semana":
+                emb = msg.embeds[0]
+                if emb.title == "📅 Partidas programadas esta semana":
                     mensaje_existente = msg
                     break
 
         if mensaje_existente:
             await mensaje_existente.edit(embed=embed)
+            
         else:
             await canal_proximas.send(embed=embed)
+            
+        ejecutados_guilds += 1
 
+    if ejecutados_guilds > 0:
+        ultima_ejecucion_eventos = hoy()
 
-async def limpiar_partidos_pasados(bot):
+async def limpiar_partidos_pasados(bot: commands.Bot):
     global ultima_ejecucion_partidos
-    hoy = datetime.now().date()
-
-    if ultima_ejecucion_partidos == hoy:
+    if ultima_ejecucion_partidos == hoy():
         return
-    ultima_ejecucion_partidos = hoy
 
+    total_borrados = 0
     for guild in bot.guilds:
         canal_partidos = discord.utils.get(guild.text_channels, name="partidos-agendados")
         if not canal_partidos:
+           
             continue
 
         patron_fecha = re.compile(r"\[EVENTO\]\s+(\d{2}/\d{2}/\d{4})")
+        borrados_guild = 0
 
-        async for mensaje in canal_partidos.history(limit=200):
+        async for mensaje in canal_partidos.history(limit=300):
             match = patron_fecha.search(mensaje.content)
             if not match:
                 continue
-
             fecha_str = match.group(1)
             try:
                 fecha_mensaje = datetime.strptime(fecha_str, "%d/%m/%Y").date()
             except ValueError:
                 continue
 
-            if fecha_mensaje < hoy:
+            if fecha_mensaje < hoy():
                 try:
                     await mensaje.delete()
+                    borrados_guild += 1
+                    await asyncio.sleep(0.3)
                 except discord.Forbidden:
-                    print(f"No tengo permisos para borrar mensaje en {canal_partidos.name} del servidor {guild.name}")
+                    log(f"limpiar_partidos_pasados: sin permisos en {canal_partidos.name} ({guild.name})")
                 except discord.NotFound:
                     pass
                 except Exception as e:
-                    print(f"Error borrando mensaje: {e}")
+                    log(f"limpiar_partidos_pasados: error en {guild.name}: {e}")
 
+       
+        total_borrados += borrados_guild
+    ultima_ejecucion_partidos = hoy()
 
-async def limpiar_torneos_vencidos(bot):
+async def limpiar_torneos_vencidos(bot: commands.Bot):
     global ultima_ejecucion_torneos_vencidos
-    hoy = datetime.now().date()
-
-    if ultima_ejecucion_torneos_vencidos == hoy:
+    if ultima_ejecucion_torneos_vencidos == hoy():
         return
-    ultima_ejecucion_torneos_vencidos = hoy
 
+    total_borrados = 0
     for guild in bot.guilds:
         canal = discord.utils.get(guild.text_channels, name="torneos-activos")
         if not canal:
             continue
 
-        async for mensaje in canal.history(limit=200):
+        borrados_guild = 0
+
+        async for mensaje in canal.history(limit=300):
             if mensaje.pinned:
                 continue
 
             for linea in mensaje.content.splitlines():
-                if "Inicio" in linea:
-                    match = re.search(r"\d{2}/\d{2}/\d{4}", linea)
-                    if not match:
-                        continue
+                if "Inicio" not in linea:
+                    continue
 
-                    fecha_str = match.group()
+                match = re.search(r"\d{2}/\d{2}/\d{4}", linea)
+                if not match:
+                    continue
 
+                fecha_str = match.group()
+                try:
+                    fecha_torneo = datetime.strptime(fecha_str, "%d/%m/%Y").date()
+                except ValueError:
+                    continue
+
+                limite = hoy() - timedelta(days=2)
+                if fecha_torneo <= limite:
                     try:
-                        fecha_torneo = datetime.strptime(fecha_str, "%d/%m/%Y").date()
-                    except ValueError as e:
-                        print(f"⚠️ Error parseando '{fecha_str}' ({e})")
-                        continue
+                        await mensaje.delete()
+                        borrados_guild += 1
+                        await asyncio.sleep(0.3)
+                    except (discord.Forbidden, discord.NotFound):
+                        pass
+                    except Exception:
+                        pass
+                    break  # ya no necesitamos mirar más líneas de este mensaje
 
-                    limite = hoy - timedelta(days=2)
-
-                    if fecha_torneo <= limite:
-                        try:
-                            await mensaje.delete()
-                            await asyncio.sleep(0.3)
-                        except discord.Forbidden:
-                            print(f"🚫 No tengo permisos para borrar en {canal.name} ({guild.name})")
-                        except discord.NotFound:
-                            print("⚠️ Mensaje ya borrado")
-                        except Exception as e:
-                            print(f"🔥 Error borrando mensaje: {e}")
-
+        total_borrados += borrados_guild
+    ultima_ejecucion_torneos_vencidos = hoy()
 
 # ==============================
-# 🔹 LOOP PRINCIPAL A LAS 10:00
+#   LOOP PRINCIPAL: 10:15
 # ==============================
-@tasks.loop(hours=24)
-async def ejecutar_tareas(bot):
+TARGET_HOUR = 10
+TARGET_MINUTE = 15
+
+@tasks.loop(minutes=1)
+async def ejecutar_tareas(bot: commands.Bot):
+    """
+    Corre cada minuto, pero sólo ejecuta las tareas cuando
+    son las 10:15 y aún no se han ejecutado hoy.
+    """
     await bot.wait_until_ready()
+    ahora = now()
+    if ahora.hour == TARGET_HOUR and ahora.minute == TARGET_MINUTE:
+        global ultima_ejecucion_global
+        if ultima_ejecucion_global == hoy():
+            return
 
-    # Esperar hasta las 10:00 cada día
-    await esperar_hasta_las_10()
+        await limpiar_canal_diario(bot)
+        await publicar_eventos_semanales(bot)
+        await limpiar_partidos_pasados(bot)
+        await limpiar_torneos_vencidos(bot)
+        ultima_ejecucion_global = hoy()
 
-    # Ejecutar todas las tareas
-    await limpiar_canal_diario(bot)
-    await publicar_eventos_semanales(bot)
-    await limpiar_partidos_pasados(bot)
-    await limpiar_torneos_vencidos(bot)
-
-# 🔹 Arrancar el loop
-def cargar_tareas(bot):
+def cargar_tareas(bot: commands.Bot):
+    """
+    Llamar una sola vez (ej. on_ready).
+    Arranca el loop cada minuto con guardas anti-doble-ejecución.
+    """
+    global _scheduler_started
+    if _scheduler_started:
+        return
     ejecutar_tareas.start(bot)
+    _scheduler_started = True

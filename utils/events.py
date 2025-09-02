@@ -1,5 +1,6 @@
 import discord
 from discord.ext import commands
+import asyncio
 import config
 
 async def registrar_mensaje_borrado_handle(message: discord.Message):
@@ -231,6 +232,8 @@ async def reconocer_comando_handle(bot: commands.Bot, message: discord.Message):
                 await ctx.invoke(bot.get_command(sugerido))
             else:
                 await dm.send("❌ Comando cancelado.")
+        except asyncio.TimeoutError:
+            await dm.send("⏰ Tiempo agotado. Comando cancelado automáticamente.")
         except Exception as e:
             print(f"Error en wizard: {e}")
 
@@ -284,7 +287,7 @@ async def usuario_salio_handle(bot: commands.Bot, member: discord.Member):
         await canal_info.send(embed=embed)
 
     # Canal de anuncios
-    canal_anuncios = discord.utils.get(member.guild.text_channels, name="📰-tablón‐")
+    canal_anuncios = discord.utils.get(member.guild.text_channels, name="📰-tablon-anuncios")
     if canal_anuncios:
         await canal_anuncios.send(f"📢 El usuario **{member.display_name}** ha abandonado **The Klub**.")
 

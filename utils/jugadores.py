@@ -214,7 +214,7 @@ async def modificar_partida_agendada_handle(ctx):
 
 async def actualizar_proximas_partidas(ctx):
     canal_destino = discord.utils.get(ctx.guild.text_channels, name="partidos-agendados")
-    canal_proximas = discord.utils.get(ctx.guild.text_channels, name="🎭-cartelera‐")
+    canal_proximas = discord.utils.get(ctx.guild.text_channels, name="🎭-cartelera‐proximas-partidas")
     if not canal_destino or not canal_proximas:
         return
 
@@ -1483,8 +1483,8 @@ async def submitted_deck_handle(ctx, codigo_torneo: str = None):
     # ✅ Comprobar si el torneo permite subir decks
     # ok, error = await validar_torneo_para_edicion(codigo_torneo, author)
     # if not ok:
-    #     await author.send(error)
-    #     return
+    #    await author.send(error)
+    #    return
 
     # ✅ Comprobar si ya hay un deck subido
     codigo_deck = f"{codigo_torneo}_{author.id}"
@@ -1593,10 +1593,10 @@ async def editar_deck_handle(ctx, codigo_torneo: str = None):
             await author.send("❌ No seleccionaste ningún torneo. Cancelando subida de deck.")
             return
 
-    ok, error = await validar_torneo_para_edicion(codigo_torneo, author)
-    if not ok:
-        await author.send(error)
-        return
+    # ok, error = await validar_torneo_para_edicion(codigo_torneo, author)
+    # if not ok:
+    #    await author.send(error)
+    #    return
 
     datos = await deck_dm_flow(ctx, author, codigo_torneo, modo="editar")
     if not datos:

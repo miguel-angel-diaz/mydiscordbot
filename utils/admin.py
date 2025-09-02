@@ -63,7 +63,7 @@ async def aplicar_strike(ctx, miembro: discord.Member):
 
     await ctx.author.send(f"✅ {miembro.mention} ha recibido un **Strike**.")
     
-    canal_anuncios = discord.utils.get(ctx.guild.text_channels, name="📰-tablón‐")
+    canal_anuncios = discord.utils.get(ctx.guild.text_channels, name="📰-tablon-anuncios")
     await canal_anuncios.send(f"⚠️ Hemos decidido que {miembro.mention} Permanezca una semana en el Hielo, la proxima vez le invitaremos a que abandone The Klub")
 
 async def aplicar_out(ctx, miembro: discord.Member):
@@ -134,7 +134,7 @@ async def aplicar_out(ctx, miembro: discord.Member):
 
     await ctx.author.send(f"✅ {miembro.mention} ha sido expulsado de la comunidad.")
     
-    canal_anuncios = discord.utils.get(ctx.guild.text_channels, name="📰-tablón‐")
+    canal_anuncios = discord.utils.get(ctx.guild.text_channels, name="📰-tablon-anuncios")
     await canal_anuncios.send(f"⚠️ Hemos invitado a abandonar el servidor a {miembro.mention}, ya no podra volver a entrar a The Klub.")
 
 async def eliminar_mensajes(ctx, canal: discord.TextChannel = None, cantidad: int = None):
@@ -208,7 +208,7 @@ async def asignar_strike_automatico(ctx):
     except discord.Forbidden:
         await ctx.send("⚠️ No tengo permisos para asignar el rol.")
     
-    canal_anuncios = discord.utils.get(ctx.guild.text_channels, name="📰-tablón‐")
+    canal_anuncios = discord.utils.get(ctx.guild.text_channels, name="📰-tablon-anuncios")
     await canal_anuncios.send(f"⚠️ Hemos decidido que {autor.mention} Permanezca una semana en el Hielo, la proxima vez le invitaremos a que abandone The Klub")
 
 def get_mensaje_strike():
@@ -458,7 +458,7 @@ async def nuevo_sorteo_handle(ctx, *, args: str = None):
     )
     embed.set_footer(text="¡Participa antes de que finalice el sorteo!")
 
-    canal_anuncios = discord.utils.get(ctx.guild.text_channels, name="📰-tablón‐")
+    canal_anuncios = discord.utils.get(ctx.guild.text_channels, name="📰-tablon-anuncios")
     if canal_anuncios:
         await canal_anuncios.send(embed=embed)
     else:
@@ -639,3 +639,59 @@ async def listar_torneos_handle(ctx):
                 await ctx.author.send(f"✅ Torneo `{torneo_elegido['name']}` eliminado correctamente.")
             else:
                 await ctx.author.send(f"❌ Error al eliminar el torneo. Status: {resp.status}")
+                
+async def nuevo_comunicado_handle(ctx, mensaje: str = None):
+    await borrar_mensaje_seguro(ctx)
+    if not await moderador_permisos_handle(ctx):
+        return
+    canal = discord.utils.get(ctx.guild.text_channels, name="📰-tablon‐anuncios")
+
+    if canal is None:
+        await ctx.send("❌ No encontré el canal **📰-tablon‐anuncios**.")
+        return
+
+    # Si no hay mensaje, pedimos por privado
+    if not mensaje:
+         
+        try:
+            await ctx.author.send(
+                "📩 No escribiste el Mensaje para el canal 📰-tablon‐anuncios.\n"
+                "Por favor, respóndeme con el mensaje que quieras transmitir del que quieres hacer el sorteo. Tienes 60 segundos."
+            )
+
+            def dm_check(m):
+                return m.author == ctx.author and isinstance(m.channel, discord.DMChannel)
+
+            respuesta = await ctx.bot.wait_for("message", check=dm_check, timeout=60.0)
+            mensaje = respuesta.content.strip()
+
+            if not mensaje:
+                await ctx.author.send("❌ El mensaje no puede estar vacío. Cancelo la inscripción.")
+                return
+
+        except asyncio.TimeoutError:
+            await ctx.author.send("⏰ Tiempo agotado. Intenta de nuevo con `!nuevo_comunicado mensaje`.")
+            return
+        except discord.Forbidden:
+            await ctx.send("❌ No puedo enviarte mensajes privados. Activa los DMs para continuar.")
+            return
+
+        
+        
+        
+        
+        try:
+            await ctx.author.send("⚠️ Debes escribir un mensaje después de `!nuevo_comunicado`. Ejemplo:\n`!comunicado Torneo mañana a las 20:00`")
+        except discord.Forbidden:
+            await ctx.send("⚠️ No pude mandarte mensaje privado. Asegúrate de tenerlos habilitados.")
+        return
+
+    # Enviar el comunicado al canal con @everyone
+    embed = discord.Embed(
+        title="📢 Comunicado",
+        description=mensaje,
+        color=0x00ffcc
+    )
+
+    await canal.send("@everyone", embed=embed)
+    await ctx.send(f"✅ Comunicado enviado a {canal.mention}")

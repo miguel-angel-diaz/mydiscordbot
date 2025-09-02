@@ -196,7 +196,7 @@ async def iniciar_torneo_handle(ctx, codigo_torneo: str):
             "📩 No escribiste el código del torneo.\n"
             "Por favor, selecciona el torneo en el que deseas iniciar."
         )
-        codigo_torneo = await obtener_torneo_usuario(ctx, mensaje_inicial=mensaje_inicial, timeout=60)
+        codigo_torneo = await obtener_torneo_usuario(ctx, mensaje_inicial=mensaje_inicial)
         if not codigo_torneo:
             return  # Usuario canceló o no está en ningún torneo
     # 4️⃣ Revisar qué jugadores han subido deck
