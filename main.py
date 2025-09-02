@@ -304,8 +304,8 @@ async def on_member_remove(member: discord.Member):
     await usuario_salio_handle(bot, member)
     
     
-# webserver.keep_alive()  
-# bot.run(DISCORD_TOKEN)
+webserver.keep_alive()  
+bot.run(DISCORD_TOKEN)
 
-bot.run(config.TOKEN)
+# bot.run(config.TOKEN)
 
