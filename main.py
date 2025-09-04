@@ -42,7 +42,8 @@ from utils.events import (
   bienvenida_y_comandos_handle, 
   evento_socio_handle, 
   usuario_salio_handle,
-  reconocer_comando_handle
+  reconocer_comando_handle,
+  log_comando_handle
 )
 
 from utils.watchers import cargar_tareas;
@@ -129,11 +130,16 @@ async def nuevo_sorteo(ctx, *, args: str = None):
 async def realizar_sorteo(ctx, codigo: str = None):
     await realizar_sorteo_handle(ctx, codigo.strip())
 
-@bot.command(name="nuevo-comunicado",
-    aliases=["nuevo_comunicado"])
+@bot.command(
+    name="nuevo-comunicado",
+    aliases=["nuevo_comunicado"]
+)
 @comando_roles_permitidos("admin")
-async def forzar_ronda(ctx, mensaje: str = None):
-    """Se termina la rondar actual con empate de las partidas no jugadas y se inicia la siguiente - !forzar-ronda <código_torneo>"""
+async def forzar_ronda(ctx, *, mensaje: str = None):
+    """
+    Envía un comunicado al canal 📰-tablon‐anuncios
+    Uso: !nuevo-comunicado <mensaje>
+    """
     await nuevo_comunicado_handle(ctx, mensaje)
 
 #########################################################################################################
@@ -302,6 +308,35 @@ async def on_member_update(before, after):
 @bot.event
 async def on_member_remove(member: discord.Member):
     await usuario_salio_handle(bot, member)
+
+@bot.event
+async def on_command(ctx):
+    await log_comando_handle( 
+        bot, 
+        usuario=ctx.author,
+        comando=ctx.command.name if ctx.command else "desconocido",
+        tipo="correcto",
+        
+        fecha=ctx.message.created_at
+    )
+
+@bot.event
+async def on_command_error(ctx, error):
+    if isinstance(error, commands.CommandNotFound):
+        tipo = "no_encontrado"
+    elif isinstance(error, commands.MissingRequiredArgument):
+        tipo = "argumento_faltante"
+    else:
+        tipo = "error"
+
+    await log_comando_handle(
+        bot,
+        usuario=ctx.author,
+        comando=ctx.message.content,
+        tipo=tipo,
+        error=error,
+        fecha=ctx.message.created_at
+    )
     
     
 webserver.keep_alive()  

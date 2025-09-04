@@ -50,9 +50,8 @@ async def limpiar_canal_diario(bot: commands.Bot):
     if ultima_ejecucion_canal_diario == hoy():
         return
     
-    guild = discord.utils.get(bot.guilds, name="The Klub")  # <-- cámbialo
+    guild = guild = bot.get_guild(1381551388907016252)
     if not guild:
-      
         return
 
     canal = discord.utils.get(guild.text_channels, name="preguntale-a-el-barbas")

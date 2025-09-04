@@ -802,7 +802,7 @@ async def reportar_resultado_handle(ctx, codigo_torneo: str = None, jugador1: di
                 return
 
         # Validación de permisos
-        if author != jugador1 and author != jugador2:
+        if author.id != jugador1.id and author.id != jugador2.id:
             es_mod = await moderador_permisos_handle(ctx)
             if not es_mod:
                 await author.send("❌ Solo los jugadores involucrados o un moderador pueden reportar el resultado.")
@@ -1461,7 +1461,7 @@ async def deck_dm_flow(ctx, author: discord.Member, codigo_torneo: str, modo: st
 
 async def submitted_deck_handle(ctx, codigo_torneo: str = None):
     await borrar_mensaje_seguro(ctx)
-    if not await validar_canal_correcto(ctx, "preguntale-a-el-barbas", "!mis-comandos"):
+    if not await validar_canal_correcto(ctx, "preguntale-a-el-barbas", "!subir-deck"):
         return
     author = ctx.author
     if ctx.guild is None:
@@ -1481,10 +1481,10 @@ async def submitted_deck_handle(ctx, codigo_torneo: str = None):
             return
 
     # ✅ Comprobar si el torneo permite subir decks
-    # ok, error = await validar_torneo_para_edicion(codigo_torneo, author)
-    # if not ok:
-    #    await author.send(error)
-    #    return
+    ok, error = await validar_torneo_para_edicion(codigo_torneo, author)
+    if not ok:
+       await author.send(error)
+       return
 
     # ✅ Comprobar si ya hay un deck subido
     codigo_deck = f"{codigo_torneo}_{author.id}"

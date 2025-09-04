@@ -200,46 +200,48 @@ async def reconocer_comando_handle(bot: commands.Bot, message: discord.Message):
         "agendar partida": "agendar-partida",
         "modificar agenda": "modificar-agenda",
         "eventos hoy": "eventos-hoy",
-        "nueva peticion": "nueva-peticion"
+        "nueva peticion": "nueva-peticion",
+        "nuevo comunicado": "nuevo-comunicado"
     }
 
     comando_texto = message.content[1:].lower().strip()
 
-    if comando_texto in comandos_alias:
-        sugerido = comandos_alias[comando_texto]
+    # Solo ejecutar wizard si el comando tiene espacio
+    if comando_texto not in comandos_alias or " " not in comando_texto:
+        return False  # No es un alias con espacio, seguimos
 
-        try:
-            dm = await message.author.create_dm()
-            embed = discord.Embed(
-                title="⚡ He detectado tu comando",
-                description=f"¿Querías usar `!{sugerido}`? (responde con **sí** o **no**)",
-                color=0x00ffcc
+    sugerido = comandos_alias[comando_texto]
+
+    try:
+        dm = await message.author.create_dm()
+        embed = discord.Embed(
+            title="⚡ He detectado tu comando",
+            description=f"¿Querías usar `!{sugerido}`? (responde con **sí** o **no**)",
+            color=0x00ffcc
+        )
+        await dm.send(embed=embed)
+
+        def check(m):
+            return (
+                m.author == message.author
+                and m.channel == dm
+                and m.content.lower() in ["sí", "si", "no"]
             )
-            await dm.send(embed=embed)
 
-            def check(m):
-                return (
-                    m.author == message.author
-                    and m.channel == dm
-                    and m.content.lower() in ["sí", "si", "no"]
-                )
+        respuesta = await bot.wait_for("message", timeout=30.0, check=check)
 
-            respuesta = await bot.wait_for("message", timeout=30.0, check=check)
+        if respuesta.content.lower() in ["sí", "si"]:
+            # Crear contexto y ejecutar comando directamente
+            ctx = await bot.get_context(message)
+            await ctx.invoke(bot.get_command(sugerido))
+        else:
+            await dm.send("❌ Comando cancelado.")
+    except asyncio.TimeoutError:
+        await dm.send("⏰ Tiempo agotado. Comando cancelado automáticamente.")
+    except Exception as e:
+        print(f"Error en wizard: {e}")
 
-            if respuesta.content.lower() in ["sí", "si"]:
-                # Crear contexto y ejecutar comando sin mutar el mensaje original
-                ctx = await bot.get_context(message)
-                await ctx.invoke(bot.get_command(sugerido))
-            else:
-                await dm.send("❌ Comando cancelado.")
-        except asyncio.TimeoutError:
-            await dm.send("⏰ Tiempo agotado. Comando cancelado automáticamente.")
-        except Exception as e:
-            print(f"Error en wizard: {e}")
-
-        return True  # Indicamos que el mensaje fue manejado
-    return False
-
+    return True  # Indicamos que el mensaje fue manejado
 async def evento_socio_handle(before: discord.Member, after: discord.Member):
     # Nombre del rol que quieres detectar
     ROL_SOCIO = "socio"
@@ -287,9 +289,10 @@ async def usuario_salio_handle(bot: commands.Bot, member: discord.Member):
         await canal_info.send(embed=embed)
 
     # Canal de anuncios
-    canal_anuncios = discord.utils.get(member.guild.text_channels, name="📰-tablon-anuncios")
-    if canal_anuncios:
-        await canal_anuncios.send(f"📢 El usuario **{member.display_name}** ha abandonado **The Klub**.")
+    # canal_anuncios = ctx.guild.get_channel(1387389356464934993)
+    # canal_anuncios = discord.utils.get(member.guild.text_channels, name="📰-tablon‐anuncios")
+    # if canal_anuncios:
+    #     await canal_anuncios.send(f"📢 El usuario **{member.display_name}** ha abandonado **The Klub**.")
 
 async def castigar_usuario(member: discord.Member):
     try:
@@ -306,3 +309,34 @@ async def castigar_usuario(member: discord.Member):
     rol_out = discord.utils.get(member.guild.roles, name="Out")
     if rol_out:
         await member.add_roles(rol_out, reason="Usuario en blacklist o expulsado previamente")
+
+async def log_comando_handle(bot, usuario, comando, tipo, error=None, fecha=None):
+    canal_log = bot.get_channel(1413079518440198206)
+    if not canal_log:
+        return
+
+    # Definir título y color según tipo
+    if tipo == "correcto":
+        titulo = "✅ Comando ejecutado"
+        color = discord.Color.green()
+    elif tipo == "no_encontrado":
+        titulo = "❌ Comando no encontrado"
+        color = discord.Color.red()
+    elif tipo == "argumento_faltante":
+        titulo = "⚠️ Falta argumento"
+        color = discord.Color.orange()
+    else:  # error genérico
+        titulo = "⚠️ Error en comando"
+        color = discord.Color.dark_orange()
+
+    embed = discord.Embed(
+        title=titulo,
+        color=color,
+        timestamp=fecha
+    )
+    embed.add_field(name="Usuario", value=f"{usuario} (ID: {usuario.id})", inline=False)
+    embed.add_field(name="Comando", value=f"{comando}", inline=False)
+    if error:
+        embed.add_field(name="Error", value=str(error), inline=False)
+
+    await canal_log.send(embed=embed)
