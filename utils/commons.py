@@ -108,10 +108,14 @@ async def obtener_torneo_usuario(ctx, mensaje_inicial: str = None, timeout: int 
                         continue
                     participantes_data = await p_resp.json()
                     # Comprobar si ctx.author está inscrito
+                    # Obtener lista de participantes
                     inscritos = [p["participant"].get("name") for p in participantes_data]
-                    if ctx.author.display_name not in inscritos and ctx.author.name not in inscritos:
-                        continue  # No está inscrito → saltar
 
+                    # Usar el ID del usuario como string
+                    usuario_id_str = str(ctx.author.id)
+
+                    if usuario_id_str not in inscritos:
+                        continue  # No está inscrito → saltar
             torneos.append((tid, nombre))
 
     if not torneos:
