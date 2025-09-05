@@ -129,7 +129,14 @@ async def nuevo_torneo(ctx, *, args: str):
             "tournament_type": tipo_challonge,
             "description": f"Torneo {formato} - {nivel}",
             "signup_cap": jugadores,
-            "start_at": fecha_obj.isoformat()
+            "start_at": fecha_obj.isoformat(),
+            # ↓ Configuración de desempates
+            "ranked_by": "match wins",  # Swiss system points
+            "tie_breaks": [
+                "match wins vs tied",     # Tie Break #1: Participantes ganadores vs. empatados
+                "game w/l difference",    # Tie Break #2: Game/Set W-L Difference
+                "median buchholz"         # Tie Break #3: Sistema de Median-Buchholz
+            ]
         }
     }
 
@@ -459,17 +466,19 @@ async def actualizar_clasificacion_handle(ctx, codigo_torneo: str):
         await ctx.author.send("❌ Necesitas enviar el código del torneo.")
         return
 
-    # 🔹 Obtener datos
+    # 🔹 Obtener datos de Challonge
     url_participants = f"https://api.challonge.com/v1/tournaments/{codigo_torneo}/participants.json"
     url_matches = f"https://api.challonge.com/v1/tournaments/{codigo_torneo}/matches.json"
 
     async with aiohttp.ClientSession() as session:
         async with session.get(url_participants, auth=aiohttp.BasicAuth(config.CHALLONGE_USERNAME, config.CHALLONGE_API_KEY)) as resp:
-            if resp.status != 200: return await ctx.send("❌ Error al obtener participantes.")
+            if resp.status != 200:
+                return await ctx.send("❌ Error al obtener participantes.")
             participantes_raw = await resp.json()
 
         async with session.get(url_matches, auth=aiohttp.BasicAuth(config.CHALLONGE_USERNAME, config.CHALLONGE_API_KEY)) as resp:
-            if resp.status != 200: return await ctx.send("❌ Error al obtener 🍸-citas‐a‐ciegas.")
+            if resp.status != 200:
+                return await ctx.send("❌ Error al obtener emparejamientos.")
             matches_raw = await resp.json()
 
     # 🔹 Inicializar jugadores
@@ -478,7 +487,7 @@ async def actualizar_clasificacion_handle(ctx, codigo_torneo: str):
         part = p["participant"]
         jugadores[part["id"]] = {
             "name": part["name"],
-            "mp": 0,
+            "mp": 0.0,  # match points: win=1, draw=0.5
             "games_won": 0,
             "games_played": 0,
             "wins": 0,
@@ -490,13 +499,18 @@ async def actualizar_clasificacion_handle(ctx, codigo_torneo: str):
     # 🔹 Procesar matches
     for m in matches_raw:
         match = m["match"]
-        if match["state"] != "complete": continue
+        if match["state"] != "complete":
+            continue
 
         p1, p2 = match["player1_id"], match["player2_id"]
         scores = match.get("scores_csv", "")
         try:
             s1, s2 = map(int, scores.strip().split("-"))
-        except: continue
+        except:
+            continue
+
+        if p1 not in jugadores or p2 not in jugadores:
+            continue
 
         jugadores[p1]["opponents"].append(p2)
         jugadores[p2]["opponents"].append(p1)
@@ -507,43 +521,59 @@ async def actualizar_clasificacion_handle(ctx, codigo_torneo: str):
         jugadores[p2]["games_won"] += s2
         jugadores[p2]["games_played"] += s1 + s2
 
-        # Match Points y G-P-E
+        # Match Points según Challonge
         if s1 > s2:
-            jugadores[p1]["mp"] += 3
+            jugadores[p1]["mp"] += 1.0
             jugadores[p1]["wins"] += 1
             jugadores[p2]["losses"] += 1
         elif s2 > s1:
-            jugadores[p2]["mp"] += 3
+            jugadores[p2]["mp"] += 1.0
             jugadores[p2]["wins"] += 1
             jugadores[p1]["losses"] += 1
         else:
-            jugadores[p1]["mp"] += 1
-            jugadores[p2]["mp"] += 1
+            jugadores[p1]["mp"] += 0.5
+            jugadores[p2]["mp"] += 0.5
             jugadores[p1]["draws"] += 1
             jugadores[p2]["draws"] += 1
 
     # 🔹 Calcular desempates y construir clasificación
     clasificacion = []
     for pid, datos in jugadores.items():
-        # OMW%
-        omw = 0
+        # Tie Break #1: OMW% (Opponent Match Win)
+        omw = 0.0
         for o in datos["opponents"]:
-            opp = jugadores[o]
-            total_matches = opp["games_played"] // 2
-            mp_opp = opp["mp"]
-            omw += (mp_opp / (total_matches * 3)) if total_matches else 0
-        omw = omw / len(datos["opponents"]) if datos["opponents"] else 0
+            opp = jugadores.get(o)
+            if not opp:
+                continue
+            total_matches = opp["wins"] + opp["losses"] + opp["draws"]
+            if total_matches == 0:
+                continue
+            omw += opp["mp"] / total_matches
+        omw = omw / len(datos["opponents"]) if datos["opponents"] else 0.0
 
-        # GW%
-        gw = (datos["games_won"] / datos["games_played"]) if datos["games_played"] else 0
-
-        # OGW%
-        ogw = 0
+        # Tie Break #2: Median-Buchholz
+        buchholz_scores = []
         for o in datos["opponents"]:
-            opp = jugadores[o]
-            ogw += (opp["games_won"] / opp["games_played"]) if opp["games_played"] else 0
-        ogw = ogw / len(datos["opponents"]) if datos["opponents"] else 0
+            opp = jugadores.get(o)
+            if not opp:
+                continue
+            total_matches = opp["wins"] + opp["losses"] + opp["draws"]
+            if total_matches == 0:
+                continue
+            buchholz_scores.append(opp["mp"] / total_matches)
+        if buchholz_scores:
+            if len(buchholz_scores) > 2:
+                buchholz_scores_sorted = sorted(buchholz_scores)[1:-1]  # descartar mejor y peor
+            else:
+                buchholz_scores_sorted = buchholz_scores
+            buchholz = sum(buchholz_scores_sorted) / len(buchholz_scores_sorted)
+        else:
+            buchholz = 0.0
 
+        # Diferencia de puntos
+        diff = datos["games_won"] - (datos["games_played"] - datos["games_won"])
+
+        # Nombre visible
         try:
             miembro = await ctx.guild.fetch_member(int(datos["name"]))
             nombre = f"@{miembro.display_name}"
@@ -554,34 +584,34 @@ async def actualizar_clasificacion_handle(ctx, codigo_torneo: str):
             "nombre": nombre,
             "mp": datos["mp"],
             "omw": omw,
-            "gw": gw,
-            "ogw": ogw,
+            "buchholz": buchholz,
+            "diff": diff,
             "wins": datos["wins"],
             "losses": datos["losses"],
             "draws": datos["draws"]
         })
 
-    # Ordenar por MP, OMW%, GW%, OGW%
-    clasificacion.sort(key=lambda x: (-x["mp"], -x["omw"], -x["gw"], -x["ogw"]))
+    # 🔹 Ordenar según criterios de Challonge
+    clasificacion.sort(key=lambda x: (-x["mp"], -x["diff"], -x["buchholz"], -x["omw"]))
+    # clasificacion.sort(key=lambda x: (-x["mp"], -x["omw"], -x["diff"], -x["buchholz"]))
 
-  # Construir tabla en Markdown con tamaños fijos
+    # Construir tabla en Markdown
     mensaje = f"📊 **Clasificación del torneo `{codigo_torneo}`:**\n"
     mensaje += "```markdown\n"
-    mensaje += "Rango | Participante           | G-P-E | MP  | OMW%   | GW%    | OGW%\n"
-    mensaje += "------|------------------------|-------|-----|--------|--------|-------\n"
-
+    mensaje += "Rango | Participante           | G-P-E | Pts  | OMW%   | Buchholz | Dif\n"
+    mensaje += "------|------------------------|-------|------|--------|----------|-----\n"
     for i, p in enumerate(clasificacion, 1):
         gpe = f"{p['wins']}-{p['losses']}-{p['draws']}"
-        linea = f"{i:<5} | {p['nombre'][:22]:<22} | {gpe:<5} | {p['mp']:<3} | {p['omw']:.3f}  | {p['gw']:.3f}  | {p['ogw']:.3f}"
+        linea = f"{i:<5} | {p['nombre'][:22]:<22} | {gpe:<5} | {p['mp']:<4.1f} | {p['omw']:.3f}  | {p['buchholz']:.5f}  | {p['diff']:+}"
         mensaje += linea + "\n"
-
     mensaje += "```"
+
     # 🔹 Canal de destino
     canal = discord.utils.get(ctx.guild.text_channels, name="🍺-el‐ranking‐de‐la‐barra")
     if not canal:
         return await ctx.send("⚠️ No se encontró el canal de clasificaciones.")
 
-  # Revisar si ya existe un mensaje con el mismo torneo
+    # Revisar si ya existe un mensaje con el mismo torneo
     mensaje_existente = None
     async for msg in canal.history(limit=50):
         if msg.author == ctx.guild.me and not msg.embeds:

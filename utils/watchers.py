@@ -50,7 +50,7 @@ async def limpiar_canal_diario(bot: commands.Bot):
     if ultima_ejecucion_canal_diario == hoy():
         return
     
-    guild = guild = bot.get_guild(1381551388907016252)
+    guild = bot.get_guild(1381551388907016252)
     if not guild:
         return
 
@@ -78,15 +78,16 @@ async def limpiar_canal_diario(bot: commands.Bot):
 async def publicar_eventos_semanales(bot: commands.Bot):
     global ultima_ejecucion_eventos
     if ultima_ejecucion_eventos == hoy():
-        
         return
 
     dia_hoy = hoy()
     ejecutados_guilds = 0
 
     for guild in bot.guilds:
+        # Obtener canales
         canal_origen = discord.utils.get(guild.text_channels, name="partidos-agendados")
-        canal_proximas = discord.utils.get(guild.text_channels, name="🎭-cartelera‐proximas-partidas")
+        canal_proximas = discord.utils.get(guild.text_channels, name="🎭-cartelera‐proximas-partidas")  # Ajusta nombre real
+
         if not canal_origen or not canal_proximas:
             continue
 
@@ -122,10 +123,10 @@ async def publicar_eventos_semanales(bot: commands.Bot):
         for fecha_ev, hora_ev, j1, j2 in sorted(eventos_semana):
             embed.add_field(name=f"{fecha_ev.strftime('%d/%m/%Y')} {hora_ev}", value=f"{j1} vs {j2}", inline=False)
 
-        # Buscar si ya hay mensaje del bot para esta semana
+        # Buscar mensaje existente
         mensaje_existente = None
         async for msg in canal_proximas.history(limit=50):
-            if msg.author == guild.me and msg.embeds:
+            if msg.author == bot.user and msg.embeds:
                 emb = msg.embeds[0]
                 if emb.title == "📅 Partidas programadas esta semana":
                     mensaje_existente = msg
@@ -133,15 +134,14 @@ async def publicar_eventos_semanales(bot: commands.Bot):
 
         if mensaje_existente:
             await mensaje_existente.edit(embed=embed)
-            
         else:
             await canal_proximas.send(embed=embed)
-            
+
         ejecutados_guilds += 1
 
     if ejecutados_guilds > 0:
         ultima_ejecucion_eventos = hoy()
-
+        
 async def limpiar_partidos_pasados(bot: commands.Bot):
     global ultima_ejecucion_partidos
     if ultima_ejecucion_partidos == hoy():
@@ -151,7 +151,6 @@ async def limpiar_partidos_pasados(bot: commands.Bot):
     for guild in bot.guilds:
         canal_partidos = discord.utils.get(guild.text_channels, name="partidos-agendados")
         if not canal_partidos:
-           
             continue
 
         patron_fecha = re.compile(r"\[EVENTO\]\s+(\d{2}/\d{2}/\d{4})")
@@ -172,17 +171,15 @@ async def limpiar_partidos_pasados(bot: commands.Bot):
                     await mensaje.delete()
                     borrados_guild += 1
                     await asyncio.sleep(0.3)
-                except discord.Forbidden:
-                    log(f"limpiar_partidos_pasados: sin permisos en {canal_partidos.name} ({guild.name})")
-                except discord.NotFound:
+                except (discord.Forbidden, discord.NotFound):
                     pass
-                except Exception as e:
-                    log(f"limpiar_partidos_pasados: error en {guild.name}: {e}")
+                except Exception:
+                    pass
 
-       
         total_borrados += borrados_guild
-    ultima_ejecucion_partidos = hoy()
 
+    ultima_ejecucion_partidos = hoy()
+    
 async def limpiar_torneos_vencidos(bot: commands.Bot):
     global ultima_ejecucion_torneos_vencidos
     if ultima_ejecucion_torneos_vencidos == hoy():
@@ -249,9 +246,10 @@ async def ejecutar_tareas(bot: commands.Bot):
             return
 
         await limpiar_canal_diario(bot)
-        await publicar_eventos_semanales(bot)
-        await limpiar_partidos_pasados(bot)
         await limpiar_torneos_vencidos(bot)
+        await limpiar_partidos_pasados(bot)
+        await publicar_eventos_semanales(bot)
+        
         ultima_ejecucion_global = hoy()
 
 def cargar_tareas(bot: commands.Bot):
