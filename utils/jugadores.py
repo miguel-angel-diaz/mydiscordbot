@@ -802,11 +802,7 @@ async def reportar_resultado_handle(ctx, codigo_torneo: str = None, jugador1: di
                 return
 
         # Validación de permisos
-        if author.id != jugador1.id and author.id != jugador2.id:
-            es_mod = await moderador_permisos_handle(ctx)
-            if not es_mod:
-                await author.send("❌ Solo los jugadores involucrados o un moderador pueden reportar el resultado.")
-                return
+        
 
     except asyncio.TimeoutError:
         await author.send("⏰ Tiempo agotado. Vuelve a intentar con `!reportar-resultado`.")
@@ -817,6 +813,11 @@ async def reportar_resultado_handle(ctx, codigo_torneo: str = None, jugador1: di
     except Exception as e:
         await author.send("❌ Ocurrió un error inesperado durante el proceso.")
         raise e
+    if author.id != jugador1.id and author.id != jugador2.id:
+            es_mod = False
+            if not es_mod:
+                await author.send("❌ Solo los jugadores involucrados o un moderador pueden reportar el resultado.")
+                return
     # Obtener participantes del torneo
     url_participantes = f"https://api.challonge.com/v1/tournaments/{codigo_torneo}/participants.json"
     async with aiohttp.ClientSession() as session:
