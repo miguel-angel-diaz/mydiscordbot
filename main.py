@@ -48,6 +48,11 @@ from utils.events import (
 
 from utils.watchers import cargar_tareas;
 
+from utils.stats import stats_handle;
+
+
+
+
 import config
 import os
 import unicodedata
@@ -235,6 +240,12 @@ async def subir_deck(ctx, codigo: str = None):
 async def editar_deck(ctx, codigo: str = None):
     """Permite editar la lista que has subido para jugar un torneo - !editar-deck"""
     await editar_deck_handle(ctx, codigo)
+
+@bot.command(name="stats", aliases=["estadisticas", "estadísticas"])
+@comando_roles_permitidos("socio", "second-chance-socio", "miembro", "second-chance-miembro")
+async def stats(ctx):
+    """Inicia el wizard de estadísticas - !stats"""
+    await stats_handle(ctx)
 
 #########################################################################################################
 

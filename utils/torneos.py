@@ -459,9 +459,7 @@ async def iniciar_torneo_handle(ctx, codigo_torneo: str):
 
 async def actualizar_clasificacion_handle(ctx, codigo_torneo: str):
     await borrar_mensaje_seguro(ctx)
-    if not await moderador_permisos_handle(ctx):
-        return
-
+   
     if not codigo_torneo:
         await ctx.author.send("❌ Necesitas enviar el código del torneo.")
         return

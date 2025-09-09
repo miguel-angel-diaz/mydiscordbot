@@ -813,8 +813,9 @@ async def reportar_resultado_handle(ctx, codigo_torneo: str = None, jugador1: di
     except Exception as e:
         await author.send("❌ Ocurrió un error inesperado durante el proceso.")
         raise e
+    
     if author.id != jugador1.id and author.id != jugador2.id:
-            es_mod = False
+            es_mod = await moderador_permisos_handle(ctx, onlys_check=True)
             if not es_mod:
                 await author.send("❌ Solo los jugadores involucrados o un moderador pueden reportar el resultado.")
                 return
@@ -1325,9 +1326,13 @@ async def obtener_deck_en_canal(guild: discord.Guild, codigo_deck: str):
             if embed.description and codigo_deck in embed.description:
                 campos = {field.name.lower(): field.value for field in embed.fields}
                 nombre_deck_extraido = embed.title.replace("🃏 Deck Subido: ", "").replace("🃏 Deck Actualizado: ", "")
+                  # Extraer torneo y jugador del código
+                id_torneo, jugador_id = codigo_deck.split("_")
                 return {
                     "mensaje": mensaje,
                     "nombre_deck": nombre_deck_extraido,
+                    "torneo": id_torneo,
+                    "jugador_id": int(jugador_id),
                     "archetype": campos.get("archetype", ""),
                     "decklist": campos.get("decklist", ""),
                     "sideboard": campos.get("sideboard", "N/A")
