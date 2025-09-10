@@ -57,6 +57,12 @@ COMANDOS_INFO = [
         "descripcion": "Agenda una partida entre dos jugadores"
     },
     {
+        "comando": "modificar-agenda",
+        "roles_permitidos": ["socio", "second-chance-socio", "miembro", "admin", "second-chance-miembro"],
+        "permisos_discord": ["manage_messages", "manage_roles"],
+        "descripcion": "permite modificar o eliminar una partida agendada"
+    },
+    {
         "comando": "eventos-hoy",
         "roles_permitidos": ["socio", "second-chance-socio", "miembro", "admin", "second-chance-miembro"],
         "permisos_discord": ["manage_messages", "manage_roles"],
@@ -87,10 +93,28 @@ COMANDOS_INFO = [
         "descripcion": "Muestra los inscritos en un torneo"
     },
     {
+        "comando": "subir-deck",
+        "roles_permitidos": ["socio", "second-chance-socio", "miembro", "admin", "second-chance-miembro"],
+        "permisos_discord": ["manage_messages", "manage_roles"],
+        "descripcion": "permite subir el decklist de un jugador para un torneo"
+    },
+    {
+        "comando": "editar-deck",
+        "roles_permitidos": ["socio", "second-chance-socio", "miembro", "admin", "second-chance-miembro"],
+        "permisos_discord": ["manage_messages", "manage_roles"],
+        "descripcion": "permite modificar el decklist de un jugador para un torneo"
+    },
+    {
         "comando": "reportar-resultado",
         "roles_permitidos": ["socio", "second-chance-socio", "miembro", "admin", "second-chance-miembro"],
         "permisos_discord": ["manage_messages", "manage_roles"],
         "descripcion": "Reporta el resultado de un partido de un torneo"
+    },
+    {
+        "comando": "modificar-resultado",
+        "roles_permitidos": ["socio", "second-chance-socio", "miembro", "admin", "second-chance-miembro"],
+        "permisos_discord": ["manage_messages", "manage_roles"],
+        "descripcion": "permite modificar o eliminar el resultado de un partido mientras la ronda esté abierta"
     },
     {
         "comando": "partidos-pendientes",
@@ -105,28 +129,10 @@ COMANDOS_INFO = [
         "descripcion": "Inscribe a un usuario en un sorteo"
     },
     {
-        "comando": "modificar-agenda",
+        "comando": "stats",
         "roles_permitidos": ["socio", "second-chance-socio", "miembro", "admin", "second-chance-miembro"],
         "permisos_discord": ["manage_messages", "manage_roles"],
-        "descripcion": "permite modificar o eliminar una partida agendada"
-    },
-    {
-        "comando": "modificar-resultado",
-        "roles_permitidos": ["socio", "second-chance-socio", "miembro", "admin", "second-chance-miembro"],
-        "permisos_discord": ["manage_messages", "manage_roles"],
-        "descripcion": "permite modificar o eliminar el resultado de un partido mientras la ronda esté abierta"
-    },
-    {
-        "comando": "subir-deck",
-        "roles_permitidos": ["socio", "second-chance-socio", "miembro", "admin", "second-chance-miembro"],
-        "permisos_discord": ["manage_messages", "manage_roles"],
-        "descripcion": "permite subir el decklist de un jugador para un torneo"
-    },
-    {
-        "comando": "editar-deck",
-        "roles_permitidos": ["socio", "second-chance-socio", "miembro", "admin", "second-chance-miembro"],
-        "permisos_discord": ["manage_messages", "manage_roles"],
-        "descripcion": "permite modificar el decklist de un jugador para un torneo"
+        "descripcion": "Permite al usuario ver sus estadísticas en un torneo"
     },
     {
         "comando": "nuevo-torneo",

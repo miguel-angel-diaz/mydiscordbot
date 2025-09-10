@@ -212,7 +212,7 @@ async def iniciar_torneo_handle(ctx, codigo_torneo: str):
     if canal_decks:
         async for msg in canal_decks.history(limit=500):
             for embed in msg.embeds:
-                if embed.title and "Deck Subido" in embed.title:
+                if embed.title and "🃏 Deck" in embed.title:
                     contenido = ""
                     if embed.description:
                         contenido += embed.description + "\n"
