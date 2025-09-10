@@ -47,20 +47,15 @@ from utils.events import (
 )
 
 from utils.watchers import cargar_tareas;
-
 from utils.stats import stats_handle;
-
 from utils.stats_global import stats_global_handle;
-
-
-
-
-
 
 import config
 import os
 import unicodedata
 import webserver
+import sys
+print("Python version:", sys.version)
 DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
 
 
