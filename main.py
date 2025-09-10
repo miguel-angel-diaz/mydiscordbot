@@ -47,8 +47,8 @@ from utils.events import (
 )
 
 from utils.watchers import cargar_tareas;
-from utils.stats import stats_handle;
-from utils.stats_global import stats_global_handle;
+# from utils.stats import stats_handle;
+# from utils.stats_global import stats_global_handle;
 
 import config
 import os
@@ -240,16 +240,16 @@ async def editar_deck(ctx, codigo: str = None):
     """Permite editar la lista que has subido para jugar un torneo - !editar-deck"""
     await editar_deck_handle(ctx, codigo)
 
-@bot.command(name="stats")
-@comando_roles_permitidos("socio", "second-chance-socio", "miembro", "second-chance-miembro")
-async def stats(ctx):
-    """Inicia el wizard de estadísticas - !stats"""
-    await stats_handle(ctx)
-@bot.command(name="stats-global", aliases=["stats_global"])
-@comando_roles_permitidos("socio", "second-chance-socio", "miembro", "second-chance-miembro")
-async def stats(ctx):
-    """Inicia el wizard de estadísticas - !stats"""
-    await stats_global_handle(ctx)
+# @bot.command(name="stats")
+# @comando_roles_permitidos("socio", "second-chance-socio", "miembro", "second-chance-miembro")
+# async def stats(ctx):
+#     """Inicia el wizard de estadísticas - !stats"""
+#     await stats_handle(ctx)
+# @bot.command(name="stats-global", aliases=["stats_global"])
+# @comando_roles_permitidos("socio", "second-chance-socio", "miembro", "second-chance-miembro")
+# async def stats(ctx):
+#     """Inicia el wizard de estadísticas - !stats"""
+#     await stats_global_handle(ctx)
 
 #########################################################################################################
 
