@@ -359,8 +359,8 @@ async def on_command_error(ctx, error):
     )
     
     
-# webserver.keep_alive()  
-# bot.run(DISCORD_TOKEN)
+webserver.keep_alive()  
+bot.run(DISCORD_TOKEN)
 
-bot.run(config.TOKEN)
+# bot.run(config.TOKEN)
 
