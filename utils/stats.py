@@ -2,16 +2,17 @@ import aiohttp
 import discord
 import asyncio
 import matplotlib.pyplot as plt
-import seaborn as sns
 import io
 import config
-from utils.commons import borrar_mensaje_seguro, obtener_torneo_usuario
+from utils.commons import borrar_mensaje_seguro, validar_canal_correcto, buscar_usuario_en_servidor, obtener_torneo_usuario
 
 # 🔎 Obtener participantes de Challonge
 async def get_participants(torneo_id: str):
     url = f"https://api.challonge.com/v1/tournaments/{torneo_id}/participants.json"
     async with aiohttp.ClientSession() as session:
-        async with session.get(url, auth=aiohttp.BasicAuth(config.CHALLONGE_USERNAME, config.CHALLONGE_API_KEY)) as resp:
+        async with session.get(
+            url, auth=aiohttp.BasicAuth(config.CHALLONGE_USERNAME, config.CHALLONGE_API_KEY)
+        ) as resp:
             if resp.status != 200:
                 return []
             data = await resp.json()
@@ -21,7 +22,9 @@ async def get_participants(torneo_id: str):
 async def get_matches(torneo_id: str):
     url = f"https://api.challonge.com/v1/tournaments/{torneo_id}/matches.json"
     async with aiohttp.ClientSession() as session:
-        async with session.get(url, auth=aiohttp.BasicAuth(config.CHALLONGE_USERNAME, config.CHALLONGE_API_KEY)) as resp:
+        async with session.get(
+            url, auth=aiohttp.BasicAuth(config.CHALLONGE_USERNAME, config.CHALLONGE_API_KEY)
+        ) as resp:
             if resp.status != 200:
                 return []
             data = await resp.json()
@@ -54,7 +57,7 @@ async def get_arquetipos(guild: discord.Guild):
             mapping[nombre_jugador] = archetype
     return mapping
 
-# 📊 Calcular estadísticas por jugador
+# 📊 Calcular estadísticas por jugador usando nombres de Discord
 def calcular_stats_jugadores(participants, matches, guild=None):
     stats = {}
     for p in participants:
@@ -76,13 +79,13 @@ def calcular_stats_jugadores(participants, matches, guild=None):
             stats[loser]["losses"] += 1
 
     for s in stats.values():
-        s["winrate"] = round(s["wins"]/s["matches"]*100,2) if s["matches"]>0 else 0.0
+        s["winrate"] = round(s["wins"] / s["matches"] * 100, 2) if s["matches"] > 0 else 0.0
 
     lista_stats = list(stats.values())
     lista_stats.sort(key=lambda x: x["winrate"], reverse=True)
     return lista_stats
 
-# 📊 Calcular estadísticas por arquetipo
+# stats_jugadores es lista de dicts
 def calcular_stats_arquetipos(stats_jugadores, mapping_arquetipos):
     stats_arq = {}
     for s in stats_jugadores:
@@ -95,23 +98,22 @@ def calcular_stats_arquetipos(stats_jugadores, mapping_arquetipos):
         stats_arq[archetype]["losses"] += s["losses"]
 
     for s in stats_arq.values():
-        s["winrate"] = round(s["wins"]/s["matches"]*100,2) if s["matches"]>0 else 0.0
+        s["winrate"] = round(s["wins"] / s["matches"] * 100, 2) if s["matches"] > 0 else 0.0
     return stats_arq
 
-# 🎨 Gráfico de barras con Seaborn
-def generar_grafico_barras_seaborn(stats, x_key, y_key, titulo):
-    sns.set_theme(style="whitegrid")
+# 🎨 Gráfico de barras con Matplotlib
+def generar_grafico_barras(stats: list, x_key: str, y_key: str, titulo: str):
     x = [s[x_key] for s in stats]
     y = [s[y_key] for s in stats]
 
     plt.figure(figsize=(10,6))
-    ax = sns.barplot(x=x, y=y, palette="Blues_d")
+    bars = plt.bar(x, y, color='skyblue')
     plt.title(titulo)
     plt.ylabel(y_key)
     plt.xticks(rotation=45, ha='right')
 
-    for i, valor in enumerate(y):
-        ax.text(i, valor+0.5, f"{valor}%", ha='center')
+    for bar, valor in zip(bars, y):
+        plt.text(bar.get_x() + bar.get_width()/2, bar.get_height(), f"{valor}%", ha='center', va='bottom')
 
     buf = io.BytesIO()
     plt.tight_layout()
@@ -120,13 +122,13 @@ def generar_grafico_barras_seaborn(stats, x_key, y_key, titulo):
     buf.seek(0)
     return buf
 
-# 🎨 Gráfico de pie con Seaborn (paleta pastel)
-def generar_grafico_pie_seaborn(stats_arq, titulo):
+# 🎨 Gráfico de pie con Matplotlib
+def generar_grafico_pie(stats_arq: dict, titulo: str):
     labels = list(stats_arq.keys())
     values = [s['matches'] for s in stats_arq.values()]
 
     plt.figure(figsize=(8,8))
-    plt.pie(values, labels=labels, autopct='%1.1f%%', startangle=90, colors=sns.color_palette("pastel"))
+    plt.pie(values, labels=labels, autopct='%1.1f%%', startangle=90)
     plt.title(titulo)
     plt.axis('equal')
 
@@ -136,7 +138,7 @@ def generar_grafico_pie_seaborn(stats_arq, titulo):
     buf.seek(0)
     return buf
 
-# 🏗 Handler principal usando Seaborn
+# 🏗 Handler principal
 async def stats_handle(ctx):
     await borrar_mensaje_seguro(ctx)
 
@@ -152,7 +154,7 @@ async def stats_handle(ctx):
         "✍️ Responde con 1 o 2:"
     )
 
-    def check(m): return m.author == ctx.author and m.content.strip() in ["1","2"]
+    def check(m): return m.author == ctx.author and m.content.strip() in ["1", "2"]
 
     try:
         resp = await ctx.bot.wait_for("message", check=check, timeout=60)
@@ -164,16 +166,16 @@ async def stats_handle(ctx):
 
         stats_jugadores = calcular_stats_jugadores(participants, matches, ctx.guild)
 
-        if opcion=="1":
-            buf = generar_grafico_barras_seaborn(stats_jugadores, x_key="jugador", y_key="winrate", titulo="Winrate por jugador")
+        if opcion == "1":  # 📊 Jugadores
+            buf = generar_grafico_barras(stats_jugadores, x_key="jugador", y_key="winrate", titulo="Winrate por jugador")
             file = discord.File(buf, filename="stats_jugadores.png")
             embed = discord.Embed(title="📊 Estadísticas por jugador", color=discord.Color.green())
             embed.set_image(url="attachment://stats_jugadores.png")
             await ctx.author.send(embed=embed, file=file)
 
-        elif opcion=="2":
+        elif opcion == "2":  # 📊 Arquetipos
             stats_arq = calcular_stats_arquetipos(stats_jugadores, mapping_arquetipos)
-            buf = generar_grafico_pie_seaborn(stats_arq, titulo="Distribución de partidas por arquetipo")
+            buf = generar_grafico_pie(stats_arq, titulo="Distribución de partidas por arquetipo")
             file = discord.File(buf, filename="stats_arquetipos.png")
             embed = discord.Embed(title="📊 Estadísticas por arquetipo", color=discord.Color.blue())
             embed.set_image(url="attachment://stats_arquetipos.png")
