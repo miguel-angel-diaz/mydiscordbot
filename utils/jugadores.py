@@ -815,7 +815,7 @@ async def reportar_resultado_handle(ctx, codigo_torneo: str = None, jugador1: di
         raise e
     
     if author.id != jugador1.id and author.id != jugador2.id:
-            es_mod = await moderador_permisos_handle(ctx, onlys_check=True)
+            es_mod = await moderador_permisos_handle(ctx, only_check=True)
             if not es_mod:
                 await author.send("❌ Solo los jugadores involucrados o un moderador pueden reportar el resultado.")
                 return

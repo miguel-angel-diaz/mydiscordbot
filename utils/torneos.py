@@ -242,20 +242,23 @@ async def iniciar_torneo_handle(ctx, codigo_torneo: str):
     for p in data:
         participant = p.get("participant", {})
         user_id_str = str(participant.get("name"))  # Suponemos que es el ID de Discord
+        member = ctx.guild.get_member(int(user_id_str))  # Intentamos obtener el miembro de Discord
+        nombre = member.display_name if member else user_id_str  # Nombre visible si existe
+
         codigo_completo = f"{codigo_torneo}_{user_id_str}"
         if codigo_completo in decks_subidos:
-            participantes.append(f"{participant.get('name')} ✅")
+            participantes.append(f"{nombre} ✅")
         else:
             no_subieron.append({
-                "name": participant.get("name"),        # Discord ID o lo que uses
-                "challonge_id": participant.get("id")   # ID real de Challonge
+                "name": nombre,                 # Nombre de Discord si existe, si no el ID
+                "challonge_id": participant.get("id")  # ID real de Challonge
             })
 
     # 🔹 Preparar mensaje DM
     mensaje_dm = "**Revisión de decks antes de iniciar el torneo:**\n\n"
     mensaje_dm += "Jugadores con deck subido:\n" + "\n".join(participantes) + "\n\n"
     mensaje_dm += "Jugadores SIN deck subido:\n" + "\n".join([p['name'] + " ❌" for p in no_subieron]) + "\n\n"
-   # 🔹 Preguntar qué hacer con los participantes sin deck
+    # 🔹 Preguntar qué hacer con los participantes sin deck
     mensaje_dm += (
         "❓ ¿Qué deseas hacer con los jugadores que NO subieron deck?\n"
         "Responde con **'continuar'** para iniciar el torneo con todos los participantes, \n"
