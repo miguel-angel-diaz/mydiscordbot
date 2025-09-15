@@ -134,6 +134,19 @@ async def aplicar_out(ctx, miembro: discord.Member):
         await ctx.author.send(f"⚠️ {miembro.mention} no tiene los mensajes privados habilitados.")
 
     await ctx.author.send(f"✅ {miembro.mention} ha sido expulsado de la comunidad.")
+
+    canal_info = discord.utils.get(ctx.guild.text_channels, name="blacklist")
+    if canal_info:
+        embed = discord.Embed(
+            title="👋 Usuario expulsado del servidor",
+            color=discord.Color.red()
+        )
+        embed.add_field(name="Nombre", value=f"{miembro.name}#{miembro.discriminator}", inline=True)
+        embed.add_field(name="ID", value=miembro.id, inline=True)
+        embed.add_field(name="Fecha de creación", value=miembro.created_at.strftime("%d/%m/%Y %H:%M:%S"), inline=False)
+        embed.add_field(name="Fecha de unión", value=miembro.joined_at.strftime("%d/%m/%Y %H:%M:%S") if miembro.joined_at else "Desconocida", inline=False)
+        embed.set_thumbnail(url=miembro.display_avatar.url)
+        await canal_info.send(embed=embed)
     
     
     # canal_anuncios = ctx.guild.get_channel(1387389356464934993)
