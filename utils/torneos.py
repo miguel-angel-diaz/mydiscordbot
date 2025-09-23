@@ -593,8 +593,8 @@ async def actualizar_clasificacion_handle(ctx, codigo_torneo: str):
         })
 
     # 🔹 Ordenar según criterios de Challonge
-    clasificacion.sort(key=lambda x: (-x["mp"], -x["diff"], -x["buchholz"], -x["omw"]))
-    # clasificacion.sort(key=lambda x: (-x["mp"], -x["omw"], -x["diff"], -x["buchholz"]))
+    # clasificacion.sort(key=lambda x: (-x["mp"], -x["diff"], -x["buchholz"], -x["omw"]))
+    clasificacion.sort(key=lambda x: (-x["mp"], -x["omw"], -x["diff"], -x["buchholz"]))
 
     # Construir tabla en Markdown
     mensaje = f"📊 **Clasificación del torneo `{codigo_torneo}`:**\n"
