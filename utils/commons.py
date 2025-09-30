@@ -97,6 +97,7 @@ async def obtener_torneo_usuario(ctx, mensaje_inicial: str = None, timeout: int 
         torneos = []
         for entry in torneos_raw:
             t = entry.get("tournament", {})
+            estado = t.get("state")  # 🔹 corregido
             tid = t.get("url") or str(t.get("id"))
             nombre = t.get("name") or "(sin nombre)"
 
@@ -114,8 +115,9 @@ async def obtener_torneo_usuario(ctx, mensaje_inicial: str = None, timeout: int 
                     # Usar el ID del usuario como string
                     usuario_id_str = str(ctx.author.id)
 
-                    if usuario_id_str not in inscritos:
+                    if usuario_id_str not in inscritos or estado == "complete":
                         continue  # No está inscrito → saltar
+                    
             torneos.append((tid, nombre))
 
     if not torneos:

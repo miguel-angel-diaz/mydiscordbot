@@ -773,12 +773,11 @@ async def reportar_resultado_handle(ctx, codigo_torneo: str = None, jugador1: di
 
     try:
         if not all([codigo_torneo, jugador1, resultado, jugador2]):
-            await author.send("📊 Vamos a reportar un resultado. Responde a las siguientes preguntas:")
+            await author.send("📊 Vamos a reportar un resultado. Responde a las siguientes preguntas:\n")
             if not codigo_torneo:
                 codigo_torneo = await obtener_torneo_usuario(
                     ctx,
-                    mensaje_inicial="1️⃣ ¿Cuál es el **código del torneo**?.\n"
-                                    "Elige uno de los torneos en los que estás inscrito para reportar el resultado:"
+                    mensaje_inicial="1️⃣ Elige uno de los torneos en los que estás inscrito para reportar el resultado:"
                 )
                 if not codigo_torneo:
                     return  # Se cancela si no selecciona ningún torneo
