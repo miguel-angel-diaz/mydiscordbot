@@ -131,7 +131,7 @@ async def nuevo_sorteo(ctx, *, args: str = None):
     aliases=["realizar sorteo", "realizar_sorteo"])
 @comando_roles_permitidos("admin")
 async def realizar_sorteo(ctx, codigo: str = None):
-    await realizar_sorteo_handle(ctx, codigo.strip())
+    await realizar_sorteo_handle(ctx, codigo)
 
 @bot.command(
     name="nuevo-comunicado",
@@ -353,7 +353,7 @@ async def on_command_error(ctx, error):
     )
     
     
-webserver.keep_alive()  
-bot.run(DISCORD_TOKEN)
-# bot.run(config.TOKEN)
+# webserver.keep_alive()  
+# bot.run(DISCORD_TOKEN)
+bot.run(config.TOKEN)
 
