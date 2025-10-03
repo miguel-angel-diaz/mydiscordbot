@@ -356,7 +356,7 @@ async def member_join_handle(member, before, after):
             inicio = tiempos_entrada.pop(member.id)
             duracion = (datetime.now(timezone.utc) - inicio).total_seconds()
 
-            if duracion >= 300:  # 5 minutos
+            if duracion >= 60:  # 5 minutos
                 canal_registro = discord.utils.get(member.guild.text_channels, name="oyentes-en-canales")
                 if canal_registro:
                     minutos = int(duracion // 60)
@@ -364,23 +364,22 @@ async def member_join_handle(member, before, after):
 
                     # Compañeros que estaban en el canal (sin incluir al usuario)
                     companeros = [m.display_name for m in before.channel.members if m.id != member.id]
-                    if not companeros:
-                        companeros_txt = "Estuvo solo 🗿"
-                    else:
+                    if companeros:
+                    
                         companeros_txt = ", ".join(companeros)
 
-                    embed = discord.Embed(
-                        title="📋 Registro de voz",
-                        description=f"**{member.display_name}** estuvo en un canal de voz.",
-                        color=discord.Color.blue(),
-                        timestamp=datetime.now(timezone.utc)
-                    )
-                    embed.add_field(name="Canal", value=before.channel.name, inline=True)
-                    embed.add_field(name="Duración", value=f"{minutos}m {segundos}s", inline=True)
-                    embed.add_field(name="Con quién estuvo", value=companeros_txt, inline=False)
-                    embed.set_footer(text=f"ID Usuario: {member.id}", icon_url=member.display_avatar.url)
+                        embed = discord.Embed(
+                            title="📋 Registro de voz",
+                            description=f"**{member.display_name}** estuvo en un canal de voz.",
+                            color=discord.Color.blue(),
+                            timestamp=datetime.now(timezone.utc)
+                        )
+                        embed.add_field(name="Canal", value=before.channel.name, inline=True)
+                        embed.add_field(name="Duración", value=f"{minutos}m {segundos}s", inline=True)
+                        embed.add_field(name="Con quién estuvo", value=companeros_txt, inline=False)
+                        embed.set_footer(text=f"ID Usuario: {member.id}", icon_url=member.display_avatar.url)
 
-                    await canal_registro.send(embed=embed)
+                        await canal_registro.send(embed=embed)
 
     # Usuario cambia de un canal a otro
     elif before.channel != after.channel:
