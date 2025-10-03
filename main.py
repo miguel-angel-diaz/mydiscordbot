@@ -43,7 +43,8 @@ from utils.events import (
   evento_socio_handle, 
   usuario_salio_handle,
   reconocer_comando_handle,
-  log_comando_handle
+  log_comando_handle,
+  member_join_handle
 )
 
 from utils.watchers import cargar_tareas;
@@ -351,6 +352,10 @@ async def on_command_error(ctx, error):
         error=error,
         fecha=ctx.message.created_at
     )
+@bot.event
+async def on_voice_state_update(member, before, after):
+    await member_join_handle(member, before, after)
+
     
     
 # webserver.keep_alive()  

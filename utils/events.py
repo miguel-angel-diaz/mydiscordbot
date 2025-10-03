@@ -1,7 +1,11 @@
 import discord
 from discord.ext import commands
+from datetime import datetime, timezone
 import asyncio
 import config
+
+tiempos_entrada = {}  # { user_id: datetime }
+
 
 async def registrar_mensaje_borrado_handle(message: discord.Message):
     if message.author.bot or not message.guild:
@@ -340,3 +344,75 @@ async def log_comando_handle(bot, usuario, comando, tipo, error=None, fecha=None
         embed.add_field(name="Error", value=str(error), inline=False)
 
     await canal_log.send(embed=embed)
+
+async def member_join_handle(member, before, after):
+    # Usuario entra a un canal de voz
+    if before.channel is None and after.channel is not None:
+        tiempos_entrada[member.id] = datetime.now(timezone.utc)
+
+    # Usuario sale del canal
+    elif before.channel is not None and after.channel is None:
+        if member.id in tiempos_entrada:
+            inicio = tiempos_entrada.pop(member.id)
+            duracion = (datetime.now(timezone.utc) - inicio).total_seconds()
+
+            if duracion >= 300:  # 5 minutos
+                canal_registro = discord.utils.get(member.guild.text_channels, name="oyentes-en-canales")
+                if canal_registro:
+                    minutos = int(duracion // 60)
+                    segundos = int(duracion % 60)
+
+                    # Compañeros que estaban en el canal (sin incluir al usuario)
+                    companeros = [m.display_name for m in before.channel.members if m.id != member.id]
+                    if not companeros:
+                        companeros_txt = "Estuvo solo 🗿"
+                    else:
+                        companeros_txt = ", ".join(companeros)
+
+                    embed = discord.Embed(
+                        title="📋 Registro de voz",
+                        description=f"**{member.display_name}** estuvo en un canal de voz.",
+                        color=discord.Color.blue(),
+                        timestamp=datetime.now(timezone.utc)
+                    )
+                    embed.add_field(name="Canal", value=before.channel.name, inline=True)
+                    embed.add_field(name="Duración", value=f"{minutos}m {segundos}s", inline=True)
+                    embed.add_field(name="Con quién estuvo", value=companeros_txt, inline=False)
+                    embed.set_footer(text=f"ID Usuario: {member.id}", icon_url=member.display_avatar.url)
+
+                    await canal_registro.send(embed=embed)
+
+    # Usuario cambia de un canal a otro
+    elif before.channel != after.channel:
+        if member.id in tiempos_entrada:
+            inicio = tiempos_entrada.pop(member.id)
+            duracion = (datetime.now(timezone.utc) - inicio).total_seconds()
+
+            if duracion >= 300:
+                canal_registro = discord.utils.get(member.guild.text_channels, name="registro-canales-voz")
+                if canal_registro:
+                    minutos = int(duracion // 60)
+                    segundos = int(duracion % 60)
+
+                    # Compañeros del canal anterior (sin incluir al usuario)
+                    companeros = [m.display_name for m in before.channel.members if m.id != member.id]
+                    if not companeros:
+                        companeros_txt = "Estuvo solo 🗿"
+                    else:
+                        companeros_txt = ", ".join(companeros)
+
+                    embed = discord.Embed(
+                        title="📋 Registro de voz",
+                        description=f"**{member.display_name}** cambió de canal de voz.",
+                        color=discord.Color.green(),
+                        timestamp=datetime.now(timezone.utc)
+                    )
+                    embed.add_field(name="Canal anterior", value=before.channel.name, inline=True)
+                    embed.add_field(name="Tiempo en canal", value=f"{minutos}m {segundos}s", inline=True)
+                    embed.add_field(name="Con quién estuvo", value=companeros_txt, inline=False)
+                    embed.set_footer(text=f"ID Usuario: {member.id}", icon_url=member.display_avatar.url)
+
+                    await canal_registro.send(embed=embed)
+
+        # Reiniciar el tiempo en el nuevo canal
+        tiempos_entrada[member.id] = datetime.now(timezone.utc)

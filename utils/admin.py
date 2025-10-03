@@ -152,8 +152,7 @@ async def aplicar_out(ctx, miembro: discord.Member):
     # canal_anuncios = ctx.guild.get_channel(1387389356464934993)
     # await canal_anuncios.send(f"⚠️ Hemos invitado a abandonar el servidor a {miembro.mention}, ya no podra volver a entrar a The Klub.")
 
-async def eliminar_mensajes(ctx, canal: discord.TextChannel = None, cantidad: int = None):
-    # Verificar permisos
+async def eliminar_mensajes(ctx, canal: discord.TextChannel = None, cantidad: int = None, orden: str = None, incluir_fijados: bool = None):
     if not await moderador_permisos_handle(ctx):
         return
 
@@ -163,8 +162,8 @@ async def eliminar_mensajes(ctx, canal: discord.TextChannel = None, cantidad: in
         return m.author == author and isinstance(m.channel, discord.DMChannel)
 
     try:
-        # Si falta canal o cantidad, iniciar conversación por DM
-        if canal is None or cantidad is None:
+        # Preguntas por DM si faltan datos
+        if canal is None or cantidad is None or orden is None or incluir_fijados is None:
             await author.send("🧹 Vamos a eliminar mensajes. Responde a las siguientes preguntas:")
 
             if canal is None:
@@ -185,14 +184,72 @@ async def eliminar_mensajes(ctx, canal: discord.TextChannel = None, cantidad: in
                     await author.send("❌ La cantidad debe ser un número entero.")
                     return
 
-        # Validar rango de cantidad
+            if orden is None:
+                await author.send("3️⃣ ¿Cómo quieres borrar los mensajes? Escribe `recientes` o `antiguos`:")
+                respuesta_orden = await ctx.bot.wait_for("message", check=dm_check, timeout=60)
+                orden = respuesta_orden.content.strip().lower()
+                if orden not in ("recientes", "antiguos"):
+                    await author.send("❌ Opción no válida. Usa `recientes` o `antiguos`.")
+                    return
+
+            if incluir_fijados is None:
+                await author.send("4️⃣ ¿Quieres borrar también los mensajes fijados? Responde `sí` o `no`:")
+                respuesta_fijados = await ctx.bot.wait_for("message", check=dm_check, timeout=60)
+                incluir_fijados = respuesta_fijados.content.strip().lower() in ("sí", "si", "yes", "y")
+
         if cantidad <= 0 or cantidad > 1000:
             await author.send("⚠️ La cantidad debe estar entre 1 y 1000.")
             return
 
-        # Intentar borrar mensajes
-        mensajes_borrados = await canal.purge(limit=cantidad)
-        await ctx.send(f"✅ Se han eliminado {len(mensajes_borrados)} mensajes de {canal.mention}.", delete_after=5)
+        mensajes_borrados = []
+
+        if orden == "recientes":
+            mensajes_borrados = await canal.purge(
+                limit=cantidad,
+                check=lambda m: incluir_fijados or not m.pinned
+            )
+
+        elif orden == "antiguos":
+            mensajes = [msg async for msg in canal.history(limit=cantidad, oldest_first=True)]
+            for msg in mensajes:
+                if not incluir_fijados and msg.pinned:
+                    continue
+                try:
+                    await msg.delete()
+                    mensajes_borrados.append(msg)
+                    await asyncio.sleep(0.5)
+                except discord.HTTPException:
+                    continue
+
+        # ✅ Confirmación en el canal donde se lanzó el comando
+        await ctx.send(
+            f"✅ Se han eliminado {len(mensajes_borrados)} mensajes de {canal.mention}.",
+            delete_after=5
+        )
+
+        # 🔔 Logs en #mensajes-borrados
+        log_channel = discord.utils.get(ctx.guild.text_channels, name="mensajes-borrados")
+        if log_channel:
+            embed = discord.Embed(
+                title="🧹 Mensajes eliminados",
+                color=discord.Color.red(),
+                timestamp=datetime.now()
+            )
+            embed.add_field(name="Moderador", value=f"{author.mention}", inline=True)
+            embed.add_field(name="Canal", value=f"{canal.mention}", inline=True)
+            embed.add_field(name="Cantidad", value=f"{len(mensajes_borrados)}", inline=True)
+            embed.add_field(name="Orden", value="Recientes primero" if orden=="recientes" else "Antiguos primero", inline=True)
+            embed.add_field(name="Incluye fijados", value="✅ Sí" if incluir_fijados else "❌ No", inline=True)
+
+            # Mostrar una vista previa (máx 5 para no saturar)
+            if mensajes_borrados:
+                preview = "\n".join(
+                    f"**{m.author}**: {m.content[:40]}{'...' if len(m.content) > 40 else ''}"
+                    for m in mensajes_borrados[:5]
+                )
+                embed.add_field(name="Ejemplo de mensajes borrados", value=preview, inline=False)
+
+            await log_channel.send(embed=embed)
 
     except asyncio.TimeoutError:
         await author.send("⏰ Tiempo agotado. Vuelve a intentar con `!eliminar-mensajes`.")
