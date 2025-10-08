@@ -1,9 +1,12 @@
 import aiohttp
 import discord
 import asyncio
+from collections import Counter
 from bs4 import BeautifulSoup
 from urllib.parse import urlparse, parse_qs
 from datetime import datetime, timedelta
+import matplotlib.pyplot as plt
+import io
 import re
 import config
 from utils.torneos import generar_codigo_unico, partidos_pendientes_handle
@@ -1736,3 +1739,95 @@ async def leer_deck_tc_decks(ctx):
                     sideboard = limpiar_texto(td)
 
     return nombre_deck, archetype, decklist, sideboard
+
+
+async def cartas_mas_jugadas_handle(ctx, codigo_torneo: str = None):
+    await borrar_mensaje_seguro(ctx)
+    author = ctx.author
+
+    # 🔹 Canal donde están los decks
+    canal = discord.utils.get(ctx.guild.text_channels, name="submitted-decks")
+    if not canal:
+        return await ctx.send("❌ No encontré el canal `submitted-decks` en este servidor.")
+
+    # 🔹 Obtener torneo(s)
+    if not codigo_torneo:
+        codigo_torneo = await obtener_torneo_usuario(
+            ctx, 
+            mensaje_inicial="📋 Por favor selecciona un torneo o 'todos' para analizarlos todos:",
+            complete=True
+        )
+        if not codigo_torneo:
+            return await ctx.send("❌ No se seleccionó ningún torneo. Operación cancelada.")
+
+    # Si devuelve lista (varios torneos)
+    if isinstance(codigo_torneo, list):
+        torneos_a_analizar = codigo_torneo
+    else:
+        torneos_a_analizar = [codigo_torneo]
+
+    cartas_basicas = {"mountain", "swamp", "plains", "island", "forest"}
+
+    # 🔹 Recorrer cada torneo
+    for torneo in torneos_a_analizar:
+        contador_cartas = Counter()
+
+        async for mensaje in canal.history(limit=None):
+            for embed in mensaje.embeds:
+                if not embed.description or torneo not in embed.description:
+                    continue
+
+                campos = {field.name.lower(): field.value for field in embed.fields}
+                decklist = campos.get("decklist", "")
+                if not decklist:
+                    continue
+
+                for linea in decklist.splitlines():
+                    if not linea.strip():
+                        continue
+                    try:
+                        cantidad, carta = linea.strip().split(" ", 1)
+                        cantidad = int(cantidad)
+                        if carta.lower() in cartas_basicas:
+                            continue
+                        contador_cartas[carta] += cantidad
+                    except ValueError:
+                        continue
+
+        if not contador_cartas:
+            await ctx.author.send(f"📭 No se encontraron decks válidos para el torneo `{torneo}`.")
+            continue
+
+        # 🔹 Top 10 cartas más jugadas
+        top = contador_cartas.most_common(20)
+        texto = f"📊 **Cartas más jugadas en {torneo} (sin tierras básicas):**\n"
+        for idx, (carta, cant) in enumerate(top, start=1):
+            texto += f"{idx}. {carta} → {cant} veces\n"
+
+        await ctx.author.send(texto)
+
+        # 🔹 Crear gráfico tipo donut
+        nombres = [carta for carta, _ in top]
+        cantidades = [cant for _, cant in top]
+
+        fig, ax = plt.subplots(figsize=(6,6))
+        wedges, texts, autotexts = ax.pie(
+            cantidades,
+            labels=nombres,
+            autopct="%1.1f%%",
+            startangle=90,
+            pctdistance=0.85,
+            textprops={'fontsize': 10}
+        )
+
+        centre_circle = plt.Circle((0,0),0.70,fc='white')
+        fig.gca().add_artist(centre_circle)
+        ax.axis('equal')
+        plt.title(f"Top 10 cartas más jugadas\nTorneo: {torneo}", fontsize=12)
+
+        buf = io.BytesIO()
+        plt.savefig(buf, format='PNG')
+        buf.seek(0)
+        plt.close(fig)
+
+        await ctx.author.send(file=discord.File(fp=buf, filename=f"cartas_mas_jugadas_{torneo}.png"))

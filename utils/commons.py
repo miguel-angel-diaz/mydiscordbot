@@ -65,14 +65,12 @@ def buscar_usuario_en_servidor(guild, nombre_busqueda: str):
             return miembro
     return None
 
-async def obtener_torneo_usuario(ctx, mensaje_inicial: str = None, timeout: int = 90):
+async def obtener_torneo_usuario(ctx, mensaje_inicial: str = None, complete=False):
     """
-    Devuelve el código (tournament url/slug) del torneo elegido por el usuario.
-    Muestra todos los torneos si el comando es 'ver-inscritos' o 'iniciar-torneo',
-    y solo los torneos en los que el usuario está inscrito en otros casos.
-    Retorna None en caso de error / cancelación.
+    Devuelve el código (tournament url/slug) o una lista con varios códigos si el usuario elige 'todos'.
+    Solo muestra la opción 'todos' si complete=True.
     """
-    # 1) Mensaje inicial opcional
+    # 1️⃣ Enviar mensaje inicial si existe
     if mensaje_inicial:
         try:
             await ctx.author.send(mensaje_inicial)
@@ -80,11 +78,11 @@ async def obtener_torneo_usuario(ctx, mensaje_inicial: str = None, timeout: int 
             await ctx.send("❌ No puedo enviarte mensajes privados. Activa los DMs para continuar.")
             return None
 
-    # 2) Determinar si filtramos solo torneos inscritos
+    # 2️⃣ Determinar si filtramos solo torneos inscritos
     comando_actual = getattr(ctx.command, "name", "").lower()
     solo_inscritos = comando_actual not in ("ver-inscritos", "iniciar-torneo")
 
-    # 3) Obtener lista de torneos (state=all)
+    # 3️⃣ Obtener lista de torneos desde Challonge
     url_torneos = "https://api.challonge.com/v1/tournaments.json?state=all"
     async with aiohttp.ClientSession() as session:
         async with session.get(url_torneos, auth=aiohttp.BasicAuth(config.CHALLONGE_USERNAME, config.CHALLONGE_API_KEY)) as resp:
@@ -93,7 +91,6 @@ async def obtener_torneo_usuario(ctx, mensaje_inicial: str = None, timeout: int 
                 return None
             torneos_raw = await resp.json()
 
-        # 4) Filtrar y construir lista
         torneos = []
         for entry in torneos_raw:
             t = entry.get("tournament", {})
@@ -101,74 +98,84 @@ async def obtener_torneo_usuario(ctx, mensaje_inicial: str = None, timeout: int 
             tid = t.get("url") or str(t.get("id"))
             nombre = t.get("name") or "(sin nombre)"
 
-            # 🔹 Filtro global: no mostrar torneos completados
-            if estado == "complete":
-                continue
+            # 🔹 Filtrar según complete
+            if complete and estado != "complete":
+                continue  # solo torneos completados
+            if not complete and estado == "complete":
+                continue  # solo torneos no completados
 
+            # 🔹 Si solo queremos torneos donde el usuario está inscrito
             if solo_inscritos:
-                # Obtener participantes de este torneo
                 url_participantes = f"https://api.challonge.com/v1/tournaments/{tid}/participants.json"
                 async with session.get(url_participantes, auth=aiohttp.BasicAuth(config.CHALLONGE_USERNAME, config.CHALLONGE_API_KEY)) as p_resp:
                     if p_resp.status != 200:
                         continue
                     participantes_data = await p_resp.json()
                     inscritos = [p["participant"].get("name") for p in participantes_data]
-
                     usuario_id_str = str(ctx.author.id)
                     if usuario_id_str not in inscritos:
                         continue
-                            
+
             torneos.append((tid, nombre))
 
+    # 4️⃣ Comprobación básica
     if not torneos:
-        if solo_inscritos:
-            await ctx.author.send("📭 No estás inscrito en ningún torneo disponible.")
-        else:
-            await ctx.author.send("📭 No hay torneos disponibles en Challonge.")
+        await ctx.author.send("📭 No se encontraron torneos disponibles.")
         return None
 
-    # 5) Mostrar torneos por DM en trozos de 20
+    # 5️⃣ Mostrar torneos por DM
     numeros_emoji = [
         "1️⃣","2️⃣","3️⃣","4️⃣","5️⃣","6️⃣","7️⃣","8️⃣","9️⃣","🔟",
         "1️⃣1️⃣","1️⃣2️⃣","1️⃣3️⃣","1️⃣4️⃣","1️⃣5️⃣","1️⃣6️⃣","1️⃣7️⃣","1️⃣8️⃣","1️⃣9️⃣","2️⃣0️⃣"
     ]
     chunk_size = 20
     total = len(torneos)
-    header_base = f"📋 Se han encontrado **{total}** torneos disponibles.\n"
+    header_base = f"📋 Se han encontrado **{total}** torneos {'completados' if complete else 'activos'}.\n"
+
     for start in range(0, total, chunk_size):
         chunk = torneos[start:start + chunk_size]
         texto = header_base if start == 0 else ""
         for idx, (tid, nombre) in enumerate(chunk, start=start):
             emoji = numeros_emoji[idx] if idx < len(numeros_emoji) else f"{idx+1}."
             texto += f"{emoji} `{tid}` → {nombre}\n"
-        if total > len(numeros_emoji):
-            texto += f"\n(Selecciona el número del torneo: 1 - {total})"
+        
+        # 🔸 Solo mostrar la opción "todos" si complete=True
+        if complete and total > 1:
+            texto += "\n🟢 Puedes escribir **todos** para analizar todos los torneos completados."
+
         try:
             await ctx.author.send(texto)
         except discord.Forbidden:
             await ctx.send("❌ No puedo enviarte mensajes privados. Activa los DMs para continuar.")
             return None
 
-    # 6) Pedir selección
-    try:
-        await ctx.author.send(f"✏️ Responde con el **número** del torneo que quieras usar (1 - {total}). Tienes {timeout} segundos.")
-    except discord.Forbidden:
-        await ctx.send("❌ No puedo enviarte mensajes privados. Activa los DMs para continuar.")
-        return None
+    # 6️⃣ Pedir selección
+    await ctx.author.send(f"✏️ Responde con el **número** del torneo que quieras usar (1 - {total})" +
+                          (" o escribe **todos**." if complete and total > 1 else ".") +
+                          " Tienes 90 segundos.")
 
     def dm_check(m):
         return m.author == ctx.author and isinstance(m.channel, discord.DMChannel)
 
     try:
-        respuesta = await ctx.bot.wait_for("message", check=dm_check, timeout=timeout)
-        seleccion = int(respuesta.content.strip())
+        respuesta = await ctx.bot.wait_for("message", check=dm_check, timeout=90)
+        contenido = respuesta.content.strip().lower()
+
+        # ✅ Solo aceptar "todos" si complete=True
+        if complete and contenido == "todos":
+            return [tid for tid, _ in torneos]
+
+        # ✅ Aceptar número de torneo
+        seleccion = int(contenido)
         if seleccion < 1 or seleccion > total:
             await ctx.author.send("❌ Opción no válida. Cancelo la operación.")
             return None
+
         elegido = torneos[seleccion - 1][0]
         return elegido
+
     except ValueError:
-        await ctx.author.send("❌ Debes responder con un número válido. Cancelo la operación.")
+        await ctx.author.send("❌ Respuesta no válida. Cancelo la operación.")
         return None
     except asyncio.TimeoutError:
         await ctx.author.send("⏰ Tiempo agotado. Intenta de nuevo.")

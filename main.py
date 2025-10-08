@@ -27,7 +27,8 @@ from utils.jugadores import (
     inscribirse_sorteo_handle,
     mis_comandos_handle,
     submitted_deck_handle,
-    editar_deck_handle
+    editar_deck_handle,
+    cartas_mas_jugadas_handle
 )
 
 from utils.torneos import (
@@ -259,6 +260,14 @@ async def stats(ctx):
 #     """Inicia el wizard de estadísticas - !stats"""
 #     await stats_global_handle(ctx)
 
+@bot.command(name="cartas-mas-jugadas", 
+    aliases=["cartas_mas_jugadas"])
+@comando_roles_permitidos("socio", "second-chance-socio", "miembro", "second-chance-miembro")
+async def stats(ctx):
+    """Inicia el wizard de estadísticas - !stats"""
+    await cartas_mas_jugadas_handle(ctx)
+
+
 #########################################################################################################
 
 ######################################### COMANDOS TORNEOS ##############################################
@@ -360,6 +369,7 @@ async def on_command_error(ctx, error):
         error=error,
         fecha=ctx.message.created_at
     )
+
 @bot.event
 async def on_voice_state_update(member, before, after):
     await member_join_handle(member, before, after)

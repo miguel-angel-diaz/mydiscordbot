@@ -194,6 +194,7 @@ async def reconocer_comando_handle(bot: commands.Bot, message: discord.Message):
 
     comandos_alias = {
         "mis comandos": "mis-comandos",
+        "cartas mas jugadas": "cartas-mas-jugadas",
         "ver inscritos": "ver-inscritos",
         "reportar resultado": "reportar-resultado",
         "modificar resultado": "modificar-resultado",
