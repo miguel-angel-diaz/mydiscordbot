@@ -127,6 +127,12 @@ COMANDOS_INFO = [
         "roles_permitidos": ["socio", "second-chance-socio", "miembro", "admin", "second-chance-miembro"],
         "permisos_discord": ["manage_messages", "manage_roles"],
         "descripcion": "Inscribe a un usuario en un sorteo"
+    }, {
+        "comando": "cartas-mas-jugadas",
+        "roles_permitidos": ["socio", "second-chance-socio", "miembro", "admin", "second-chance-miembro"],
+        "permisos_discord": ["manage_messages", "manage_roles"],
+        "descripcion": "nos muestra las cartas más jugadas en un torneo o en todos los torneos completados"
+        
     },
     {
         "comando": "stats",

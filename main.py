@@ -376,8 +376,8 @@ async def on_voice_state_update(member, before, after):
 
     
     
-# webserver.keep_alive()  
-# bot.run(DISCORD_TOKEN)
-bot.run(config.TOKEN)
+webserver.keep_alive()  
+bot.run(DISCORD_TOKEN)
+# bot.run(config.TOKEN)
 
 
