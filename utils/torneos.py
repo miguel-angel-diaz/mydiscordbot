@@ -12,7 +12,6 @@ import string
 from utils.commons import borrar_mensaje_seguro, validar_canal_correcto, obtener_torneo_usuario
 from utils.admin import moderador_permisos_handle
 
-CHALLONGE_API_KEY = "DwMmC03iVa5UKm377ZaScn6omJ3EA6jWRcPvzZOJ"
 
 def generar_codigo_unico(longitud=6):
     return ''.join(random.choices(string.ascii_uppercase + string.digits, k=longitud))

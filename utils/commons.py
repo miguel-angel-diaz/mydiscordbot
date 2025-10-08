@@ -97,9 +97,13 @@ async def obtener_torneo_usuario(ctx, mensaje_inicial: str = None, timeout: int 
         torneos = []
         for entry in torneos_raw:
             t = entry.get("tournament", {})
-            estado = t.get("state")  # 🔹 corregido
+            estado = t.get("state")
             tid = t.get("url") or str(t.get("id"))
             nombre = t.get("name") or "(sin nombre)"
+
+            # 🔹 Filtro global: no mostrar torneos completados
+            if estado == "complete":
+                continue
 
             if solo_inscritos:
                 # Obtener participantes de este torneo
@@ -108,16 +112,12 @@ async def obtener_torneo_usuario(ctx, mensaje_inicial: str = None, timeout: int 
                     if p_resp.status != 200:
                         continue
                     participantes_data = await p_resp.json()
-                    # Comprobar si ctx.author está inscrito
-                    # Obtener lista de participantes
                     inscritos = [p["participant"].get("name") for p in participantes_data]
 
-                    # Usar el ID del usuario como string
                     usuario_id_str = str(ctx.author.id)
-
-                    if usuario_id_str not in inscritos or estado == "complete":
-                        continue  # No está inscrito → saltar
-                    
+                    if usuario_id_str not in inscritos:
+                        continue
+                            
             torneos.append((tid, nombre))
 
     if not torneos:
