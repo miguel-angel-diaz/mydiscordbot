@@ -6,7 +6,7 @@ import aiohttp
 import random
 import config
 
-from utils.commons import borrar_mensaje_seguro, validar_canal_correcto, buscar_usuario_en_servidor
+from utils.commons import borrar_mensaje_seguro, validar_canal_correcto, buscar_usuario_en_servidor, obtener_torneo_usuario
 
 async def aplicar_strike(ctx, miembro: discord.Member):
      # Intentar eliminar el mensaje del canal público
@@ -752,3 +752,111 @@ async def nuevo_comunicado_handle(ctx, mensaje: str = None):
 
     await canal.send("@everyone", embed=embed)
     await ctx.author.send(f"✅ Comunicado enviado a {canal.mention}")
+
+async def eliminar_decks_handle(ctx, codigo_torneo: str = None):
+    """
+    Permite eliminar decks de un torneo. Si no se proporciona código, pide al usuario seleccionarlo.
+    Se puede eliminar decks individuales o todos a la vez.
+    """
+    await borrar_mensaje_seguro(ctx)
+    
+    if not await moderador_permisos_handle(ctx):
+        return
+
+    # 1️⃣ Obtener código de torneo si no se proporcionó
+    if not codigo_torneo:
+        codigo_torneo = await obtener_torneo_usuario(ctx, "📋 Debes seleccionar un torneo para eliminar listas.")
+        if not codigo_torneo:
+            return await ctx.send("❌ No se seleccionó ningún torneo. Operación cancelada.")
+
+    # 2️⃣ Buscar canal de decks
+    channel = discord.utils.get(ctx.guild.text_channels, name="submitted-decks")
+    if not channel:
+        return await ctx.send("❌ No encontré el canal `submitted-decks` en este servidor.")
+
+    # 3️⃣ Obtener todos los mensajes del canal y filtrar por torneo
+    decks_encontrados = []
+
+    async for message in channel.history(limit=None):
+        for embed in message.embeds:
+            if not embed.description:
+                continue
+
+            # Buscar el código de torneo en el description
+            if codigo_torneo not in embed.description:
+                continue
+
+            # Extraer campos de los fields
+            campos = {field.name.lower(): field.value for field in embed.fields}
+            nombre_deck_extraido = embed.title.replace("🃏 Deck Subido: ", "").replace("🃏 Deck Actualizado: ", "")
+
+            # Intentar extraer jugador y su ID
+            jugador_field = campos.get("jugador", "Desconocido")
+            jugador_id = None
+            if "(ID:" in jugador_field:
+                try:
+                    jugador_id = int(jugador_field.split("(ID:")[1].split(")")[0].strip())
+                except ValueError:
+                    pass
+
+            decks_encontrados.append({
+                "mensaje": message,
+                "nombre_deck": nombre_deck_extraido,
+                "jugador": jugador_field,
+                "jugador_id": jugador_id,
+                "archetype": campos.get("archetype", "Desconocido"),
+                "decklist": campos.get("decklist", ""),
+                "sideboard": campos.get("sideboard", "N/A")
+            })
+
+    if not decks_encontrados:
+        return await ctx.author.send(f"📭 No se encontraron decks para el torneo `{codigo_torneo}`.")
+
+    # 4️⃣ Mostrar lista de decks para eliminar
+    texto = f"📋 Decks encontrados para el torneo `{codigo_torneo}`:\n"
+    for idx, deck in enumerate(decks_encontrados, start=1):
+        texto += f"{idx}. {deck['nombre_deck']} → {deck['archetype']} (Jugador: {deck['jugador']})\n"
+
+    try:
+        await ctx.author.send(texto)
+    except discord.Forbidden:
+        return await ctx.send("❌ No puedo enviarte mensajes privados. Activa los DMs para continuar.")
+
+    # 5️⃣ Pedir selección
+    await ctx.author.send(
+        "✏️ Responde con los **números separados por coma** de los decks a eliminar (ej: 1,3,4) "
+        "o escribe `todos` para eliminar todos los decks. Tienes 120 segundos."
+    )
+
+    def dm_check(m):
+        return m.author == ctx.author and isinstance(m.channel, discord.DMChannel)
+
+    try:
+        respuesta = await ctx.bot.wait_for("message", check=dm_check, timeout=120)
+        contenido = respuesta.content.strip().lower()
+
+        if contenido in ("todos", "all"):
+            # Seleccionar todos los decks
+            to_delete = [deck["mensaje"] for deck in decks_encontrados]
+        else:
+            # Selección por números separados por coma
+            indices = [int(x.strip())-1 for x in contenido.split(",")]
+            to_delete = [decks_encontrados[i]["mensaje"] for i in indices if 0 <= i < len(decks_encontrados)]
+
+    except ValueError:
+        return await ctx.author.send("❌ Entrada inválida. Debes poner números separados por coma o 'todos'.")
+    except asyncio.TimeoutError:
+        return await ctx.author.send("⏰ Tiempo agotado. Operación cancelada.")
+
+    # 6️⃣ Confirmar borrado
+    eliminados = 0
+    for msg in to_delete:
+        try:
+            await msg.delete()
+            eliminados += 1
+        except discord.Forbidden:
+            await ctx.author.send(f"❌ No tengo permisos para eliminar el mensaje de {msg.author}.")
+        except discord.HTTPException:
+            await ctx.author.send(f"❌ No se pudo eliminar el mensaje de {msg.author}.")
+
+    await ctx.author.send(f"✅ Eliminados {eliminados} decks del torneo `{codigo_torneo}`.")

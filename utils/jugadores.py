@@ -1502,8 +1502,7 @@ async def submitted_deck_handle(ctx, codigo_torneo: str = None):
     await author.send(
         "📥 Elige cómo quieres subir tu deck:\n"
         "1️⃣ tcdecks.net\n"
-        "2️⃣ mtgdecks.net\n"
-        "3️⃣ Manual"
+        "2️⃣ Manual"
     )
     try:
         respuesta = await ctx.bot.wait_for("message", check=dm_check, timeout=60.0)
@@ -1523,15 +1522,9 @@ async def submitted_deck_handle(ctx, codigo_torneo: str = None):
         if decklist is None:
             await author.send("❌ Error al leer el deck desde tcdecks.net. Intenta subirlo manualmente.")
             return
-    elif opcion == "2":
-        # Leer deck desde MTGDecks
-        nombre_deck, archetype, decklist, sideboard = await leer_deck_mtgdecks(ctx)
-        if decklist is None:
-            await author.send("❌ Error al leer el deck desde mtgdecks.net. Intenta subirlo manualmente.")
-            return
    
-    elif opcion == "3":
-        print("➡️ Opción 3 seleccionada: subir deck")  # Marca que entramos en esta opción
+    elif opcion == "2":
+        print("➡️ Opción 2 seleccionada: subir deck")  # Marca que entramos en esta opción
 
         datos = await deck_dm_flow(ctx, author, codigo_torneo, modo="subir")
         print(f"🔹 deck_dm_flow devolvió: {datos}")  # Muestra lo que devuelve
@@ -1743,104 +1736,3 @@ async def leer_deck_tc_decks(ctx):
                     sideboard = limpiar_texto(td)
 
     return nombre_deck, archetype, decklist, sideboard
-
-async def leer_deck_mtgdecks(ctx):
-    author = ctx.author
-
-    def dm_check(m):
-        return m.author == author and isinstance(m.channel, discord.DMChannel)
-
-    await author.send("🔗 Por favor envíame la URL de tu deck de mtgdecks.net:")
-
-    try:
-        respuesta = await ctx.bot.wait_for("message", check=dm_check, timeout=120.0)
-        url = respuesta.content.strip()
-    except asyncio.TimeoutError:
-        await author.send("⏰ Tiempo agotado. Vuelve a intentarlo.")
-        return
-
-    # Leer decklist y sideboard
-    try:
-        deck_data = await extract_deck_from_mtgdecks(url)
-        decklist = deck_data["decklist"]
-        sideboard = deck_data["sideboard"]
-    except Exception as e:
-        await author.send(f"❌ Error al leer el deck: {e}")
-        return
-
-    # Pedir nombre del deck
-    await author.send("✏️ Por favor ingresa el nombre de tu deck:")
-    try:
-        nombre_deck_msg = await ctx.bot.wait_for("message", check=dm_check, timeout=60.0)
-        nombre_deck = nombre_deck_msg.content.strip() or "Deck importado"
-    except asyncio.TimeoutError:
-        nombre_deck = "Deck importado"
-        await author.send("⏰ Tiempo agotado. Usando nombre por defecto: Deck importado")
-
-    # Pedir arquetipo
-    await author.send("🧩 Por favor ingresa el arquetipo de tu deck:")
-    try:
-        archetype_msg = await ctx.bot.wait_for("message", check=dm_check, timeout=60.0)
-        archetype = archetype_msg.content.strip() or "Desconocido"
-    except asyncio.TimeoutError:
-        archetype = "Desconocido"
-        await author.send("⏰ Tiempo agotado. Usando arquetipo por defecto: Desconocido")
-
-    return nombre_deck, archetype, decklist, sideboard
-
-async def extract_deck_from_mtgdecks(url: str):
-    """
-    Lee un deck desde mtgdecks.net y devuelve decklist y sideboard.
-    """
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
-
-    async with aiohttp.ClientSession(headers=headers) as session:
-        async with session.get(url) as resp:
-            if resp.status != 200:
-                raise ValueError(f"No se pudo acceder a la URL. Código HTTP: {resp.status}")
-            html = await resp.text()
-
-    soup = BeautifulSoup(html, "html.parser")
-
-    # El primer div.col-sm-6 contiene el deck principal
-    main_div = soup.select_one(".cards .row .col-sm-6:first-child")
-    if not main_div:
-        raise ValueError("No se encontró el deck en la página.")
-
-    def parse_table(tabla):
-        """
-        Extrae las cartas de una tabla (<table>) y devuelve lista tipo '3 Grim Lavamancer'
-        """
-        cartas = []
-        for tr in tabla.find_all("tr", class_="cardItem"):
-            num = tr.find("td", class_="number")
-            if not num:
-                continue
-            # La cantidad de cartas (el primer número dentro del td)
-            cantidad_match = re.search(r'\d+', num.get_text())
-            cantidad = int(cantidad_match.group()) if cantidad_match else 1
-
-            # Nombre de la carta
-            a_tag = num.find("a")
-            nombre = a_tag.text.strip() if a_tag else "Desconocido"
-            cartas.append(f"{cantidad} {nombre}")
-        return cartas
-
-    decklist = []
-    sideboard = []
-
-    # Cada tabla dentro del div principal
-    for tabla in main_div.find_all("table"):
-        decklist.extend(parse_table(tabla))
-
-    # En mtgdecks.net el sideboard suele estar en otro div o sección
-    # Si quieres, podemos intentar capturarlo buscando un div con clase 'sideboard'
-    side_div = soup.select_one(".cards .row .col-sm-6:last-child")
-    if side_div:
-        for tabla in side_div.find_all("table"):
-            sideboard.extend(parse_table(tabla))
-
-    return {
-        "decklist": "\n".join(decklist),
-        "sideboard": "\n".join(sideboard) if sideboard else "N/A"
-    }

@@ -10,7 +10,8 @@ from utils.admin import (
   nuevo_sorteo_handle, 
   realizar_sorteo_handle,
   listar_torneos_handle,
-  nuevo_comunicado_handle
+  nuevo_comunicado_handle,
+  eliminar_decks_handle
 )
 
 from utils.jugadores import (
@@ -107,6 +108,13 @@ async def out(ctx, miembro: discord.Member = None):
 async def clear(ctx, canal: discord.TextChannel = None, cantidad: int = None):
     """Elimina una cantidad específica de mensajes en un canal - !eliminar-mensajes <canal> <cantidad>"""
     await eliminar_mensajes(ctx, canal, cantidad)
+
+@bot.command(name="eliminar-decks",
+    aliases=["eliminar decks", "eliminar_decks"])
+@comando_roles_permitidos("admin")
+async def clear(ctx, codigo: str = None):
+    """Elimina los decks submiteados para un torneo - !eliminar-decks <torneo>"""
+    await eliminar_decks_handle(ctx,codigo)
 
 @bot.command(name="cerrar-peticion",
     aliases=["cerrar peticion", "cerrar_peticion"])

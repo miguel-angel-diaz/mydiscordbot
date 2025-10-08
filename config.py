@@ -157,6 +157,12 @@ COMANDOS_INFO = [
         "roles_permitidos": ["admin"],
         "permisos_discord": ["manage_messages", "manage_roles"],
         "descripcion": "Termina la ronda actual y comienza la siguiente"
+    },
+    {
+        "comando": "eliminar-decks",
+        "roles_permitidos": ["admin"],
+        "permisos_discord": ["manage_messages", "manage_roles"],
+        "descripcion": "elimina los decks submiteados para un torneo especificado"
     }
 ]
 BLACKLIST_USERS = [
