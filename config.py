@@ -1,4 +1,4 @@
-TOKEN = "MTM4NTEzMDg4Mjc3OTcxMzc0Ng.GktO2Y.FWoFmecTUEOYV0jqBkvpuWvxq3HrBJIJzIwr_Q"
+TOKEN = "MTM4NTEzMDg4Mjc3OTcxMzc0Ng.G8Ih_v.Xuh72YJBl9zERF20Cus5MZcVvzaOMBhlKfT7tU"
 CHALLONGE_USERNAME = "TheKlub"
 CHALLONGE_API_KEY = "WfdVp0bApiTGP3OTiOsM4hhuSNPgsUDrndBCVzaG"
 CHALLONGE_API_URL = "https://api.challonge.com/v1/tournaments.json"
