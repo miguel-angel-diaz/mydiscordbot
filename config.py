@@ -3,6 +3,9 @@ import os
 CHALLONGE_USERNAME = os.getenv("CHALLONGE_USERNAME")
 CHALLONGE_API_KEY = os.getenv("CHALLONGE_API_KEY")
 
+print("🔍 DEBUG: CHALLONGE_USERNAME =", CHALLONGE_USERNAME)
+print("🔍 DEBUG: CHALLONGE_API_KEY =", "✅ Cargada" if CHALLONGE_API_KEY else "❌ Vacía")
+
 if not CHALLONGE_USERNAME or not CHALLONGE_API_KEY:
     try:
         from config_local import (
@@ -15,8 +18,7 @@ if not CHALLONGE_USERNAME or not CHALLONGE_API_KEY:
     except ImportError:
         raise ValueError(
             "❌ No se encontraron las credenciales de Challonge. "
-            "Configura las variables de entorno CHALLONGE_USERNAME y CHALLONGE_API_KEY "
-            "o crea config_local.py"
+            "Configura las variables de entorno CHALLONGE_USERNAME y CHALLONGE_API_KEY o crea config_local.py"
         )
 CHALLONGE_API_URL = "https://api.challonge.com/v1/tournaments.json"
 ROLES_TODOS = {"miembro", "socio", "second-chance-socio", "second-chance-miembro", "admin"}
