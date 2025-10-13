@@ -1,0 +1,15 @@
+# Entornos de Python
+__pycache__/
+*.pyc
+.venv/
+.env
+
+# Archivos sensibles locales
+token.py
+config_local.py
+.env.local
+
+# Otros
+.idea/
+.vscode/
+.DS_Store

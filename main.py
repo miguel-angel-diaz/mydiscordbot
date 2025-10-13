@@ -376,8 +376,21 @@ async def on_voice_state_update(member, before, after):
 
     
     
-webserver.keep_alive()  
-bot.run(DISCORD_TOKEN)
-#bot.run(config.TOKEN)
+# webserver.keep_alive()  
+# bot.run(DISCORD_TOKEN)
+if __name__ == "__main__":
+    import os
+
+    TOKEN = os.getenv("DISCORD_TOKEN")
+
+    # Si no existe en el entorno (Railway), usa token.py local
+    if not TOKEN:
+        try:
+            from token import DISCORD_TOKEN as TOKEN
+            print("🔹 Usando token local desde token.py")
+        except ImportError:
+            raise ValueError("❌ No se encontró el token del bot. Configura la variable DISCORD_TOKEN o crea token.py.")
+
+    bot.run(TOKEN)
 
 

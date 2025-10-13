@@ -1,6 +1,10 @@
-TOKEN = "MTM4NTEzMDg4Mjc3OTcxMzc0Ng.G8Ih_v.Xuh72YJBl9zERF20Cus5MZcVvzaOMBhlKfT7tU"
-CHALLONGE_USERNAME = "TheKlub"
-CHALLONGE_API_KEY = "WfdVp0bApiTGP3OTiOsM4hhuSNPgsUDrndBCVzaG"
+import os
+
+
+# Si Railway tiene las variables, las toma de ahí
+# Si no, usa los valores locales (solo para desarrollo)
+CHALLONGE_USERNAME = os.getenv("CHALLONGE_USERNAME", "TheKlub")
+CHALLONGE_API_KEY = os.getenv("CHALLONGE_API_KEY", "WfdVp0bApiTGP3OTiOsM4hhuSNPgsUDrndBCVzaG")
 CHALLONGE_API_URL = "https://api.challonge.com/v1/tournaments.json"
 ROLES_TODOS = {"miembro", "socio", "second-chance-socio", "second-chance-miembro", "admin"}
 ROLES_BORRADOS = {"miembro", "socio", "second-chance-socio", "second-chance-miembro"}
