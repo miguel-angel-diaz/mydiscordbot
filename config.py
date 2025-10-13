@@ -3,11 +3,12 @@ import os
 import os
 
 # Leer variables de entorno
-CHALLONGE_USERNAME = os.getenv("CHALLONGE_USERNAME")
-CHALLONGE_API_KEY = os.getenv("CHALLONGE_API_KEY")
-DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
+CHALLONGE_USERNAME = os.environ("CHALLONGE_USERNAME")
+CHALLONGE_API_KEY = os.environ("CHALLONGE_API_KEY")
+DISCORD_TOKEN = os.environ("DISCORD_TOKEN")
 
 # Debug
+print(os.environ)
 print("🔍 DEBUG: CHALLONGE_USERNAME =", CHALLONGE_USERNAME)
 print("🔍 DEBUG: CHALLONGE_API_KEY =", "✅ Cargada" if CHALLONGE_API_KEY else "❌ Vacía")
 print("🔍 DEBUG: DISCORD_TOKEN =", "✅ Cargado" if DISCORD_TOKEN else "❌ Vacío")

@@ -381,7 +381,7 @@ async def on_voice_state_update(member, before, after):
 if __name__ == "__main__":
     import os
 
-    DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
+    DISCORD_TOKEN = os.environ("DISCORD_TOKEN")
 
     # Si no existe en el entorno (Railway), usa token.py local
     if not DISCORD_TOKEN:
