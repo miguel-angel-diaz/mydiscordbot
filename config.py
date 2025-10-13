@@ -1,10 +1,22 @@
 import os
 
 
-# Si Railway tiene las variables, las toma de ahí
-# Si no, usa los valores locales (solo para desarrollo)
-CHALLONGE_USERNAME = os.getenv("CHALLONGE_USERNAME", "TheKlub")
-CHALLONGE_API_KEY = os.getenv("CHALLONGE_API_KEY", "WfdVp0bApiTGP3OTiOsM4hhuSNPgsUDrndBCVzaG")
+# 🔹 Lectura segura de variables de entorno o fallback a archivo local
+CHALLONGE_USERNAME = os.getenv("CHALLONGE_USERNAME")
+CHALLONGE_API_KEY = os.getenv("CHALLONGE_API_KEY")
+
+# Si no están definidas en el entorno, usar archivo local
+if not CHALLONGE_USERNAME or not CHALLONGE_API_KEY:
+    try:
+        from config_local import CHALLONGE_USERNAME as USERNAME_LOCAL, CHALLONGE_API_KEY as APIKEY_LOCAL
+        CHALLONGE_USERNAME = CHALLONGE_USERNAME or USERNAME_LOCAL
+        CHALLONGE_API_KEY = CHALLONGE_API_KEY or APIKEY_LOCAL
+        print("🔹 Usando credenciales Challonge desde config_local.py")
+    except ImportError:
+        raise ValueError(
+            "❌ No se encontraron las credenciales de Challonge. "
+            "Define las variables de entorno CHALLONGE_USERNAME y CHALLONGE_API_KEY o crea config_local.py"
+        )
 CHALLONGE_API_URL = "https://api.challonge.com/v1/tournaments.json"
 ROLES_TODOS = {"miembro", "socio", "second-chance-socio", "second-chance-miembro", "admin"}
 ROLES_BORRADOS = {"miembro", "socio", "second-chance-socio", "second-chance-miembro"}
