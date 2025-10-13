@@ -1,25 +1,29 @@
 import os
 
+import os
+
+# Leer variables de entorno
 CHALLONGE_USERNAME = os.getenv("CHALLONGE_USERNAME")
 CHALLONGE_API_KEY = os.getenv("CHALLONGE_API_KEY")
+DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 
+# Debug
 print("🔍 DEBUG: CHALLONGE_USERNAME =", CHALLONGE_USERNAME)
 print("🔍 DEBUG: CHALLONGE_API_KEY =", "✅ Cargada" if CHALLONGE_API_KEY else "❌ Vacía")
+print("🔍 DEBUG: DISCORD_TOKEN =", "✅ Cargado" if DISCORD_TOKEN else "❌ Vacío")
 
+# Validación
 if not CHALLONGE_USERNAME or not CHALLONGE_API_KEY:
-    try:
-        from config_local import (
-            CHALLONGE_USERNAME as USERNAME_LOCAL,
-            CHALLONGE_API_KEY as APIKEY_LOCAL
-        )
-        CHALLONGE_USERNAME = CHALLONGE_USERNAME or USERNAME_LOCAL
-        CHALLONGE_API_KEY = CHALLONGE_API_KEY or APIKEY_LOCAL
-        print("🔹 Usando credenciales Challonge desde config_local.py")
-    except ImportError:
-        raise ValueError(
-            "❌ No se encontraron las credenciales de Challonge. "
-            "Configura las variables de entorno CHALLONGE_USERNAME y CHALLONGE_API_KEY o crea config_local.py"
-        )
+    raise ValueError(
+        "❌ No se encontraron las credenciales de Challonge. "
+        "Define CHALLONGE_USERNAME y CHALLONGE_API_KEY en las variables de entorno."
+    )
+
+if not DISCORD_TOKEN:
+    raise ValueError(
+        "❌ No se encontró el token del bot. "
+        "Define DISCORD_TOKEN en las variables de entorno."
+    )
 CHALLONGE_API_URL = "https://api.challonge.com/v1/tournaments.json"
 ROLES_TODOS = {"miembro", "socio", "second-chance-socio", "second-chance-miembro", "admin"}
 ROLES_BORRADOS = {"miembro", "socio", "second-chance-socio", "second-chance-miembro"}
