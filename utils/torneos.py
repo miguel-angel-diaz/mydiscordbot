@@ -841,6 +841,18 @@ async def forzar_ronda_handle(ctx, codigo_torneo: str):
     await partidos_pendientes_handle(ctx, codigo_torneo, 'torneos')
 
 async def finalizar_torneo_handle(ctx, codigo_torneo: str):
+    # 0️⃣ Llamar a la API de Challonge para finalizar el torneo
+    url_finalize = f"https://api.challonge.com/v1/tournaments/{codigo_torneo}/finalize.json"
+    async with aiohttp.ClientSession() as session:
+        async with session.post(url_finalize, auth=aiohttp.BasicAuth(config.CHALLONGE_USERNAME, config.CHALLONGE_API_KEY)) as resp:
+            if resp.status == 200:
+                await ctx.send(f"✅ Torneo `{codigo_torneo}` marcado como finalizado en Challonge.")
+            else:
+                texto_error = await resp.text()
+                await ctx.send(f"⚠️ No se pudo finalizar el torneo `{codigo_torneo}` en Challonge. "
+                               f"Status: {resp.status}, Response: {texto_error}")
+
+    # 1️⃣ Limpiar los canales definidos
     canales_a_limpiar = [
         "🍺-quién‐se‐lleva‐la‐ronda",
         "🍸-citas‐a‐ciegas"
@@ -857,7 +869,8 @@ async def finalizar_torneo_handle(ctx, codigo_torneo: str):
             await canal.purge(check=filtro)
         except Exception as e:
             await ctx.send(f"⚠️ No se pudo limpiar el canal `{nombre_canal}`: {e}")
-     # Enviar anuncio al canal #anuncios
+
+    # 2️⃣ Enviar anuncio al canal #anuncios
     canal_anuncios = discord.utils.get(ctx.guild.text_channels, name="📰-cartelera‐torneos")
     if canal_anuncios:
         try:
@@ -869,7 +882,6 @@ async def finalizar_torneo_handle(ctx, codigo_torneo: str):
         except Exception as e:
             await ctx.send(f"⚠️ No se pudo enviar el mensaje en `#anuncios`: {e}")
 
-    # Publicar clasificación final
+    # 3️⃣ Publicar clasificación final
     await actualizar_clasificacion_handle(ctx, codigo_torneo)
-
 

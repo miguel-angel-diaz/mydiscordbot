@@ -75,6 +75,7 @@ async def limpiar_canal_diario(bot: commands.Bot):
     except Exception as e:
         log(f"limpiar_canal_diario: error general: {e}")
 
+
 async def publicar_eventos_semanales(bot: commands.Bot):
     global ultima_ejecucion_eventos
     if ultima_ejecucion_eventos == hoy():
@@ -84,9 +85,8 @@ async def publicar_eventos_semanales(bot: commands.Bot):
     ejecutados_guilds = 0
 
     for guild in bot.guilds:
-        # Obtener canales
         canal_origen = discord.utils.get(guild.text_channels, name="partidos-agendados")
-        canal_proximas = discord.utils.get(guild.text_channels, name="🎭-cartelera‐proximas-partidas")  # Ajusta nombre real
+        canal_proximas = discord.utils.get(guild.text_channels, name="🎭-cartelera‐proximas-partidas")
 
         if not canal_origen or not canal_proximas:
             continue
@@ -113,17 +113,7 @@ async def publicar_eventos_semanales(bot: commands.Bot):
             except Exception:
                 continue
 
-        if not eventos_semana:
-            continue
-
-        embed = discord.Embed(
-            title="📅 Partidas programadas esta semana",
-            color=discord.Color.blue()
-        )
-        for fecha_ev, hora_ev, j1, j2 in sorted(eventos_semana):
-            embed.add_field(name=f"{fecha_ev.strftime('%d/%m/%Y')} {hora_ev}", value=f"{j1} vs {j2}", inline=False)
-
-        # Buscar mensaje existente
+        # 🔹 Buscar mensaje existente (para editarlo si ya existe)
         mensaje_existente = None
         async for msg in canal_proximas.history(limit=50):
             if msg.author == bot.user and msg.embeds:
@@ -132,6 +122,32 @@ async def publicar_eventos_semanales(bot: commands.Bot):
                     mensaje_existente = msg
                     break
 
+        # 🔹 Si no hay eventos → mostrar mensaje informativo
+        if not eventos_semana:
+            embed_vacio = discord.Embed(
+                title="📅 Partidas programadas esta semana",
+                description="⏳ No hay futuras partidas programadas por ahora.",
+                color=discord.Color.dark_grey()
+            )
+            if mensaje_existente:
+                await mensaje_existente.edit(embed=embed_vacio)
+            else:
+                await canal_proximas.send(embed=embed_vacio)
+            continue
+
+        # 🔹 Crear embed con los eventos encontrados
+        embed = discord.Embed(
+            title="📅 Partidas programadas esta semana",
+            color=discord.Color.blue()
+        )
+        for fecha_ev, hora_ev, j1, j2 in sorted(eventos_semana):
+            embed.add_field(
+                name=f"{fecha_ev.strftime('%d/%m/%Y')} {hora_ev}",
+                value=f"{j1} vs {j2}",
+                inline=False
+            )
+
+        # 🔹 Actualizar o crear mensaje
         if mensaje_existente:
             await mensaje_existente.edit(embed=embed)
         else:
