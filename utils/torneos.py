@@ -132,10 +132,10 @@ async def nuevo_torneo(ctx, *, args: str):
             "start_at": fecha_obj.isoformat(),
             # 🔹 Puntuación: BYE = victoria completa
             "ranked_by": "match wins",     # Clasificación por partidas ganadas
-            "pts_for_match_win": "3.0",    # Victoria → 3 puntos
-            "pts_for_match_tie": "1.0",    # Empate → 1 punto
-            "pts_for_match_loss": "0.0",   # Derrota → 0 puntos
-            "pts_for_bye": "3.0",          # 🔸 BYE cuenta como victoria
+            "pts_for_match_win": 3.0,    # Victoria → 3 puntos
+            "pts_for_match_tie": 1.0,    # Empate → 1 punto
+            "pts_for_match_loss": 0.0,   # Derrota → 0 puntos
+            "pts_for_bye": 3.0,          # 🔸 BYE cuenta como victoria
             # 🔹 Sistema de desempates
             "tie_breaks": [
                 "match wins vs tied",
