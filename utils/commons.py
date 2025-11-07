@@ -5,6 +5,8 @@ import discord
 from functools import wraps
 from discord.ext import commands
 
+from difflib import get_close_matches
+
 
 async def borrar_mensaje_seguro(ctx):
     try:
@@ -180,3 +182,23 @@ async def obtener_torneo_usuario(ctx, mensaje_inicial: str = None, complete=Fals
     except asyncio.TimeoutError:
         await ctx.author.send("⏰ Tiempo agotado. Intenta de nuevo.")
         return None
+
+
+
+def obtener_sugerencias_arquetipos(nombre_usuario: str, max_sugerencias: int = 5):
+    """
+    Devuelve una lista de arquetipos similares al texto ingresado.
+    """
+    nombres_validos = [a["nombre"] for a in config.ARQUETIPOS_PREMODERN]
+    nombre_usuario = nombre_usuario.strip().lower()
+
+    # Buscar coincidencias aproximadas (por similitud)
+    sugerencias = get_close_matches(nombre_usuario, nombres_validos, n=max_sugerencias, cutoff=0.4)
+
+    # Buscar coincidencias que contengan la palabra directamente
+    sugerencias_extra = [n for n in nombres_validos if nombre_usuario in n.lower()]
+    for s in sugerencias_extra:
+        if s not in sugerencias:
+            sugerencias.append(s)
+
+    return sugerencias[:max_sugerencias]

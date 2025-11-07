@@ -11,7 +11,7 @@ import re
 import config
 from utils.torneos import generar_codigo_unico, partidos_pendientes_handle
 from utils.admin import moderador_permisos_handle
-from utils.commons import borrar_mensaje_seguro, validar_canal_correcto, buscar_usuario_en_servidor, obtener_torneo_usuario
+from utils.commons import borrar_mensaje_seguro, validar_canal_correcto, buscar_usuario_en_servidor, obtener_torneo_usuario, obtener_sugerencias_arquetipos
 
 import config
 
@@ -1357,8 +1357,50 @@ async def deck_dm_flow(ctx, author: discord.Member, codigo_torneo: str, modo: st
             await author.send("1️⃣ Nombre de tu deck:")
             nombre_deck = (await ctx.bot.wait_for("message", check=dm_check, timeout=120.0)).content.strip()
 
-            await author.send("2️⃣ ¿Cuál es el **archetype** de tu deck?")
-            archetype = (await ctx.bot.wait_for("message", check=dm_check, timeout=120.0)).content.strip()
+            await author.send("2️⃣ ¿Cuál es el **archetype** de tu deck?\n(Puedes escribir el nombre exacto o algo parecido, te ayudaré a encontrarlo)")
+            while True:
+                msg = await ctx.bot.wait_for("message", check=dm_check, timeout=120.0)
+                archetype_raw = msg.content.strip()
+                sugerencias = obtener_sugerencias_arquetipos(archetype_raw)
+
+                if not sugerencias:
+                    await author.send(
+                        "❌ No se reconoció el arquetipo.\n"
+                        "Intenta escribirlo de nuevo o revisa la lista completa en:\n"
+                        "🔗 https://www.tcdecks.net/format.php?format=Premodern"
+                    )
+                    continue
+
+                # Si hay coincidencia exacta
+                if any(s.lower() == archetype_raw.lower() for s in sugerencias):
+                    archetype = next(s for s in sugerencias if s.lower() == archetype_raw.lower())
+                    await author.send(f"✅ Arquetipo reconocido como **{archetype}**.")
+                    break
+
+                # Si hay sugerencias aproximadas
+                opciones_texto = "\n".join([f"{i+1}. {s}" for i, s in enumerate(sugerencias)])
+                await author.send(
+                    f"🤔 No encontré un arquetipo exacto, pero aquí tienes algunas sugerencias:\n"
+                    f"{opciones_texto}\n\n"
+                    "👉 Escribe el **número** del arquetipo correcto o vuelve a intentarlo escribiendo otro nombre."
+                )
+
+                try:
+                    msg_opcion = await ctx.bot.wait_for("message", check=dm_check, timeout=120.0)
+                    contenido = msg_opcion.content.strip()
+                    if contenido.isdigit():
+                        indice = int(contenido) - 1
+                        if 0 <= indice < len(sugerencias):
+                            archetype = sugerencias[indice]
+                            await author.send(f"✅ Arquetipo seleccionado: **{archetype}**.")
+                            break
+                    else:
+                        # Si el usuario escribe otro texto, vuelve a buscar
+                        archetype_raw = contenido
+                        continue
+                except asyncio.TimeoutError:
+                    await author.send("⏰ Tiempo agotado. Cancelando selección de arquetipo.")
+                    return None
 
             await author.send("3️⃣ Sube tu **decklist** Solo el Main (mínimo 60 cartas):")
             decklist_raw = (await ctx.bot.wait_for("message", check=dm_check, timeout=600.0)).content.strip()
@@ -1428,12 +1470,50 @@ async def deck_dm_flow(ctx, author: discord.Member, codigo_torneo: str, modo: st
                     await author.send("⏰ Tiempo agotado. No se actualizó el nombre.")
 
             elif contenido == "2":
-                await author.send("Escribe el nuevo **archetype**:")
-                try:
+                await author.send("2️⃣ ¿Cuál es el **archetype** de tu deck?\n(Puedes escribir el nombre exacto o algo parecido, te ayudaré a encontrarlo)")
+                while True:
                     msg = await ctx.bot.wait_for("message", check=dm_check, timeout=120.0)
-                    archetype = msg.content.strip()
-                except asyncio.TimeoutError:
-                    await author.send("⏰ Tiempo agotado. No se actualizó el archetype.")
+                    archetype_raw = msg.content.strip()
+                    sugerencias = obtener_sugerencias_arquetipos(archetype_raw)
+
+                    if not sugerencias:
+                        await author.send(
+                            "❌ No se reconoció el arquetipo.\n"
+                            "Intenta escribirlo de nuevo o revisa la lista completa en:\n"
+                            "🔗 https://www.tcdecks.net/format.php?format=Premodern"
+                        )
+                        continue
+
+                    # Si hay coincidencia exacta
+                    if any(s.lower() == archetype_raw.lower() for s in sugerencias):
+                        archetype = next(s for s in sugerencias if s.lower() == archetype_raw.lower())
+                        await author.send(f"✅ Arquetipo reconocido como **{archetype}**.")
+                        break
+
+                    # Si hay sugerencias aproximadas
+                    opciones_texto = "\n".join([f"{i+1}. {s}" for i, s in enumerate(sugerencias)])
+                    await author.send(
+                        f"🤔 No encontré un arquetipo exacto, pero aquí tienes algunas sugerencias:\n"
+                        f"{opciones_texto}\n\n"
+                        "👉 Escribe el **número** del arquetipo correcto o vuelve a intentarlo escribiendo otro nombre."
+                    )
+
+                    try:
+                        msg_opcion = await ctx.bot.wait_for("message", check=dm_check, timeout=120.0)
+                        contenido = msg_opcion.content.strip()
+                        if contenido.isdigit():
+                            indice = int(contenido) - 1
+                            if 0 <= indice < len(sugerencias):
+                                archetype = sugerencias[indice]
+                                await author.send(f"✅ Arquetipo seleccionado: **{archetype}**.")
+                                break
+                        else:
+                            # Si el usuario escribe otro texto, vuelve a buscar
+                            archetype_raw = contenido
+                            continue
+                    except asyncio.TimeoutError:
+                        await author.send("⏰ Tiempo agotado. Cancelando selección de arquetipo.")
+                        return None
 
             elif contenido == "3":
                 await author.send("Sube la nueva **decklist** (Main, mínimo 60 cartas):")
