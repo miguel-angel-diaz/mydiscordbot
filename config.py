@@ -1,29 +1,35 @@
 import os
 
-import os
-
 # Leer variables de entorno
 CHALLONGE_USERNAME = os.environ.get("CHALLONGE_USERNAME")
 CHALLONGE_API_KEY = os.environ.get("CHALLONGE_API_KEY")
 DISCORD_TOKEN = os.environ.get("DISCORD_TOKEN")
 
-# Debug
-print(os.environ)
-print("🔍 DEBUG: CHALLONGE_USERNAME =", CHALLONGE_USERNAME)
-print("🔍 DEBUG: CHALLONGE_API_KEY =", "✅ Cargada" if CHALLONGE_API_KEY else "❌ Vacía")
-print("🔍 DEBUG: DISCORD_TOKEN =", "✅ Cargado" if DISCORD_TOKEN else "❌ Vacío")
+if not CHALLONGE_USERNAME or not CHALLONGE_API_KEY or not DISCORD_TOKEN:
+    try:
+        from config_token import (
+            CHALLONGE_USERNAME as LOCAL_USER,
+            CHALLONGE_API_KEY as LOCAL_KEY,
+            DISCORD_TOKEN as LOCAL_TOKEN,
+        )
+        print("🔹 Usando credenciales locales desde config_token.py")
+        CHALLONGE_USERNAME = CHALLONGE_USERNAME or LOCAL_USER
+        CHALLONGE_API_KEY = CHALLONGE_API_KEY or LOCAL_KEY
+        DISCORD_TOKEN = DISCORD_TOKEN or LOCAL_TOKEN
+    except ImportError:
+        pass  # si no existe, seguirá fallando abajo
 
-# Validación
+# 🔹 Validación final
 if not CHALLONGE_USERNAME or not CHALLONGE_API_KEY:
     raise ValueError(
         "❌ No se encontraron las credenciales de Challonge. "
-        "Define CHALLONGE_USERNAME y CHALLONGE_API_KEY en las variables de entorno."
+        "Define CHALLONGE_USERNAME y CHALLONGE_API_KEY en las variables de entorno o en config_token.py."
     )
 
 if not DISCORD_TOKEN:
     raise ValueError(
         "❌ No se encontró el token del bot. "
-        "Define DISCORD_TOKEN en las variables de entorno."
+        "Define DISCORD_TOKEN en las variables de entorno o en config_token.py."
     )
 CHALLONGE_API_URL = "https://api.challonge.com/v1/tournaments.json"
 ROLES_TODOS = {"miembro", "socio", "second-chance-socio", "second-chance-miembro", "admin"}
