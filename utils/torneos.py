@@ -28,6 +28,7 @@ async def new_tournament_assistance_handle(ctx, *, args=None):
     if not await validar_canal_correcto(ctx, "preguntale-a-el-barbas", "!nuevo-torneo"):
         return
 
+    # Si viene con argumentos directos usamos nuevo_torneo()
     if args:
         await nuevo_torneo(ctx, args=args)
         return
@@ -38,56 +39,70 @@ async def new_tournament_assistance_handle(ctx, *, args=None):
         def dm_check(m):
             return m.author == ctx.author and isinstance(m.channel, discord.DMChannel)
 
+        # 1️⃣ Nombre
         await ctx.author.send("1️⃣ ¿Nombre del torneo?")
         nombre = await ctx.bot.wait_for("message", check=dm_check, timeout=90.0)
         if nombre.content.lower() == "cancelar": return
 
-        await ctx.author.send("2️⃣ ¿Formato? (Ej: Premodern, Classic-Legacy, 7Pts, ...)")
+        # 2️⃣ Formato
+        await ctx.author.send("2️⃣ ¿Formato? (Premodern, Classic-Legacy, 7Pts, etc.)")
         formato = await ctx.bot.wait_for("message", check=dm_check, timeout=90.0)
         if formato.content.lower() == "cancelar": return
 
-        await ctx.author.send("3️⃣ ¿Tipo de torneo? (Ej: Swiss, Round Robin, Single elimination)")
+        # 3️⃣ Tipo
+        await ctx.author.send("3️⃣ ¿Tipo de torneo? (Swiss, Round Robin, Single elimination o **Battle Royale**)")
         tipo = await ctx.bot.wait_for("message", check=dm_check, timeout=90.0)
         if tipo.content.lower() == "cancelar": return
 
+        # 4️⃣ Jugadores
         await ctx.author.send("4️⃣ ¿Número máximo de jugadores?")
         jugadores = await ctx.bot.wait_for("message", check=dm_check, timeout=90.0)
         if jugadores.content.lower() == "cancelar": return
+
         try:
             int(jugadores.content)
         except ValueError:
             await ctx.author.send("❌ Debe ser un número.")
             return
 
-        await ctx.author.send("5️⃣ ¿Fecha de inicio? (Formato: DD/MM/AAAA)")
+        # 5️⃣ Fecha
+        await ctx.author.send("5️⃣ Fecha de inicio (DD/MM/AAAA)")
         fecha = await ctx.bot.wait_for("message", check=dm_check, timeout=90.0)
         if fecha.content.lower() == "cancelar": return
+
         try:
             datetime.strptime(fecha.content, "%d/%m/%Y")
         except ValueError:
-            await ctx.author.send("❌ Fecha inválida. Usa el formato DD/MM/AAAA.")
+            await ctx.author.send("❌ Fecha inválida. Usa DD/MM/AAAA.")
             return
 
-        await ctx.author.send("6️⃣ ¿Nivel o rol permitido para inscribirse? (Ej: abierto, nivel1, etc.)")
+        # 6️⃣ Nivel
+        await ctx.author.send("6️⃣ Nivel o rol permitido (abierto, nivel1, etc.)")
         nivel = await ctx.bot.wait_for("message", check=dm_check, timeout=90.0)
         if nivel.content.lower() == "cancelar": return
 
-        # Construir args final sin deck URL
-        args_final = f"{nombre.content} | {formato.content} | {tipo.content} | {jugadores.content} | {fecha.content} | {nivel.content}"
+        # Construimos args final:
+        args_final = (
+            f"{nombre.content} | {formato.content} | "
+            f"{tipo.content} | {jugadores.content} | "
+            f"{fecha.content} | {nivel.content}"
+        )
+
         await nuevo_torneo(ctx, args=args_final)
 
     except discord.Forbidden:
-        await ctx.send("❌ No pude enviarte mensajes privados. Asegúrate de tener los DMs habilitados.")
+        await ctx.send("❌ No puedo enviarte DMs. Activa los mensajes privados.")
     except asyncio.TimeoutError:
-        await ctx.author.send("⏰ Tiempo agotado. Puedes volver a intentarlo enviando `!nuevo-torneo` en el servidor.")
+        await ctx.author.send("⏰ Tiempo agotado. Ejecuta `!nuevo-torneo` para intentarlo de nuevo.")
 
 
 async def nuevo_torneo(ctx, *, args: str):
     await borrar_mensaje_seguro(ctx)
+
     if not await validar_canal_correcto(ctx, "preguntale-a-el-barbas", "!nuevo-torneo"):
         return
     
-    # Verificar permisos
+    # Solo moderadores
     if not await moderador_permisos_handle(ctx):
         return
 
@@ -100,56 +115,97 @@ async def nuevo_torneo(ctx, *, args: str):
         await ctx.author.send("❌ Formato incorrecto. Usa:\n`!nuevo-torneo Nombre | Formato | tipo | Jugadores | Fecha | Nivel`")
         return
 
-    nombre, formato, tipo_challonge, jugadores, fecha, nivel = partes
+    nombre, formato, tipo, jugadores, fecha, nivel = partes
 
+    # Validar jugadores
     try:
         jugadores = int(jugadores)
     except ValueError:
         await ctx.author.send("❌ El número de jugadores debe ser un número entero.")
         return
 
+    # Validar fecha
     try:
         fecha_obj = datetime.strptime(fecha, "%d/%m/%Y")
     except ValueError:
-        await ctx.author.send("❌ La fecha debe tener el formato `DD/MM/AAAA` (ej. 20/08/2025).")
+        await ctx.author.send("❌ La fecha debe tener el formato DD/MM/AAAA.")
         return
 
-    # 🔢 Generar código único y construir URL de Challonge
+    # -------------------------------------------------------------
+    # 🟦  CASO ESPECIAL: BATTLE ROYALE (NO CHALLONGE)
+    # -------------------------------------------------------------
+    if tipo.lower() in ("battle royale", "battle"):
+        
+        codigo = generar_codigo_unico()
+        codigo_slug = f"br{slugify_challonge(formato)}{codigo}"
+
+        # 📣 Anuncio
+        canal_anuncios = discord.utils.get(ctx.guild.text_channels, name="📰-cartelera‐torneos")
+        if canal_anuncios:
+            await canal_anuncios.send(
+                f"🔥 **NUEVO TORNEO BATTLE ROYALE** 🔥\n"
+                f"🏷️ **Nombre:** {nombre}\n"
+                f"🎮 **Formato:** {formato}\n"
+                f"👥 **Máximo jugadores:** {jugadores}\n"
+                f"📅 **Fecha:** {fecha}\n"
+                f"🔒 **Nivel:** {nivel}\n"
+                f"🏆 **Código interno:** `{codigo_slug}`\n"
+            )
+
+        # 📌 También en torneos-activos
+        canal_torneos = discord.utils.get(ctx.guild.text_channels, name="torneos-activos")
+        if canal_torneos:
+            await canal_torneos.send(
+                f"⚔️ **Torneo Battle Royale activo:** {nombre}\n"
+                f"🏷️ Código interno: `{codigo_slug}`\n"
+                f"🎮 Formato: {formato}\n"
+                f"👥 Jugadores: {jugadores}\n"
+                f"📅 Inicio: {fecha}\n"
+                f"🔒 Nivel: {nivel}"
+            )
+
+        # Confirmación al creador
+        await ctx.author.send(
+            f"✅ Torneo Battle Royale creado correctamente.\n"
+            f"🎮 Nombre: **{nombre}**\n"
+            f"🏷️ Código interno: `{codigo_slug}`\n"
+            f"📌 No se ha creado ningún torneo en Challonge (modo Battle Royale)."
+        )
+        return
+    
+    # -------------------------------------------------------------
+    # 🟥 RESTO DE TORNEOS (SE USA CHALLONGE)
+    # -------------------------------------------------------------
+
+    # Generar slug
     slug_formato = slugify_challonge(formato)
     slug_nivel = slugify_challonge(nivel)
     codigo = generar_codigo_unico()
     url_challonge = f"{slug_formato}{slug_nivel}{codigo}"
 
-    # 📦 Payload para Challonge
+    # Payload Challonge
     payload = {
         "api_key": config.CHALLONGE_API_KEY,
         "tournament": {
             "name": nombre,
             "url": url_challonge,
-            "tournament_type": tipo_challonge,
+            "tournament_type": tipo,
             "description": f"Torneo {formato} - {nivel}",
             "signup_cap": jugadores,
             "start_at": fecha_obj.isoformat(),
-            # 🔹 Puntuación: BYE = victoria completa
-            "ranked_by": "match wins",     # Clasificación por partidas ganadas
-            "pts_for_match_win": 3.0,    # Victoria → 3 puntos
-            "pts_for_match_tie": 1.0,    # Empate → 1 punto
-            "pts_for_match_loss": 0.0,   # Derrota → 0 puntos
-            "pts_for_bye": 3.0,          # 🔸 BYE cuenta como victoria
-            # 🔹 Sistema de desempates
-            "tie_breaks": [
-                "match wins vs tied",
-                "game w/l difference",
-                "median buchholz"
-            ],
-            # 🔹 Ajustes adicionales opcionales para evitar errores con BYE
+            "ranked_by": "match wins",
+            "pts_for_match_win": 3.0,
+            "pts_for_match_tie": 1.0,
+            "pts_for_match_loss": 0.0,
+            "pts_for_bye": 3.0,
+            "tie_breaks": ["match wins vs tied", "game w/l difference", "median buchholz"],
             "accept_attachments": False,
             "hide_forum": True,
             "show_rounds": True,
         }
     }
 
-    # 🌐 Llamada a Challonge
+    # Llamada Challonge
     async with aiohttp.ClientSession() as session:
         async with session.post(
             config.CHALLONGE_API_URL,
@@ -160,13 +216,13 @@ async def nuevo_torneo(ctx, *, args: str):
                 data = await response.json()
                 tournament = data["tournament"]
 
-                # ✅ DM al creador
+                # DM al creador
                 await ctx.author.send(
                     f"✅ Torneo creado con éxito: **{tournament['name']}**\n"
                     f"🌐 URL: https://challonge.com/{url_challonge}\n"
                 )
 
-                # 📣 Anuncio en cartelera de torneos
+                # Anuncio
                 canal_anuncios = discord.utils.get(ctx.guild.text_channels, name="📰-cartelera‐torneos")
                 if canal_anuncios:
                     await canal_anuncios.send(
@@ -178,28 +234,22 @@ async def nuevo_torneo(ctx, *, args: str):
                         f"🔒 **Nivel:** {nivel}\n"
                         f"**Código:** {url_challonge}\n"
                     )
-                else:
-                    await ctx.author.send("⚠️ No se encontró el canal `📰-cartelera‐torneos` en este servidor.")
 
-                # 🗂️ Publicar también en #torneos-activos
+                # También en torneos-activos
                 canal_torneos = discord.utils.get(ctx.guild.text_channels, name="torneos-activos")
-                if canal_torneos is None:
-                    await ctx.author.send("⚠️ No encontré el canal `#torneos-activos`. Por favor, créalo.")
-                    return
-
-                mensaje_torneo = (
-                    f"🎮 **Torneo creado:** {nombre}\n"
-                    f"🏷️ **Código:** `{url_challonge}`\n"
-                    f"📋 **Formato:** {formato}\n"
-                    f"👥 **Jugadores:** {jugadores}\n"
-                    f"📅 **Inicio:** {fecha}\n"
-                    f"🎯 **Nivel:** {nivel}\n"
-                )
-
-                await canal_torneos.send(mensaje_torneo)
+                if canal_torneos:
+                    await canal_torneos.send(
+                        f"🎮 **Torneo creado:** {nombre}\n"
+                        f"🏷️ **Código:** `{url_challonge}`\n"
+                        f"📋 **Formato:** {formato}\n"
+                        f"👥 **Jugadores:** {jugadores}\n"
+                        f"📅 **Inicio:** {fecha}\n"
+                        f"🎯 **Nivel:** {nivel}\n"
+                    )
             else:
                 error = await response.text()
                 await ctx.author.send(f"❌ Error al crear el torneo:\n```{error}```")
+
 
 async def iniciar_torneo_handle(ctx, codigo_torneo: str):
     await borrar_mensaje_seguro(ctx)
@@ -472,6 +522,105 @@ async def iniciar_torneo_handle(ctx, codigo_torneo: str):
                 except discord.HTTPException as e:
                     await ctx.author.send(f"⚠️ No se pudo eliminar un mensaje de `#inscripciones`: {e}")
                     break
+
+async def iniciar_torneo_battle_handle(ctx, codigo_torneo: str):
+    await borrar_mensaje_seguro(ctx)
+
+    # Verificar canal
+    if not await validar_canal_correcto(ctx, "preguntale-a-el-barbas", "!iniciar-battle"):
+        return
+
+    # Verificar permisos
+    if not await moderador_permisos_handle(ctx):
+        return
+    
+    
+    # Buscar canales relevantes
+    canal_activos = discord.utils.get(ctx.guild.text_channels, name="torneos-activos")
+    canal_iniciados = discord.utils.get(ctx.guild.text_channels, name="torneos-battle-iniciados")
+
+    if canal_activos is None:
+        await ctx.author.send("⚠️ No se encontró el canal `torneos-activos`.")
+        return
+    if canal_iniciados is None:
+        await ctx.author.send("⚠️ No se encontró el canal `torneos-battle-iniciados`.")
+        return
+
+    # ----------------------------------------------------------
+    # 1️⃣ SI NO SE PASA CÓDIGO, PEDIMOS AL MOD QUE ELIJA TORNEO
+    # ----------------------------------------------------------
+    mensaje_objetivo = None
+
+    
+
+    if codigo_torneo is None:
+        lista_battles = []
+
+        async for msg in canal_activos.history(limit=200):
+            if "battle" in msg.content.lower() or "battle royale" in msg.content.lower():
+                lista_battles.append(msg)
+
+        if not lista_battles:
+            await ctx.author.send("❌ No hay torneos Battle disponibles en `torneos-activos`.")
+            return
+
+        # Mostramos opciones
+        texto = "**Torneos Battle disponibles:**\n"
+        for i, m in enumerate(lista_battles, start=1):
+            texto += f"{i}. {m.content}\n"
+
+        texto += "\nEscribe el **número** del torneo que quieres iniciar."
+        await ctx.author.send(texto)
+
+        def dm_check(m):
+            return m.author == ctx.author and isinstance(m.channel, discord.DMChannel)
+
+        try:
+            respuesta = await ctx.bot.wait_for("message", timeout=60, check=dm_check)
+            indice = int(respuesta.content) - 1
+            mensaje_objetivo = lista_battles[indice]
+        except:
+            await ctx.author.send("❌ Entrada no válida. Operación cancelada.")
+            return
+
+    else:
+        # ----------------------------------------------------------
+        # 2️⃣ SI PASA CÓDIGO, LO BUSCAMOS DIRECTAMENTE
+        # ----------------------------------------------------------
+        async for msg in canal_activos.history(limit=200):
+            if codigo_torneo.lower() in msg.content.lower():
+                mensaje_objetivo = msg
+                break
+
+        if mensaje_objetivo is None:
+            await ctx.author.send(f"❌ No encontré ningún torneo con el código `{codigo_torneo}`.")
+            return
+
+    # ----------------------------------------------------------
+    # 3️⃣ MOVER EL TORNEO AL CANAL DE INICIADOS
+    # ----------------------------------------------------------
+    try:
+        await canal_iniciados.send(
+            f"🔥 **TORNEO BATTLE INICIADO** 🔥\n\n{mensaje_objetivo.content}"
+        )
+    except discord.Forbidden:
+        await ctx.author.send("❌ No tengo permisos para escribir en `torneos-battle-iniciados`.")
+        return
+
+    # ----------------------------------------------------------
+    # 4️⃣ ELIMINAR DEL CANAL DE ACTIVOS
+    # ----------------------------------------------------------
+    try:
+        await mensaje_objetivo.delete()
+    except discord.Forbidden:
+        await ctx.author.send("⚠️ No tengo permisos para eliminar el mensaje de `torneos-activos`.")
+    except Exception as e:
+        await ctx.author.send(f"⚠️ No se pudo eliminar el mensaje: {e}")
+
+    # ----------------------------------------------------------
+    # 5️⃣ CONFIRMACIÓN FINAL AL MOD
+    # ----------------------------------------------------------
+    await ctx.author.send("✅ El torneo Battle ha sido iniciado correctamente.")
 
 async def actualizar_clasificacion_handle(ctx, codigo_torneo: str):
     await borrar_mensaje_seguro(ctx)
@@ -906,3 +1055,149 @@ async def finalizar_torneo_handle(ctx, codigo_torneo: str):
     # 3️⃣ Publicar clasificación final
     await actualizar_clasificacion_handle(ctx, codigo_torneo)
 
+async def actualizar_clasificacion_battle_handle(ctx, codigo_battle: str):
+    await borrar_mensaje_seguro(ctx)
+
+    if not codigo_battle:
+        await ctx.author.send("❌ Necesitas enviar el código del battle.")
+        return
+
+    canal_resultados = discord.utils.get(ctx.guild.text_channels, name="resultados-battle")
+    if not canal_resultados:
+        await ctx.author.send("❌ No se encontró el canal `#resultados-battle`.")
+        return
+
+    # 🔹 Inicializar jugadores
+    jugadores = {}
+
+    async for msg in canal_resultados.history(limit=500):
+        contenido = msg.content.strip()
+        if not contenido.startswith(f"[{codigo_battle.lower()}]"):
+            continue
+
+        try:
+            parte_jugadores, parte_resultado = contenido.split("->")
+            ids = parte_jugadores.split("]")[1].split("vs")
+            id1 = ids[0].strip()
+            id2 = ids[1].strip()
+            s1, s2 = map(int, parte_resultado.strip().split("-"))
+        except:
+            continue
+
+        for pid in [id1, id2]:
+            if pid not in jugadores:
+                jugadores[pid] = {
+                    "mp": 0,
+                    "games_won": 0,
+                    "games_played": 0,
+                    "wins": 0,
+                    "losses": 0,
+                    "draws": 0,
+                    "opponents": []
+                }
+
+        jugadores[id1]["opponents"].append(id2)
+        jugadores[id2]["opponents"].append(id1)
+
+        jugadores[id1]["games_won"] += s1
+        jugadores[id1]["games_played"] += s1 + s2
+        jugadores[id2]["games_won"] += s2
+        jugadores[id2]["games_played"] += s1 + s2
+
+        if s1 > s2:
+            jugadores[id1]["mp"] += 3
+            jugadores[id1]["wins"] += 1
+            jugadores[id2]["losses"] += 1
+        elif s2 > s1:
+            jugadores[id2]["mp"] += 3
+            jugadores[id2]["wins"] += 1
+            jugadores[id1]["losses"] += 1
+        else:
+            jugadores[id1]["mp"] += 1
+            jugadores[id2]["mp"] += 1
+            jugadores[id1]["draws"] += 1
+            jugadores[id2]["draws"] += 1
+
+    # 🔹 Calcular desempates y construir clasificación
+    clasificacion = []
+    for pid, datos in jugadores.items():
+        # Tie Break #1: OMW%
+        omw = 0.0
+        for o in datos["opponents"]:
+            opp = jugadores.get(o)
+            if not opp:
+                continue
+            total_matches = opp["wins"] + opp["losses"] + opp["draws"]
+            if total_matches == 0:
+                continue
+            omw += opp["mp"] / (total_matches * 3)
+        omw = omw / len(datos["opponents"]) if datos["opponents"] else 0.0
+
+        # Tie Break #2: Median-Buchholz
+        buchholz_scores = []
+        for o in datos["opponents"]:
+            opp = jugadores.get(o)
+            if not opp:
+                continue
+            total_matches = opp["wins"] + opp["losses"] + opp["draws"]
+            if total_matches == 0:
+                continue
+            buchholz_scores.append(opp["mp"] / (total_matches * 3))
+        if buchholz_scores:
+            if len(buchholz_scores) > 2:
+                buchholz_scores_sorted = sorted(buchholz_scores)[1:-1]
+            else:
+                buchholz_scores_sorted = buchholz_scores
+            buchholz = sum(buchholz_scores_sorted) / len(buchholz_scores_sorted)
+        else:
+            buchholz = 0.0
+
+        diff = datos["games_won"] - (datos["games_played"] - datos["games_won"])
+
+        try:
+            miembro = await ctx.guild.fetch_member(int(pid))
+            nombre = f"@{miembro.display_name}"
+        except (ValueError, discord.NotFound):
+            nombre = pid
+
+        clasificacion.append({
+            "nombre": nombre,
+            "mp": datos["mp"],
+            "omw": omw,
+            "buchholz": buchholz,
+            "diff": diff,
+            "wins": datos["wins"],
+            "losses": datos["losses"],
+            "draws": datos["draws"]
+        })
+
+    # 🔹 Ordenar
+    clasificacion.sort(key=lambda x: (-x["mp"], -x["omw"], -x["diff"], -x["buchholz"]))
+
+    # 🔹 Construir tabla
+    mensaje = f"📊 **Clasificación del battle `{codigo_battle}`:**\n"
+    mensaje += "```markdown\n"
+    mensaje += "Rango | Participante           | G-P-E | Pts  | OMW%   | Buchholz | Dif\n"
+    mensaje += "------|------------------------|-------|------|--------|----------|-----\n"
+    for i, p in enumerate(clasificacion, 1):
+        gpe = f"{p['wins']}-{p['losses']}-{p['draws']}"
+        linea = f"{i:<5} | {p['nombre'][:22]:<22} | {gpe:<5} | {p['mp']:<4} | {p['omw']:.3f}  | {p['buchholz']:.5f}  | {p['diff']:+}"
+        mensaje += linea + "\n"
+    mensaje += "```"
+
+    # 🔹 Canal de destino
+    canal = discord.utils.get(ctx.guild.text_channels, name="🍺-el‐ranking‐de‐la‐barra")
+    if not canal:
+        return await ctx.send("⚠️ No se encontró el canal de clasificaciones.")
+
+    mensaje_existente = None
+    async for msg in canal.history(limit=50):
+        if msg.author == ctx.guild.me and not msg.embeds:
+            if msg.content.startswith(f"📊 **Clasificación del battle `{codigo_battle}`:**"):
+                mensaje_existente = msg
+                break
+
+    if mensaje_existente:
+        await mensaje_existente.edit(content=mensaje)
+    else:
+        await canal.send(mensaje)

@@ -28,7 +28,9 @@ from utils.jugadores import (
     mis_comandos_handle,
     submitted_deck_handle,
     editar_deck_handle,
-    cartas_mas_jugadas_handle
+    cartas_mas_jugadas_handle,
+    iniciar_battle_handle,
+    reportar_resultado_battle_handle
 )
 
 from utils.torneos import (
@@ -36,7 +38,9 @@ from utils.torneos import (
   actualizar_clasificacion_handle, 
   partidos_pendientes_handle, 
   forzar_ronda_handle, 
-  new_tournament_assistance_handle
+  new_tournament_assistance_handle,
+  iniciar_torneo_battle_handle,
+  actualizar_clasificacion_battle_handle
 )
 
 from utils.events import (
@@ -222,6 +226,20 @@ async def modificar_resultado(ctx, codigo: str = None):
     """Permite cambiar el resultado de un encuentro mientras la ronda siga en juego - !modificar-resultado"""
     await modificar_resultado_handle(ctx, codigo)
 
+@bot.command(name="iniciar-battle",
+    aliases=["iniciar battle", "iniciar_battle"])
+@comando_roles_permitidos("socio", "second-chance-socio", "miembro", "second-chance-miembro")
+async def iniciar_battle(ctx, codigo_torneo: str = None, jugador1: discord.Member = None, jugador2: discord.Member = None):
+    """Consulta si se puede hacer un enfrentamiento de tipo battle - !iniciar_battle_handle"""
+    await iniciar_battle_handle(ctx, codigo_torneo, jugador1, jugador2)
+
+@bot.command(name="reportar-resultado-battle",
+    aliases=["reportar resultado battle", "reportar_resultado_battle"])
+@comando_roles_permitidos("socio", "second-chance-socio", "miembro", "second-chance-miembro")
+async def reportar_resultado_battle(ctx, codigo_torneo: str = None, jugador1: discord.Member = None, resultado: str = None, jugador2: discord.Member = None):
+    """Reporta el resultado de un partido de un torneo de tipo battle - !reportar-resultado-battle"""
+    await reportar_resultado_battle_handle(ctx, codigo_torneo, jugador1, resultado, jugador2)
+
 @bot.command(name="partidos-pendientes",
     aliases=["partidos pendientes", "partidos_pendientes"])
 @comando_roles_permitidos("socio", "second-chance-socio", "miembro", "second-chance-miembro")
@@ -287,6 +305,14 @@ async def iniciar_torneo(ctx, codigo_torneo: str = None):
     """Inicia un torneo con el código proporcionado - !iniciar-torneo <código_torneo>"""
     await iniciar_torneo_handle(ctx, codigo_torneo)
 
+@bot.command(name="iniciar-torneo-battle",
+    aliases=["iniciar torneo battle", "iniciar_torneo_battle"])
+@comando_roles_permitidos("admin")
+async def iniciar_torneo_battle(ctx, codigo_torneo: str = None):
+    """Inicia un torneo de tipo battle con el código proporcionado - !iniciar-torneo-battle <código_torneo>"""
+    await iniciar_torneo_battle_handle(ctx, codigo_torneo)    
+
+
 @bot.command(name="actualizar-clasificacion",
     aliases=["actualizar clasificacion", "actualizar_clasificacion"])
 @comando_roles_permitidos("admin")
@@ -294,6 +320,12 @@ async def actualizar_clasificacion(ctx, codigo_torneo: str = None):
     """Actualiza la clasificación con criterios estilo MTG y la publica en #🍺-el‐ranking‐de‐la‐barra - !actualizar-clasificacion <código_torneo>"""
     await actualizar_clasificacion_handle(ctx, codigo_torneo)
 
+@bot.command(name="actualizar-clasificacion-battle",
+    aliases=["actualizar clasificacion battle", "actualizar_clasificacion_battle"])
+@comando_roles_permitidos("admin")
+async def actualizar_clasificacion_battle(ctx, codigo_torneo: str = None):
+    """Actualiza la clasificación con criterios estilo MTG y la publica en #🍺-el‐ranking‐de‐la‐barra - !actualizar-clasificacion-battle <código_torneo>"""
+    await actualizar_clasificacion_battle_handle(ctx, codigo_torneo)
 
 @bot.command(name="forzar-ronda",
     aliases=["forzar ronda", "forzar_ronda"])

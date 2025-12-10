@@ -9,7 +9,7 @@ import matplotlib.pyplot as plt
 import io
 import re
 import config
-from utils.torneos import generar_codigo_unico, partidos_pendientes_handle
+from utils.torneos import actualizar_clasificacion_battle_handle, generar_codigo_unico, partidos_pendientes_handle
 from utils.admin import moderador_permisos_handle
 from utils.commons import borrar_mensaje_seguro, validar_canal_correcto, buscar_usuario_en_servidor, obtener_torneo_usuario, obtener_sugerencias_arquetipos
 
@@ -1697,12 +1697,16 @@ async def editar_deck_handle(ctx, codigo_torneo: str = None):
     await borrar_mensaje_seguro(ctx)
     if not await validar_canal_correcto(ctx, "preguntale-a-el-barbas", "!mis-comandos"):
         return
+
     author = ctx.author
+
     if ctx.guild is None:
         await author.send("❌ Este comando debe ejecutarse desde el servidor del torneo.")
         return
+
     def dm_check(m):
-        return m.author == ctx.author and isinstance(m.channel, discord.DMChannel)
+        return m.author == author and isinstance(m.channel, discord.DMChannel)
+
     # ✅ Pedir código del torneo si no se proporcionó
     if not codigo_torneo:
         codigo_torneo = await obtener_torneo_usuario(
@@ -1711,32 +1715,57 @@ async def editar_deck_handle(ctx, codigo_torneo: str = None):
                             "Elige uno de los torneos en los que estás inscrito:"
         )
         if not codigo_torneo:
-            await author.send("❌ No seleccionaste ningún torneo. Cancelando subida de deck.")
+            await author.send("❌ No seleccionaste ningún torneo. Cancelando edición.")
             return
 
-    # ok, error = await validar_torneo_para_edicion(codigo_torneo, author)
-    # if not ok:
-    #    await author.send(error)
-    #    return
+    # VALIDACIÓN DEL TORNEO
+    ok, error = await validar_torneo_para_edicion(codigo_torneo, author)
 
+    # 🔎 Recuperar deck existente
+    codigo_deck = f"{codigo_torneo}_{author.id}"
+    deck_existente = await obtener_deck_en_canal(ctx.guild, codigo_deck)
+
+    if not deck_existente:
+        await author.send("❌ No se encontró tu deck en el canal de submitted-decks.")
+        return
+
+    edited = deck_existente["edited"]  # 0 o 1
+
+    # Si el torneo ya ha empezado (ok=False), se permite 1 edición
+    if not ok:
+        if edited >= 1:
+            await author.send("❌ El torneo ya ha comenzado y **ya has usado tu única edición disponible**.")
+            return
+        else:
+            await author.send("⚠️ El torneo ya ha comenzado, pero tienes **una edición extra disponible**.")
+
+    # 🔹 Continuar flujo normal de edición
     datos = await deck_dm_flow(ctx, author, codigo_torneo, modo="editar")
     if not datos:
         return
+
     nombre_deck, archetype, decklist, sideboard, mensaje_deck = datos
 
-    # Publicar embed actualizado (edita el mensaje si existe)
-    codigo_deck = f"{codigo_torneo}_{author.id}"
+    # CALCULAR nuevo Edited
+    nuevo_edited = edited
+    if not ok and edited == 0:
+        nuevo_edited = 1
+
+    # CREAR EMBED FINAL
     embed_final = discord.Embed(
         title=f"🃏 Deck Actualizado: {nombre_deck}",
         description=f"**Código:** `{codigo_deck}`\n**Torneo:** `{codigo_torneo}`",
         color=discord.Color.blue()
     )
+
     embed_final.add_field(name="Jugador", value=f"{author} (ID: {author.id})", inline=False)
     embed_final.add_field(name="Archetype", value=archetype, inline=False)
     embed_final.add_field(name="Decklist", value=decklist[:1000], inline=False)
     embed_final.add_field(name="Sideboard", value=sideboard[:1000], inline=False)
+    embed_final.add_field(name="Edited", value=str(nuevo_edited), inline=False)
     embed_final.set_footer(text="Deck editado correctamente.")
 
+    # ACTUALIZAR MENSAJE EXISTENTE
     if mensaje_deck:
         await mensaje_deck.edit(embed=embed_final)
     else:
@@ -1951,3 +1980,263 @@ async def cartas_mas_jugadas_handle(ctx, codigo_torneo: str = None):
         plt.close(fig)
 
         await ctx.author.send(file=discord.File(fp=buf, filename=f"cartas_mas_jugadas_{torneo}.png"))
+
+async def iniciar_battle_handle(ctx, codigo_torneo: str = None, jugador1: str = None, jugador2: str = None):
+    await borrar_mensaje_seguro(ctx)
+    author = ctx.author
+
+    def dm_check(m):
+        return m.author == author and isinstance(m.channel, discord.DMChannel)
+
+    canal_torneos = discord.utils.get(ctx.guild.text_channels, name="torneos-battle-iniciados")
+    canal_batallas = discord.utils.get(ctx.guild.text_channels, name="batallas-iniciadas")
+
+    if not canal_torneos:
+        await ctx.send("❌ No existe el canal **#torneos-battle-iniciados**.")
+        return
+    if not canal_batallas:
+        await ctx.send("❌ No existe el canal **#batallas-iniciadas**.")
+        return
+
+    try:
+        # 1️⃣ Preguntar por DM si falta información
+        if not all([codigo_torneo, jugador1, jugador2]):
+            await author.send("⚔️ Vamos a iniciar un enfrentamiento Battle Royale.\nResponde a las siguientes preguntas:")
+
+            # Selección de torneo
+            if not codigo_torneo:
+                lista_battles = []
+                mensajes_battles = []
+
+                async for msg in canal_torneos.history(limit=200):
+                    if "🏷️ Código interno:" in msg.content:
+                        partes = msg.content.split("🏷️ Código interno:")
+                        if len(partes) > 1:
+                            codigo = partes[1].split("`")[1].strip().lower()
+                            lista_battles.append(codigo)
+                            mensajes_battles.append(msg)
+
+                if not lista_battles:
+                    await author.send("❌ No hay torneos Battle disponibles en `torneos-battle-iniciados`.")
+                    return
+
+                # Mostrar lista de códigos disponibles
+                texto = "**Torneos Battle disponibles:**\n"
+                for i, c in enumerate(lista_battles, start=1):
+                    texto += f"{i}. {c}\n"
+                texto += "\nEscribe el número del torneo que quieres iniciar."
+                await author.send(texto)
+
+                resp = await ctx.bot.wait_for("message", check=dm_check, timeout=90)
+                try:
+                    indice = int(resp.content.strip()) - 1
+                    codigo_torneo = lista_battles[indice]
+                except:
+                    await author.send("❌ Entrada no válida. Operación cancelada.")
+                    return
+
+            # Preguntar por jugador1
+            if not jugador1:
+                await author.send("2️⃣ Escribe el nombre o ID de **jugador 1**:")
+                resp = await ctx.bot.wait_for("message", check=dm_check, timeout=90)
+                jugador1 = buscar_usuario_en_servidor(ctx.guild, resp.content.strip())
+                if not jugador1:
+                    await author.send("❌ No se encontró el jugador 1.")
+                    return
+
+            # Preguntar por jugador2
+            if not jugador2:
+                await author.send("3️⃣ Escribe el nombre o ID de **jugador 2**:")
+                resp = await ctx.bot.wait_for("message", check=dm_check, timeout=90)
+                jugador2 = buscar_usuario_en_servidor(ctx.guild, resp.content.strip())
+                if not jugador2:
+                    await author.send("❌ No se encontró el jugador 2.")
+                    return
+
+    except asyncio.TimeoutError:
+        await author.send("⏰ Tiempo agotado. Vuelve a intentarlo.")
+        return
+
+    # Normalizar datos
+    codigo_torneo = codigo_torneo.lower()
+    id1 = str(jugador1.id)
+    id2 = str(jugador2.id)
+
+    # Comprobar enfrentamientos previos
+    contador = 0
+    async for msg in canal_batallas.history(limit=None):
+        contenido = msg.content.lower()
+        if contenido.startswith(f"{codigo_torneo} - "):
+            if id1 in contenido and id2 in contenido:
+                contador += 1
+
+    if contador >= 2:
+        await author.send(
+            f"❌ **{jugador1.display_name}** y **{jugador2.display_name}** ya se han enfrentado **{contador} veces** "
+            f"en el torneo **{codigo_torneo.upper()}**. No pueden volver a jugar."
+        )
+        return
+
+    # Enfrentamiento autorizado: registrar en canal
+    await canal_batallas.send(f"{codigo_torneo} - {id1} vs {id2}")
+
+    # Mensaje a ambos jugadores
+    try:
+        await jugador1.send(f"🔥 Battle iniciado: {jugador1.display_name} vs {jugador2.display_name}")
+    except discord.Forbidden:
+        await author.send(f"⚠️ No se pudo enviar DM a {jugador1.display_name}.")
+
+    try:
+        await jugador2.send(f"🔥 Battle iniciado: {jugador1.display_name} vs {jugador2.display_name}")
+    except discord.Forbidden:
+        await author.send(f"⚠️ No se pudo enviar DM a {jugador2.display_name}.")
+
+    # Confirmación al autor
+    await author.send(
+        f"✅ Enfrentamiento iniciado:\n**{jugador1.display_name}** vs **{jugador2.display_name}** "
+        f"en el torneo **{codigo_torneo.upper()}** (Enfrentamientos previos: {contador})"
+    )
+
+
+
+async def reportar_resultado_battle_handle(ctx, codigo_battle: str = None, jugador1: discord.Member = None, resultado: str = None, jugador2: discord.Member = None):
+    await borrar_mensaje_seguro(ctx)
+
+    # Validación de canal
+    if not await validar_canal_correcto(ctx, "preguntale-a-el-barbas", "!reportar-battle"):
+        return
+
+    author = ctx.author
+
+    def dm_check(m):
+        return m.author == author and isinstance(m.channel, discord.DMChannel)
+
+    canal_torneos = discord.utils.get(ctx.guild.text_channels, name="torneos-battle-iniciados")
+    canal_batallas = discord.utils.get(ctx.guild.text_channels, name="batallas-iniciadas")
+    canal_resultados = discord.utils.get(ctx.guild.text_channels, name="resultados-battle")
+
+    if not canal_torneos:
+        await author.send("❌ No existe el canal `#torneos-battle-iniciados`.")
+        return
+    if not canal_batallas:
+        await author.send("❌ No existe el canal `#batallas-iniciadas`.")
+        return
+    if not canal_resultados:
+        await author.send("❌ No existe el canal `#resultados-battle`.")
+        return
+
+    # 🔵 1) Selección de torneo si no se pasa
+    try:
+        if not codigo_battle:
+            lista_battles = []
+            async for msg in canal_torneos.history(limit=200):
+                if "🏷️ Código interno:" in msg.content:
+                    partes = msg.content.split("🏷️ Código interno:")
+                    if len(partes) > 1 and "`" in partes[1]:
+                        codigo = partes[1].split("`")[1].strip().lower()
+                        lista_battles.append(codigo)
+
+            if not lista_battles:
+                await author.send("❌ No hay torneos Battle disponibles en `torneos-battle-iniciados`.")
+                return
+
+            # Mostrar lista
+            texto = "**Torneos Battle disponibles:**\n"
+            for i, c in enumerate(lista_battles, start=1):
+                texto += f"{i}. {c}\n"
+            texto += "\nEscribe el número del torneo que quieres reportar."
+            await author.send(texto)
+
+            resp = await ctx.bot.wait_for("message", check=dm_check, timeout=90)
+            try:
+                indice = int(resp.content.strip()) - 1
+                codigo_battle = lista_battles[indice]
+            except:
+                await author.send("❌ Entrada no válida. Operación cancelada.")
+                return
+
+        # 🔵 Preguntar jugadores y resultado si faltan
+        if not jugador1:
+            await author.send("2️⃣ Escribe el nombre o ID del **jugador 1**:")
+            resp = await ctx.bot.wait_for("message", check=dm_check, timeout=90)
+            jugador1 = buscar_usuario_en_servidor(ctx.guild, resp.content.strip())
+            if not jugador1:
+                await author.send("❌ No se encontró el jugador 1.")
+                return
+
+        if not resultado:
+            await author.send("4️⃣ Resultado (ej: `2-1`):")
+            resp = await ctx.bot.wait_for("message", check=dm_check, timeout=90)
+            resultado = resp.content.strip()
+
+        if not jugador2:
+            await author.send("3️⃣ Escribe el nombre o ID del **jugador 2**:")
+            resp = await ctx.bot.wait_for("message", check=dm_check, timeout=90)
+            jugador2 = buscar_usuario_en_servidor(ctx.guild, resp.content.strip())
+            if not jugador2:
+                await author.send("❌ No se encontró el jugador 2.")
+                return
+
+    except asyncio.TimeoutError:
+        await author.send("⏰ Tiempo agotado. Vuelve a intentarlo.")
+        return
+
+    # 🔵 2) Validar permisos
+    if author.id not in (jugador1.id, jugador2.id):
+        es_mod = await moderador_permisos_handle(ctx, only_check=True)
+        if not es_mod:
+            await author.send("❌ Solo los jugadores involucrados o un moderador pueden reportar.")
+            return
+
+    # 🔵 3) Validar que la partida exista en batallas-iniciadas (orden indiferente)
+    batalla_existente = False
+    async for msg in canal_batallas.history(limit=200):
+        contenido = msg.content.lower()
+        if contenido.startswith(f"{codigo_battle.lower()} - "):
+            ids = [s.strip() for s in contenido.split("-")[1].split("vs")]
+            if str(jugador1.id) in ids and str(jugador2.id) in ids:
+                batalla_existente = True
+                break
+
+    if not batalla_existente:
+        await author.send("❌ Esa batalla no está registrada en `#batallas-iniciadas`.")
+        return
+
+    # 🔵 4) Validar resultado
+    if "-" not in resultado:
+        await author.send("❌ El resultado debe ser 'X-Y'.")
+        return
+
+    try:
+        puntos_j1, puntos_j2 = map(int, resultado.split("-"))
+    except:
+        await author.send("❌ Formato inválido. Ejemplo: `2-1`.")
+        return
+
+    # Determinar ganador
+    if puntos_j1 > puntos_j2:
+        ganador = jugador1
+    elif puntos_j2 > puntos_j1:
+        ganador = jugador2
+    else:
+        ganador = None  # Empate
+
+    # 🔵 5) Guardar resultado en resultados-battle
+    texto_guardado = f"[{codigo_battle}] {jugador1.id} vs {jugador2.id} -> {puntos_j1}-{puntos_j2}"
+    await canal_resultados.send(texto_guardado)
+
+    # 🔵 6) Mensajes DM
+    for j in [jugador1, jugador2]:
+        try:
+            r_texto = f"🏅 Ganador: {ganador.display_name}" if ganador else "⚖️ Empate"
+            await j.send(
+                f"📢 Resultado reportado en `{codigo_battle}`:\n"
+                f"🆚 {jugador1.display_name} vs {jugador2.display_name}\n"
+                f"📊 {resultado}\n"
+                f"{r_texto}"
+            )
+        except:
+            pass
+
+    await author.send("✅ Resultado registrado correctamente.")
+    await actualizar_clasificacion_battle_handle(ctx, codigo_battle)
