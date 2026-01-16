@@ -11,7 +11,15 @@ import re
 import config
 from utils.torneos import actualizar_clasificacion_battle_handle, generar_codigo_unico, partidos_pendientes_handle
 from utils.admin import moderador_permisos_handle
-from utils.commons import borrar_mensaje_seguro, validar_canal_correcto, buscar_usuario_en_servidor, obtener_torneo_usuario, obtener_sugerencias_arquetipos
+from utils.commons import (
+    borrar_mensaje_seguro, 
+    validar_canal_correcto, 
+    buscar_usuario_en_servidor, 
+    obtener_torneo_usuario, 
+    obtener_sugerencias_arquetipos, 
+    cartas_mas_jugadas, best_decks, 
+    obtener_deck_en_canal
+)
 
 import config
 
@@ -1314,33 +1322,6 @@ def contar_cartas(lista_raw: str) -> int:
             continue
     return total
 
-async def obtener_deck_en_canal(guild: discord.Guild, codigo_deck: str):
-    """
-    Busca en el canal 'submitted-decks' un deck con el código dado.
-    Retorna un dict con 'mensaje', 'nombre_deck', 'archetype', 'decklist', 'sideboard', o None si no existe.
-    """
-    canal_submitted = discord.utils.get(guild.text_channels, name="submitted-decks")
-    if not canal_submitted:
-        return None
-
-    async for mensaje in canal_submitted.history(limit=500):
-        for embed in mensaje.embeds:
-            if embed.description and codigo_deck in embed.description:
-                campos = {field.name.lower(): field.value for field in embed.fields}
-                nombre_deck_extraido = embed.title.replace("🃏 Deck Subido: ", "").replace("🃏 Deck Actualizado: ", "")
-                  # Extraer torneo y jugador del código
-                id_torneo, jugador_id = codigo_deck.split("_")
-                return {
-                    "mensaje": mensaje,
-                    "nombre_deck": nombre_deck_extraido,
-                    "torneo": id_torneo,
-                    "jugador_id": int(jugador_id),
-                    "archetype": campos.get("archetype", ""),
-                    "decklist": campos.get("decklist", ""),
-                    "sideboard": campos.get("sideboard", "N/A")
-                }
-    return None
-
 async def deck_dm_flow(ctx, author: discord.Member, codigo_torneo: str, modo: str = "subir"):
     """
     Flujo de DM para subir o editar un deck.
@@ -1647,33 +1628,19 @@ async def submitted_deck_handle(ctx, codigo_torneo: str = None):
             return
    
     elif opcion == "2":
-        print("➡️ Opción 2 seleccionada: subir deck")  # Marca que entramos en esta opción
-
         datos = await deck_dm_flow(ctx, author, codigo_torneo, modo="subir")
-        print(f"🔹 deck_dm_flow devolvió: {datos}")  # Muestra lo que devuelve
-
         if not datos:
-            print("⚠️ deck_dm_flow devolvió None o lista vacía, saliendo")
             return
 
         try:
             nombre_deck, archetype, decklist_input, sideboard_input, extra = datos
-            print(f"🔹 Desempaquetado:")
-            print(f"    nombre_deck = {nombre_deck}")
-            print(f"    archetype = {archetype}")
-            print(f"    decklist_input = {decklist_input}")
-            print(f"    sideboard_input = {sideboard_input}")
-            print(f"    extra = {extra}")
+           
         except Exception as e:
             print(f"❌ Error al desempaquetar datos: {e}")
             return
 
         decklist = decklist_input
         sideboard = sideboard_input
-
-        print(f"✅ Decklist y Sideboard asignados correctamente")
-        print(f"Decklist:\n{decklist}")
-        print(f"Sideboard:\n{sideboard}")
 
     # ✅ Publicar embed en submitted-decks
     canal_submitted = discord.utils.get(ctx.guild.text_channels, name="submitted-decks")
@@ -1687,6 +1654,8 @@ async def submitted_deck_handle(ctx, codigo_torneo: str = None):
         embed_final.add_field(name="Archetype", value=archetype, inline=False)
         embed_final.add_field(name="Decklist", value=decklist[:1000], inline=False)
         embed_final.add_field(name="Sideboard", value=sideboard[:1000], inline=False)
+        embed_final.add_field(name="edited", value="0", inline=False)
+
         embed_final.set_footer(text="Deck subido correctamente.")
         await canal_submitted.send(embed=embed_final)
         await author.send(f"✅ Tu deck ha sido enviado con éxito al torneo `{codigo_torneo}`.")
@@ -1890,96 +1859,8 @@ async def leer_deck_tc_decks(ctx):
     return nombre_deck, archetype, decklist, sideboard
 
 
-async def cartas_mas_jugadas_handle(ctx, codigo_torneo: str = None):
-    await borrar_mensaje_seguro(ctx)
-    author = ctx.author
-
-    # 🔹 Canal donde están los decks
-    canal = discord.utils.get(ctx.guild.text_channels, name="submitted-decks")
-    if not canal:
-        return await ctx.send("❌ No encontré el canal `submitted-decks` en este servidor.")
-
-    # 🔹 Obtener torneo(s)
-    if not codigo_torneo:
-        codigo_torneo = await obtener_torneo_usuario(
-            ctx, 
-            mensaje_inicial="📋 Por favor selecciona un torneo o 'todos' para analizarlos todos:",
-            complete=True
-        )
-        if not codigo_torneo:
-            return await ctx.send("❌ No se seleccionó ningún torneo. Operación cancelada.")
-
-    # Si devuelve lista (varios torneos)
-    if isinstance(codigo_torneo, list):
-        torneos_a_analizar = codigo_torneo
-    else:
-        torneos_a_analizar = [codigo_torneo]
-
-    cartas_basicas = {"mountain", "swamp", "plains", "island", "forest"}
-
-    # 🔹 Recorrer cada torneo
-    for torneo in torneos_a_analizar:
-        contador_cartas = Counter()
-
-        async for mensaje in canal.history(limit=None):
-            for embed in mensaje.embeds:
-                if not embed.description or torneo not in embed.description:
-                    continue
-
-                campos = {field.name.lower(): field.value for field in embed.fields}
-                decklist = campos.get("decklist", "")
-                if not decklist:
-                    continue
-
-                for linea in decklist.splitlines():
-                    if not linea.strip():
-                        continue
-                    try:
-                        cantidad, carta = linea.strip().split(" ", 1)
-                        cantidad = int(cantidad)
-                        if carta.lower() in cartas_basicas:
-                            continue
-                        contador_cartas[carta] += cantidad
-                    except ValueError:
-                        continue
-
-        if not contador_cartas:
-            await ctx.author.send(f"📭 No se encontraron decks válidos para el torneo `{torneo}`.")
-            continue
-
-        # 🔹 Top 10 cartas más jugadas
-        top = contador_cartas.most_common(20)
-        texto = f"📊 **Cartas más jugadas en {torneo} (sin tierras básicas):**\n"
-        for idx, (carta, cant) in enumerate(top, start=1):
-            texto += f"{idx}. {carta} → {cant} veces\n"
-
-        await ctx.author.send(texto)
-
-        # 🔹 Crear gráfico tipo donut
-        nombres = [carta for carta, _ in top]
-        cantidades = [cant for _, cant in top]
-
-        fig, ax = plt.subplots(figsize=(6,6))
-        wedges, texts, autotexts = ax.pie(
-            cantidades,
-            labels=nombres,
-            autopct="%1.1f%%",
-            startangle=90,
-            pctdistance=0.85,
-            textprops={'fontsize': 10}
-        )
-
-        centre_circle = plt.Circle((0,0),0.70,fc='white')
-        fig.gca().add_artist(centre_circle)
-        ax.axis('equal')
-        plt.title(f"Top 10 cartas más jugadas\nTorneo: {torneo}", fontsize=12)
-
-        buf = io.BytesIO()
-        plt.savefig(buf, format='PNG')
-        buf.seek(0)
-        plt.close(fig)
-
-        await ctx.author.send(file=discord.File(fp=buf, filename=f"cartas_mas_jugadas_{torneo}.png"))
+async def cartas_mas_jugadas_handle(ctx, codigo_torneo: str = None, channel: str = None):
+    await cartas_mas_jugadas(ctx, codigo_torneo, channel)
 
 async def iniciar_battle_handle(ctx, codigo_torneo: str = None, jugador1: str = None, jugador2: str = None):
     await borrar_mensaje_seguro(ctx)
@@ -2240,3 +2121,6 @@ async def reportar_resultado_battle_handle(ctx, codigo_battle: str = None, jugad
 
     await author.send("✅ Resultado registrado correctamente.")
     await actualizar_clasificacion_battle_handle(ctx, codigo_battle)
+
+async def best_decks_handle(ctx, codigo_torneo: str = None, channel: str = None):
+    await best_decks(ctx, codigo_torneo, channel)

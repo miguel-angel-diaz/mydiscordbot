@@ -30,7 +30,8 @@ from utils.jugadores import (
     editar_deck_handle,
     cartas_mas_jugadas_handle,
     iniciar_battle_handle,
-    reportar_resultado_battle_handle
+    reportar_resultado_battle_handle,
+    best_decks_handle
 )
 
 from utils.torneos import (
@@ -40,7 +41,8 @@ from utils.torneos import (
   forzar_ronda_handle, 
   new_tournament_assistance_handle,
   iniciar_torneo_battle_handle,
-  actualizar_clasificacion_battle_handle
+  actualizar_clasificacion_battle_handle,
+  tournament_report_handle
 )
 
 from utils.events import (
@@ -272,18 +274,22 @@ async def editar_deck(ctx, codigo: str = None):
 async def stats(ctx):
     """Inicia el wizard de estadísticas - !stats"""
     await stats_handle(ctx)
-# @bot.command(name="stats-global", aliases=["stats_global"])
-# @comando_roles_permitidos("socio", "second-chance-socio", "miembro", "second-chance-miembro")
-# async def stats(ctx):
-#     """Inicia el wizard de estadísticas - !stats"""
-#     await stats_global_handle(ctx)
 
 @bot.command(name="cartas-mas-jugadas", 
-    aliases=["cartas_mas_jugadas"])
+    aliases=["cartas mas jugadas","cartas_mas_jugadas"])
 @comando_roles_permitidos("socio", "second-chance-socio", "miembro", "second-chance-miembro")
 async def stats(ctx):
     """Inicia el wizard de estadísticas - !stats"""
     await cartas_mas_jugadas_handle(ctx)
+
+@bot.command(name="best-decks", 
+    aliases=["best decks", "best_decks"])
+@comando_roles_permitidos("socio", "second-chance-socio", "miembro", "second-chance-miembro")
+async def stats(ctx, codigo_torneo: str = None):
+    """analiza los mejores decks de un torneo"""
+    await best_decks_handle(ctx, codigo_torneo)
+
+
 
 
 #########################################################################################################
@@ -339,6 +345,12 @@ async def forzar_ronda(ctx, codigo_torneo: str = None):
 @comando_roles_permitidos("admin")
 async def listar_torneos(ctx):
         await listar_torneos_handle(ctx)
+
+@bot.command(name="reportar-torneo",
+    aliases=["reportar torneo", "reportar_torneo"])
+@comando_roles_permitidos("admin")
+async def tournament_report(ctx):
+        await tournament_report_handle(ctx)
 
 #########################################################################################################
 

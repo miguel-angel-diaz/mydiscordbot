@@ -9,9 +9,16 @@ from datetime import datetime
 import random
 import string
 
-from utils.commons import borrar_mensaje_seguro, validar_canal_correcto, obtener_torneo_usuario
-from utils.admin import moderador_permisos_handle
+from utils.commons import (
+    borrar_mensaje_seguro, 
+    validar_canal_correcto, 
+    obtener_torneo_usuario, 
+    cartas_mas_jugadas, 
+    best_decks, 
+    analizar_torneo_con_ia
+)
 
+from utils.admin import moderador_permisos_handle
 
 def generar_codigo_unico(longitud=6):
     return ''.join(random.choices(string.ascii_uppercase + string.digits, k=longitud))
@@ -622,7 +629,7 @@ async def iniciar_torneo_battle_handle(ctx, codigo_torneo: str):
     # ----------------------------------------------------------
     await ctx.author.send("✅ El torneo Battle ha sido iniciado correctamente.")
 
-async def actualizar_clasificacion_handle(ctx, codigo_torneo: str):
+async def actualizar_clasificacion_handle(ctx, codigo_torneo: str, finish_tournament: bool = False):
     await borrar_mensaje_seguro(ctx)
 
     if not codigo_torneo:
@@ -793,6 +800,9 @@ async def actualizar_clasificacion_handle(ctx, codigo_torneo: str):
         await mensaje_existente.edit(content=mensaje)
     else:
         await canal.send(mensaje)
+    
+    if finish_tournament:
+        await tournament_report_handle(ctx, codigo_torneo)
 
 async def partidos_pendientes_handle(ctx, codigo_torneo: str, type: str):
     await borrar_mensaje_seguro(ctx)
@@ -1053,7 +1063,7 @@ async def finalizar_torneo_handle(ctx, codigo_torneo: str):
             await ctx.send(f"⚠️ No se pudo enviar el mensaje en `#anuncios`: {e}")
 
     # 3️⃣ Publicar clasificación final
-    await actualizar_clasificacion_handle(ctx, codigo_torneo)
+    await actualizar_clasificacion_handle(ctx, codigo_torneo, True)
 
 async def actualizar_clasificacion_battle_handle(ctx, codigo_battle: str):
     await borrar_mensaje_seguro(ctx)
@@ -1201,3 +1211,28 @@ async def actualizar_clasificacion_battle_handle(ctx, codigo_battle: str):
         await mensaje_existente.edit(content=mensaje)
     else:
         await canal.send(mensaje)
+
+async def tournament_report_handle(ctx, codigo_torneo: str = None):
+    # 🔹 Obtener código de torneo
+    if not codigo_torneo:
+        codigo_torneo = await obtener_torneo_usuario(
+            ctx,
+            mensaje_inicial="📩 No escribiste el código del torneo.\n"
+                            "Elige uno de los torneos en los que estás inscrito:",
+            complete=True
+        )
+        if not codigo_torneo:
+            return
+
+    # 🔹 Obtener datos
+    cartas_data = await cartas_mas_jugadas(ctx, codigo_torneo, '🧠📈analisis-torneos')
+    decks_data = await best_decks(ctx, codigo_torneo, '🧠📈analisis-torneos')
+
+    if not cartas_data or not decks_data:
+        return await ctx.send("❌ No se pudo generar el informe del torneo.")
+
+    # 🔹 Analizar con IA
+    await analizar_torneo_con_ia(ctx, cartas_data, decks_data)
+
+
+

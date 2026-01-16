@@ -4,6 +4,7 @@ import os
 CHALLONGE_USERNAME = os.environ.get("CHALLONGE_USERNAME")
 CHALLONGE_API_KEY = os.environ.get("CHALLONGE_API_KEY")
 DISCORD_TOKEN = os.environ.get("DISCORD_TOKEN")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")  # Asegúrate de tener la variable de entorno
 
 if not CHALLONGE_USERNAME or not CHALLONGE_API_KEY or not DISCORD_TOKEN:
     try:
