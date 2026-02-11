@@ -30,8 +30,7 @@ from utils.jugadores import (
     editar_deck_handle,
     cartas_mas_jugadas_handle,
     iniciar_battle_handle,
-    reportar_resultado_battle_handle,
-    best_decks_handle
+    reportar_resultado_battle_handle
 )
 
 from utils.torneos import (
@@ -57,6 +56,7 @@ from utils.events import (
 
 from utils.watchers import cargar_tareas;
 from utils.stats import stats_handle;
+from utils.commons import best_decks_handle;
 # from utils.stats_global import stats_global_handle;
 
 import config
@@ -278,14 +278,14 @@ async def stats(ctx):
 @bot.command(name="cartas-mas-jugadas", 
     aliases=["cartas mas jugadas","cartas_mas_jugadas"])
 @comando_roles_permitidos("socio", "second-chance-socio", "miembro", "second-chance-miembro")
-async def stats(ctx):
+async def cartas_mas_jugadas(ctx):
     """Inicia el wizard de estadísticas - !stats"""
     await cartas_mas_jugadas_handle(ctx)
 
 @bot.command(name="best-decks", 
     aliases=["best decks", "best_decks"])
 @comando_roles_permitidos("socio", "second-chance-socio", "miembro", "second-chance-miembro")
-async def stats(ctx, codigo_torneo: str = None):
+async def best_decks(ctx, codigo_torneo: str = None):
     """analiza los mejores decks de un torneo"""
     await best_decks_handle(ctx, codigo_torneo)
 

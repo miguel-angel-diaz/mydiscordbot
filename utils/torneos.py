@@ -14,7 +14,7 @@ from utils.commons import (
     validar_canal_correcto, 
     obtener_torneo_usuario, 
     cartas_mas_jugadas, 
-    best_decks, 
+    best_decks_handle, 
     analizar_torneo_con_ia
 )
 
@@ -1213,6 +1213,9 @@ async def actualizar_clasificacion_battle_handle(ctx, codigo_battle: str):
         await canal.send(mensaje)
 
 async def tournament_report_handle(ctx, codigo_torneo: str = None):
+    # Solo moderadores
+    if not await moderador_permisos_handle(ctx):
+        return
     # 🔹 Obtener código de torneo
     if not codigo_torneo:
         codigo_torneo = await obtener_torneo_usuario(
@@ -1226,7 +1229,7 @@ async def tournament_report_handle(ctx, codigo_torneo: str = None):
 
     # 🔹 Obtener datos
     cartas_data = await cartas_mas_jugadas(ctx, codigo_torneo, '🧠📈analisis-torneos')
-    decks_data = await best_decks(ctx, codigo_torneo, '🧠📈analisis-torneos')
+    decks_data = await best_decks_handle(ctx, codigo_torneo, '🧠📈analisis-torneos')
 
     if not cartas_data or not decks_data:
         return await ctx.send("❌ No se pudo generar el informe del torneo.")

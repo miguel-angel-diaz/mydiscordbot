@@ -4,21 +4,24 @@ import os
 CHALLONGE_USERNAME = os.environ.get("CHALLONGE_USERNAME")
 CHALLONGE_API_KEY = os.environ.get("CHALLONGE_API_KEY")
 DISCORD_TOKEN = os.environ.get("DISCORD_TOKEN")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")  # Asegúrate de tener la variable de entorno
+OPENROUTER_API_KEY =  os.environ.get("OPENROUTER_API_KEY")
 
-if not CHALLONGE_USERNAME or not CHALLONGE_API_KEY or not DISCORD_TOKEN:
+if not CHALLONGE_USERNAME or not CHALLONGE_API_KEY or not DISCORD_TOKEN or not OPENROUTER_API_KEY:
     try:
         from config_token import (
             CHALLONGE_USERNAME as LOCAL_USER,
             CHALLONGE_API_KEY as LOCAL_KEY,
             DISCORD_TOKEN as LOCAL_TOKEN,
+            OPENROUTER_API_KEY as LOCAL_OPENROUTER
         )
         print("🔹 Usando credenciales locales desde config_token.py")
         CHALLONGE_USERNAME = CHALLONGE_USERNAME or LOCAL_USER
         CHALLONGE_API_KEY = CHALLONGE_API_KEY or LOCAL_KEY
         DISCORD_TOKEN = DISCORD_TOKEN or LOCAL_TOKEN
+        OPENROUTER_API_KEY = OPENROUTER_API_KEY or LOCAL_OPENROUTER
+        print(f"No se pudo enviar DM a {CHALLONGE_API_KEY}")
     except ImportError:
-        pass  # si no existe, seguirá fallando abajo
+        pass
 
 # 🔹 Validación final
 if not CHALLONGE_USERNAME or not CHALLONGE_API_KEY:
@@ -31,6 +34,11 @@ if not DISCORD_TOKEN:
     raise ValueError(
         "❌ No se encontró el token del bot. "
         "Define DISCORD_TOKEN en las variables de entorno o en config_token.py."
+    )
+if not OPENROUTER_API_KEY:
+    raise ValueError(
+        "❌ No se encontró la clave de OpenRouter. "
+        "Define OPENROUTER_API_KEY en las variables de entorno."
     )
 CHALLONGE_API_URL = "https://api.challonge.com/v1/tournaments.json"
 ROLES_TODOS = {"miembro", "socio", "second-chance-socio", "second-chance-miembro", "admin"}

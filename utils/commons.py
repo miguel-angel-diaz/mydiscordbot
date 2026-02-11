@@ -300,7 +300,7 @@ async def cartas_mas_jugadas(ctx, codigo_torneo: str = None, channel: str = None
                 "top_cartas": top  # lista de (carta, cantidad)
             }
 
-async def best_decks(ctx, codigo_torneo: str = None, channel: str = None):
+async def best_decks_handle(ctx, codigo_torneo: str = None, channel: str = None):
     await borrar_mensaje_seguro(ctx)
     author = ctx.author
     if channel != None:
@@ -469,6 +469,13 @@ async def obtener_deck_en_canal(guild: discord.Guild, codigo_deck: str):
     return None
 
 async def analizar_torneo_con_ia(ctx, cartas_data, decks_data):
+    """
+    Flujo completo para generar análisis de torneo con IA.
+    1️⃣ Cargar memoria previa
+    2️⃣ Generar narrativa
+    3️⃣ Publicar análisis
+    4️⃣ Extraer aprendizaje y guardar
+    """
     # 1️⃣ Cargar memoria previa
     memoria = await cargar_memoria_ia(ctx.guild, limite=15)
 
@@ -489,22 +496,32 @@ async def analizar_torneo_con_ia(ctx, cartas_data, decks_data):
     await guardar_memoria_ia(ctx.guild, "SUMMARY", resumen)
 
 async def extraer_memoria_desde_analisis(texto):
+    """
+    Extrae la narrativa completa y las tendencias del análisis
+    para ir alimentando la memoria del bot.
+    """
     prompt = f"""
-Extrae en 2 frases las tendencias de metajuego y narrativas recurrentes
-sin mencionar jugadores:
+A partir del siguiente análisis de torneo, genera un resumen completo
+de las tendencias de metajuego y la narrativa general,
+incluyendo cartas clave, estrategias y eventos interesantes,
+sin mencionar nombres de jugadores:
 
 {texto}
 """
     return await llamar_a_chatgpt(prompt)
 
 async def llamar_a_chatgpt(prompt: str, debug=False) -> str:
-    url = "https://api.openai.com/v1/chat/completions"
+    """
+    Llamada al modelo gratuito de OpenRouter para generar análisis.
+    Completamente asíncrona con aiohttp.
+    """
+    url = "https://openrouter.ai/api/v1/chat/completions"
     headers = {
-        "Authorization": f"Bearer {config.OPENAI_API_KEY}",
-        "Content-Type": "application/json"
+        "Authorization": f"Bearer {config.OPENROUTER_API_KEY}",
+        "Content-Type": "application/json",
     }
     payload = {
-        "model": "gpt-4o-mini",
+        "model": "openrouter/free",  # modelo gratuito
         "messages": [
             {"role": "system", "content": "Eres un analista experto de torneos de Magic. Usa humor ligero y narrativa continua."},
             {"role": "user", "content": prompt}
@@ -513,29 +530,28 @@ async def llamar_a_chatgpt(prompt: str, debug=False) -> str:
         "max_tokens": 500
     }
 
-    if debug:
-        print("🧠 PROMPT IA --------------------")
-        print(prompt)
-        print("--------------------------------")
-
     async with aiohttp.ClientSession() as session:
         async with session.post(url, headers=headers, json=payload) as resp:
             resp.raise_for_status()
             data = await resp.json()
             texto = data["choices"][0]["message"]["content"].strip()
 
-    if debug:
-        print("🧠 RESPUESTA IA -----------------")
-        print(texto)
-        print("--------------------------------")
-
     return texto
 
 async def generar_analisis_ia(cartas_data, decks_data, memoria):
+    """
+    Genera un análisis narrativo de torneo, usando la memoria histórica.
+    """
     memoria_texto = "\n".join(memoria)
 
     prompt = f"""
-Eres un analista de torneos de Magic con un tono simpático, cercano y divertido.
+eres un analista escribe como si narrara un torneo en una taberna de Magic.
+Usa humor ligero, ironía elegante con un toque spicy y referencias recurrentes.
+Nunca menciona nombres de jugadores.
+Al último clasificado lo llama "cuchara de palo".
+Burn suele sufrir.
+Control siempre sobrevive.
+El metajuego se analiza como una historia continua.
 
 MEMORIA DEL ANALISTA:
 {memoria_texto}
@@ -557,19 +573,10 @@ INSTRUCCIONES:
 
     return await llamar_a_chatgpt(prompt)
 
-async def inicializar_estilo_ia(guild: discord.Guild):
-    estilo = """
-El analista escribe como si narrara un torneo en una taberna de Magic.
-Usa humor ligero, ironía elegante y referencias recurrentes.
-Nunca menciona nombres de jugadores.
-Al último clasificado lo llama "cuchara de palo".
-Burn suele sufrir.
-Control siempre sobrevive.
-El metajuego se analiza como una historia continua.
-"""
-    await guardar_memoria_ia(guild, "STYLE", estilo)
-
 async def cargar_memoria_ia(guild: discord.Guild, limite=15):
+    """
+    Carga la memoria histórica de análisis previos desde el canal ia-context.
+    """
     canal = obtener_canal_ia(guild)
     if not canal:
         return []
@@ -582,6 +589,9 @@ async def cargar_memoria_ia(guild: discord.Guild, limite=15):
     return recuerdos
 
 async def guardar_memoria_ia(guild: discord.Guild, tipo: str, contenido: str):
+    """
+    Guarda un bloque de texto en el canal ia-context con un tipo de memoria.
+    """
     canal = obtener_canal_ia(guild)
     if not canal:
         return
@@ -590,4 +600,7 @@ async def guardar_memoria_ia(guild: discord.Guild, tipo: str, contenido: str):
     await canal.send(texto)
 
 def obtener_canal_ia(guild: discord.Guild):
+    """
+    Devuelve el canal de Discord ia-context para almacenar memoria de IA.
+    """
     return discord.utils.get(guild.text_channels, name="ia-context")

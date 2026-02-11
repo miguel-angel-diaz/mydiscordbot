@@ -6,7 +6,6 @@ __pycache__/
 
 # Archivos sensibles locales
 config_token.py
-config_local.py
 .env.local
 
 # Otros

@@ -17,7 +17,8 @@ from utils.commons import (
     buscar_usuario_en_servidor, 
     obtener_torneo_usuario, 
     obtener_sugerencias_arquetipos, 
-    cartas_mas_jugadas, best_decks, 
+    cartas_mas_jugadas, 
+    best_decks_handle, 
     obtener_deck_en_canal
 )
 
@@ -2122,5 +2123,5 @@ async def reportar_resultado_battle_handle(ctx, codigo_battle: str = None, jugad
     await author.send("✅ Resultado registrado correctamente.")
     await actualizar_clasificacion_battle_handle(ctx, codigo_battle)
 
-async def best_decks_handle(ctx, codigo_torneo: str = None, channel: str = None):
-    await best_decks(ctx, codigo_torneo, channel)
+async def best_decks(ctx, codigo_torneo: str = None, channel: str = None):
+    await best_decks_handle(ctx, codigo_torneo, channel)
