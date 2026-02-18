@@ -1,4 +1,0 @@
-# Solo para uso local, NO subir a GitHub
-CHALLONGE_USERNAME = "TheKlub"
-CHALLONGE_API_KEY = "WfdVp0bApiTGP3OTiOsM4hhuSNPgsUDrndBCVzaG"
-OPENROUTER_API_KEY ="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"

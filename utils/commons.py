@@ -469,138 +469,171 @@ async def obtener_deck_en_canal(guild: discord.Guild, codigo_deck: str):
     return None
 
 async def analizar_torneo_con_ia(ctx, cartas_data, decks_data):
-    """
-    Flujo completo para generar análisis de torneo con IA.
-    1️⃣ Cargar memoria previa
-    2️⃣ Generar narrativa
-    3️⃣ Publicar análisis
-    4️⃣ Extraer aprendizaje y guardar
-    """
-    # 1️⃣ Cargar memoria previa
-    memoria = await cargar_memoria_ia(ctx.guild, limite=15)
 
-    # 2️⃣ Generar análisis narrativo
+    memoria = await cargar_memoria_ia(ctx.guild, limite=10)
+
     analisis = await generar_analisis_ia(cartas_data, decks_data, memoria)
 
-    # 3️⃣ Publicar análisis
-    canal = discord.utils.get(ctx.guild.text_channels, name="🧠📈analisis-torneos")
-    if canal:
-        await canal.send(analisis)
-    else:
-        await ctx.send(analisis)
+    if not analisis or analisis.strip() == "":
+        await ctx.send("⚠️ La IA no devolvió contenido.")
+        return
 
-    # 4️⃣ Extraer aprendizaje
-    resumen = await extraer_memoria_desde_analisis(analisis)
+    await publicar_en_discord(ctx, analisis)
+    await guardar_memoria_ia(ctx.guild, "ANALYSIS", analisis)
 
-    # 5️⃣ Guardar aprendizaje
-    await guardar_memoria_ia(ctx.guild, "SUMMARY", resumen)
 
-async def extraer_memoria_desde_analisis(texto):
-    """
-    Extrae la narrativa completa y las tendencias del análisis
-    para ir alimentando la memoria del bot.
-    """
-    prompt = f"""
-A partir del siguiente análisis de torneo, genera un resumen completo
-de las tendencias de metajuego y la narrativa general,
-incluyendo cartas clave, estrategias y eventos interesantes,
-sin mencionar nombres de jugadores:
-
-{texto}
-"""
-    return await llamar_a_chatgpt(prompt)
-
-async def llamar_a_chatgpt(prompt: str, debug=False) -> str:
-    """
-    Llamada al modelo gratuito de OpenRouter para generar análisis.
-    Completamente asíncrona con aiohttp.
-    """
-    url = "https://openrouter.ai/api/v1/chat/completions"
-    headers = {
-        "Authorization": f"Bearer {config.OPENROUTER_API_KEY}",
-        "Content-Type": "application/json",
-    }
-    payload = {
-        "model": "openrouter/free",  # modelo gratuito
-        "messages": [
-            {"role": "system", "content": "Eres un analista experto de torneos de Magic. Usa humor ligero y narrativa continua."},
-            {"role": "user", "content": prompt}
-        ],
-        "temperature": 0.8,
-        "max_tokens": 500
-    }
-
-    async with aiohttp.ClientSession() as session:
-        async with session.post(url, headers=headers, json=payload) as resp:
-            resp.raise_for_status()
-            data = await resp.json()
-            texto = data["choices"][0]["message"]["content"].strip()
-
-    return texto
-
+# ==========================================================
+# 🔹 GENERAR ANÁLISIS
+# ==========================================================
 async def generar_analisis_ia(cartas_data, decks_data, memoria):
-    """
-    Genera un análisis narrativo de torneo, usando la memoria histórica.
-    """
-    memoria_texto = "\n".join(memoria)
+
+    memoria_texto = "\n".join(memoria) if memoria else "Sin memoria previa."
+
+    top_cartas = ", ".join(
+        [f"{carta} ({cant})" for carta, cant in cartas_data['top_cartas'][:10]]
+    )
+
+    ranking = ", ".join(
+        [f"Pos {r['pos']}: {r['archetype']}" for r in decks_data['ranking']]
+    )
 
     prompt = f"""
-eres un analista escribe como si narrara un torneo en una taberna de Magic.
-Usa humor ligero, ironía elegante con un toque spicy y referencias recurrentes.
-Nunca menciona nombres de jugadores.
-Al último clasificado lo llama "cuchara de palo".
-Burn suele sufrir.
-Control siempre sobrevive.
-El metajuego se analiza como una historia continua.
+Eres un analista experto de torneos de Magic.
 
-MEMORIA DEL ANALISTA:
+Analiza el torneo en tono narrativo pero centrado en:
+- Metajuego
+- Interacción entre decks
+- Cartas clave
+- Tendencias reales
+
+MEMORIA:
 {memoria_texto}
 
 TORNEO ACTUAL:
 
 Cartas más jugadas:
-{', '.join([f"{carta} ({cant})" for carta, cant in cartas_data['top_cartas'][:10]])}
+{top_cartas}
 
-Ranking de decks:
-{', '.join([f"Pos {r['pos']}: {r['archetype']}" for r in decks_data['ranking']])}
+Ranking:
+{ranking}
 
-INSTRUCCIONES:
-- Construye una narrativa coherente con torneos anteriores
-- Usa humor ligero y referencias al metajuego
-- No menciones personas
-- Máximo 3–4 párrafos
+Escribe un análisis completo con varios párrafos y conclusión clara.
 """
 
-    return await llamar_a_chatgpt(prompt)
+    return await llamar_a_openrouter(prompt)
 
-async def cargar_memoria_ia(guild: discord.Guild, limite=15):
-    """
-    Carga la memoria histórica de análisis previos desde el canal ia-context.
-    """
-    canal = obtener_canal_ia(guild)
+
+# ==========================================================
+# 🔹 LLAMADA A OPENROUTER
+# ==========================================================
+async def llamar_a_openrouter(prompt: str):
+
+    url = "https://openrouter.ai/api/v1/chat/completions"
+
+    headers = {
+        "Authorization": f"Bearer {config.OPENROUTER_API_KEY}",
+        "Content-Type": "application/json"
+    }
+
+    payload = {
+        "model": "openrouter/free",
+        "messages": [
+            {"role": "system", "content": "Eres analista de torneos competitivo."},
+            {"role": "user", "content": prompt}
+        ],
+        "temperature": 0.8,
+        "max_tokens": 1500
+    }
+
+    async with aiohttp.ClientSession() as session:
+        async with session.post(url, headers=headers, json=payload) as resp:
+            if resp.status != 200:
+                print("ERROR OPENROUTER:", resp.status)
+                print(await resp.text())
+                return None
+
+            data = await resp.json()
+
+            try:
+                return data["choices"][0]["message"]["content"].strip()
+            except:
+                print("Respuesta inesperada:", data)
+                return None
+
+
+# ==========================================================
+# 🔹 PUBLICAR EN DISCORD (DIVISIÓN INTELIGENTE 1000 CHARS)
+# ==========================================================
+async def publicar_en_discord(ctx, texto):
+
+    canal = discord.utils.get(ctx.guild.text_channels, name="🧠📈analisis-torneos")
+    destino = canal or ctx
+
+    bloques = dividir_texto_inteligente(texto, 1000)
+
+    for bloque in bloques:
+        await destino.send(bloque)
+
+
+# ==========================================================
+# 🔹 GUARDAR MEMORIA (TAMBIÉN FRAGMENTADO)
+# ==========================================================
+async def guardar_memoria_ia(guild, tipo, contenido):
+
+    canal = discord.utils.get(guild.text_channels, name="ia-context")
+    if not canal:
+        return
+
+    texto = f"[{tipo}]\n{contenido}\n" + "-"*50
+
+    bloques = dividir_texto_inteligente(texto, 1000)
+
+    for bloque in bloques:
+        await canal.send(bloque)
+
+
+# ==========================================================
+# 🔹 CARGAR MEMORIA
+# ==========================================================
+async def cargar_memoria_ia(guild, limite=10):
+
+    canal = discord.utils.get(guild.text_channels, name="ia-context")
     if not canal:
         return []
 
     recuerdos = []
+
     async for msg in canal.history(limit=limite):
         recuerdos.append(msg.content)
 
-    recuerdos.reverse()  # orden cronológico
+    recuerdos.reverse()
     return recuerdos
 
-async def guardar_memoria_ia(guild: discord.Guild, tipo: str, contenido: str):
-    """
-    Guarda un bloque de texto en el canal ia-context con un tipo de memoria.
-    """
-    canal = obtener_canal_ia(guild)
-    if not canal:
-        return
 
-    texto = f"[{tipo.upper()}]\n{contenido}"
-    await canal.send(texto)
+# ==========================================================
+# 🔹 FUNCIÓN CLAVE: DIVISIÓN INTELIGENTE
+# ==========================================================
+def dividir_texto_inteligente(texto, limite=1000):
+    """
+    Divide el texto buscando el punto más cercano antes del límite.
+    Si no hay punto, corta por espacio.
+    """
 
-def obtener_canal_ia(guild: discord.Guild):
-    """
-    Devuelve el canal de Discord ia-context para almacenar memoria de IA.
-    """
-    return discord.utils.get(guild.text_channels, name="ia-context")
+    bloques = []
+    while len(texto) > limite:
+
+        corte = texto.rfind(".", 0, limite)
+
+        if corte == -1:
+            corte = texto.rfind(" ", 0, limite)
+
+        if corte == -1:
+            corte = limite
+
+        bloques.append(texto[:corte + 1].strip())
+        texto = texto[corte + 1:].strip()
+
+    if texto:
+        bloques.append(texto)
+
+    return bloques

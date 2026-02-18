@@ -14,12 +14,10 @@ if not CHALLONGE_USERNAME or not CHALLONGE_API_KEY or not DISCORD_TOKEN or not O
             DISCORD_TOKEN as LOCAL_TOKEN,
             OPENROUTER_API_KEY as LOCAL_OPENROUTER
         )
-        print("🔹 Usando credenciales locales desde config_token.py")
         CHALLONGE_USERNAME = CHALLONGE_USERNAME or LOCAL_USER
         CHALLONGE_API_KEY = CHALLONGE_API_KEY or LOCAL_KEY
         DISCORD_TOKEN = DISCORD_TOKEN or LOCAL_TOKEN
         OPENROUTER_API_KEY = OPENROUTER_API_KEY or LOCAL_OPENROUTER
-        print(f"No se pudo enviar DM a {CHALLONGE_API_KEY}")
     except ImportError:
         pass
 
