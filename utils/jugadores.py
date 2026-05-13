@@ -4,11 +4,12 @@ import asyncio
 from collections import Counter
 from bs4 import BeautifulSoup
 from urllib.parse import urlparse, parse_qs
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import matplotlib.pyplot as plt
 import io
 import re
 import config
+import time
 from utils.torneos import actualizar_clasificacion_battle_handle, generar_codigo_unico, partidos_pendientes_handle
 from utils.admin import moderador_permisos_handle
 from utils.commons import (
@@ -1627,7 +1628,7 @@ async def submitted_deck_handle(ctx, codigo_torneo: str = None):
         if decklist is None:
             await author.send("❌ Error al leer el deck desde tcdecks.net. Intenta subirlo manualmente.")
             return
-   
+
     elif opcion == "2":
         datos = await deck_dm_flow(ctx, author, codigo_torneo, modo="subir")
         if not datos:
@@ -1635,7 +1636,7 @@ async def submitted_deck_handle(ctx, codigo_torneo: str = None):
 
         try:
             nombre_deck, archetype, decklist_input, sideboard_input, extra = datos
-           
+
         except Exception as e:
             print(f"❌ Error al desempaquetar datos: {e}")
             return
@@ -1665,18 +1666,16 @@ async def submitted_deck_handle(ctx, codigo_torneo: str = None):
 
 async def editar_deck_handle(ctx, codigo_torneo: str = None):
     await borrar_mensaje_seguro(ctx)
+    
     if not await validar_canal_correcto(ctx, "preguntale-a-el-barbas", "!mis-comandos"):
         return
-
+    
     author = ctx.author
-
+    
     if ctx.guild is None:
         await author.send("❌ Este comando debe ejecutarse desde el servidor del torneo.")
         return
-
-    def dm_check(m):
-        return m.author == author and isinstance(m.channel, discord.DMChannel)
-
+    
     # ✅ Pedir código del torneo si no se proporcionó
     if not codigo_torneo:
         codigo_torneo = await obtener_torneo_usuario(
@@ -1687,97 +1686,339 @@ async def editar_deck_handle(ctx, codigo_torneo: str = None):
         if not codigo_torneo:
             await author.send("❌ No seleccionaste ningún torneo. Cancelando edición.")
             return
-
-    # VALIDACIÓN DEL TORNEO
-    ok, error = await validar_torneo_para_edicion(codigo_torneo, author)
-
+    
     # 🔎 Recuperar deck existente
     codigo_deck = f"{codigo_torneo}_{author.id}"
     deck_existente = await obtener_deck_en_canal(ctx.guild, codigo_deck)
-
-    if not deck_existente:
-        await author.send("❌ No se encontró tu deck en el canal de submitted-decks.")
+    
+    # 🔐 VALIDAR INSCRIPCIÓN EN EL TORNEO
+    ok_validacion, mensaje_validacion = await validar_torneo_para_edicion(codigo_torneo, author)
+    
+    # ❌ Si hay error de inscripción o API
+    if not ok_validacion and ("inscrito" in mensaje_validacion or "información" in mensaje_validacion):
+        await author.send(mensaje_validacion)
         return
-
-    edited = deck_existente["edited"]  # 0 o 1
-
-    # Si el torneo ya ha empezado (ok=False), se permite 1 edición
-    if not ok:
+    
+    # 🆕 SI NO HAY DECK PERO ESTÁ INSCRITO → PERMITIR SUBIR
+    if not deck_existente:
+        await author.send(
+            f"ℹ️ No se encontró tu deck para el torneo `{codigo_torneo}`.\n\n"
+            "✅ Como estás inscrito en el torneo, puedes **subir tu deck ahora**.\n"
+            "¿Deseas continuar? (Escribe `si` para subir tu deck o espera 30 segundos para cancelar)"
+        )
+        
+        def dm_check(m):
+            return m.author == author and isinstance(m.channel, discord.DMChannel)
+        
+        try:
+            msg = await ctx.bot.wait_for("message", check=dm_check, timeout=30.0)
+            if msg.content.strip().lower() not in ["si", "sí", "yes", "continuar"]:
+                await author.send("❌ Operación cancelada.")
+                return
+        except asyncio.TimeoutError:
+            await author.send("⏰ Tiempo agotado. Operación cancelada.")
+            return
+        
+        # 🔄 REDIRIGIR A FLUJO DE SUBIDA
+        await subir_deck_desde_edicion(ctx, author, codigo_torneo, ok_validacion, mensaje_validacion)
+        return
+    
+    # ✅ DECK ENCONTRADO: CONTINUAR CON EDICIÓN NORMAL
+    edited = deck_existente.get("edited", 0)
+    mensaje_deck = deck_existente.get("mensaje")
+    
+    if not ok_validacion:
+        # El torneo ya comenzó: verificar ediciones disponibles
         if edited >= 1:
-            await author.send("❌ El torneo ya ha comenzado y **ya has usado tu única edición disponible**.")
+            await author.send(
+                "❌ **No puedes editar tu deck**\n\n"
+                "El torneo ya ha comenzado y **ya usaste tu única edición disponible** (1/1).\n"
+                f"ℹ️ {mensaje_validacion}"
+            )
             return
         else:
-            await author.send("⚠️ El torneo ya ha comenzado, pero tienes **una edición extra disponible**.")
-
+            await author.send(
+                "⚠️ **AVISO IMPORTANTE**\n\n"
+                "El torneo **ya ha comenzado**, pero aún tienes **1 edición disponible**.\n"
+                "⚡ Esta será tu **última oportunidad** para modificar el deck.\n"
+                f"ℹ️ {mensaje_validacion}\n\n"
+                "¿Deseas continuar? (Escribe `continuar` o espera 30 segundos para cancelar)"
+            )
+            
+            def dm_check(m):
+                return m.author == author and isinstance(m.channel, discord.DMChannel)
+            
+            try:
+                msg = await ctx.bot.wait_for("message", check=dm_check, timeout=30.0)
+                if msg.content.strip().lower() != "continuar":
+                    await author.send("❌ Edición cancelada.")
+                    return
+            except asyncio.TimeoutError:
+                await author.send("⏰ Tiempo agotado. Edición cancelada.")
+                return
+    else:
+        # El torneo NO ha comenzado: ediciones ilimitadas
+        await author.send(
+            f"✅ **Edición permitida**\n\n"
+            f"{mensaje_validacion}\n"
+            "Puedes editar tu deck libremente hasta que comience el torneo."
+        )
+    
     # 🔹 Continuar flujo normal de edición
     datos = await deck_dm_flow(ctx, author, codigo_torneo, modo="editar")
     if not datos:
+        await author.send("❌ Edición cancelada.")
         return
-
-    nombre_deck, archetype, decklist, sideboard, mensaje_deck = datos
-
-    # CALCULAR nuevo Edited
-    nuevo_edited = edited
-    if not ok and edited == 0:
-        nuevo_edited = 1
-
-    # CREAR EMBED FINAL
+    
+    nombre_deck, archetype, decklist, sideboard, _ = datos
+    
+    # 📊 CALCULAR nuevo valor de Edited
+    if not ok_validacion:
+        # Si el torneo ya comenzó, incrementar contador
+        nuevo_edited = edited + 1
+    else:
+        # Si el torneo NO ha comenzado, mantener el contador
+        nuevo_edited = edited
+    
+    # 🎨 CREAR EMBED FINAL
+    color_embed = discord.Color.blue() if nuevo_edited == 0 else discord.Color.orange()
+    
     embed_final = discord.Embed(
         title=f"🃏 Deck Actualizado: {nombre_deck}",
         description=f"**Código:** `{codigo_deck}`\n**Torneo:** `{codigo_torneo}`",
-        color=discord.Color.blue()
+        color=color_embed
     )
-
-    embed_final.add_field(name="Jugador", value=f"{author} (ID: {author.id})", inline=False)
-    embed_final.add_field(name="Archetype", value=archetype, inline=False)
-    embed_final.add_field(name="Decklist", value=decklist[:1000], inline=False)
-    embed_final.add_field(name="Sideboard", value=sideboard[:1000], inline=False)
-    embed_final.add_field(name="Edited", value=str(nuevo_edited), inline=False)
-    embed_final.set_footer(text="Deck editado correctamente.")
-
-    # ACTUALIZAR MENSAJE EXISTENTE
+    
+    embed_final.add_field(
+        name="Jugador", 
+        value=f"{author.mention} (ID: {author.id})", 
+        inline=False
+    )
+    embed_final.add_field(
+        name="Archetype", 
+        value=archetype, 
+        inline=False
+    )
+    embed_final.add_field(
+        name="Decklist", 
+        value=decklist[:1000] + ("..." if len(decklist) > 1000 else ""), 
+        inline=False
+    )
+    embed_final.add_field(
+        name="Sideboard", 
+        value=sideboard[:1000] + ("..." if len(sideboard) > 1000 else ""), 
+        inline=False
+    )
+    embed_final.add_field(
+        name="Ediciones post-inicio",
+        value=f"{nuevo_edited}/1", 
+        inline=False
+    )
+    
+    # 🕐 Timestamp de la última edición
+    timestamp_ahora_ms = int(time.time() * 1000)
+    fecha_legible = datetime.fromtimestamp(timestamp_ahora_ms / 1000, tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    embed_final.set_footer(text=f"Última edición: {fecha_legible}")
+    
+    # 💾 ACTUALIZAR MENSAJE EXISTENTE
     if mensaje_deck:
-        await mensaje_deck.edit(embed=embed_final)
+        try:
+            await mensaje_deck.edit(embed=embed_final)
+            await author.send("✅ Tu deck ha sido actualizado correctamente.")
+        except discord.errors.NotFound:
+            await author.send(
+                "❌ No se pudo actualizar el mensaje original (fue eliminado).\n"
+                "Contacta con un administrador."
+            )
+            return
+        except discord.errors.Forbidden:
+            await author.send("❌ No tengo permisos para editar el mensaje del deck.")
+            return
+        except Exception as e:
+            await author.send(f"❌ Error inesperado al actualizar el deck: {str(e)}")
+            return
     else:
+        # Fallback: si no hay mensaje, crear uno nuevo
         canal_submitted = discord.utils.get(ctx.guild.text_channels, name="submitted-decks")
         if canal_submitted:
-            await canal_submitted.send(embed=embed_final)
-
-    await author.send("✅ Tu deck ha sido actualizado correctamente.")
+            try:
+                await canal_submitted.send(embed=embed_final)
+                await author.send("⚠️ Se creó un nuevo mensaje porque no se encontró el original.")
+            except Exception as e:
+                await author.send(f"❌ Error al crear el mensaje: {str(e)}")
+                return
+        else:
+            await author.send("❌ No se encontró el canal `submitted-decks`.")
+            return
+    
+    # 📬 Enviar confirmación al usuario con el embed
+    await author.send("📋 **Resumen de tu deck actualizado:**")
     await author.send(embed=embed_final)
+    
+    # 📊 Estadística adicional
+    if nuevo_edited == 1:
+        await author.send(
+            "⚠️ **Importante:** Has usado tu única edición post-inicio.\n"
+            "Ya no podrás modificar este deck hasta que finalice el torneo."
+        )
+
+
+# 🆕 FUNCIÓN AUXILIAR PARA SUBIR DECK DESDE EDICIÓN
+async def subir_deck_desde_edicion(ctx, author: discord.Member, codigo_torneo: str, torneo_activo: bool, mensaje_estado: str):
+    """
+    Permite subir un deck cuando el usuario está inscrito pero no tiene deck registrado.
+    """
+    # Mostrar estado del torneo
+    if not torneo_activo:
+        await author.send(
+            "⚠️ **IMPORTANTE:** El torneo ya ha comenzado.\n"
+            "Al subir tu deck ahora, **no tendrás ediciones adicionales disponibles**.\n"
+            f"ℹ️ {mensaje_estado}"
+        )
+        edited_inicial = 1  # Ya usó su "edición" al subirlo tarde
+    else:
+        await author.send(
+            f"✅ Perfecto, vamos a subir tu deck.\n"
+            f"ℹ️ {mensaje_estado}"
+        )
+        edited_inicial = 0
+    
+    # 🔹 Flujo de subida
+    datos = await deck_dm_flow(ctx, author, codigo_torneo, modo="subir")
+    if not datos:
+        await author.send("❌ Subida cancelada.")
+        return
+    
+    nombre_deck, archetype, decklist, sideboard, _ = datos
+    
+    codigo_deck = f"{codigo_torneo}_{author.id}"
+    
+    # 🎨 CREAR EMBED
+    color_embed = discord.Color.green() if edited_inicial == 0 else discord.Color.orange()
+    
+    embed_final = discord.Embed(
+        title=f"🃏 Deck Subido: {nombre_deck}",
+        description=f"**Código:** `{codigo_deck}`\n**Torneo:** `{codigo_torneo}`",
+        color=color_embed
+    )
+    
+    embed_final.add_field(
+        name="Jugador", 
+        value=f"{author.mention} (ID: {author.id})", 
+        inline=False
+    )
+    embed_final.add_field(
+        name="Archetype", 
+        value=archetype, 
+        inline=False
+    )
+    embed_final.add_field(
+        name="Decklist", 
+        value=decklist[:1000] + ("..." if len(decklist) > 1000 else ""), 
+        inline=False
+    )
+    embed_final.add_field(
+        name="Sideboard", 
+        value=sideboard[:1000] + ("..." if len(sideboard) > 1000 else ""), 
+        inline=False
+    )
+    embed_final.add_field(
+        name="Ediciones post-inicio",
+        value=f"{edited_inicial}/1", 
+        inline=False
+    )
+    
+    # 🕐 Timestamp
+    timestamp_ahora_ms = int(time.time() * 1000)
+    fecha_legible = datetime.fromtimestamp(timestamp_ahora_ms / 1000, tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    embed_final.set_footer(text=f"Subido el: {fecha_legible}")
+    
+    # 💾 PUBLICAR EN CANAL
+    canal_submitted = discord.utils.get(ctx.guild.text_channels, name="submitted-decks")
+    if not canal_submitted:
+        await author.send("❌ No se encontró el canal `submitted-decks`.")
+        return
+    
+    try:
+        await canal_submitted.send(embed=embed_final)
+        await author.send("✅ Tu deck ha sido registrado correctamente.")
+        await author.send(embed=embed_final)
+        
+        if edited_inicial == 1:
+            await author.send(
+                "⚠️ **Recuerda:** Como el torneo ya comenzó, este deck no podrá ser editado."
+            )
+    except Exception as e:
+        await author.send(f"❌ Error al publicar el deck: {str(e)}")
 
 async def validar_torneo_para_edicion(codigo_torneo: str, author: discord.Member):
+    """
+    Valida que el usuario pueda editar su deck en el torneo.
+    Retorna: (ok: bool, mensaje: str)
+    - ok=True: puede editar libremente (torneo no ha comenzado)
+    - ok=False: torneo ya comenzó (solo 1 edición permitida)
+    """
     async with aiohttp.ClientSession() as session:
-        # Verificar inscripción
+        # ✅ Verificar inscripción
         url_get = f"https://api.challonge.com/v1/tournaments/{codigo_torneo}/participants.json"
         async with session.get(url_get, auth=aiohttp.BasicAuth(config.CHALLONGE_USERNAME, config.CHALLONGE_API_KEY)) as resp:
             if resp.status != 200:
                 return False, f"❌ No se pudo comprobar tu inscripción: {await resp.text()}"
+
             participantes = await resp.json()
             inscrito = any(p["participant"]["name"] == str(author.id) for p in participantes)
             if not inscrito:
                 return False, f"❌ No estás inscrito en el torneo `{codigo_torneo}`."
 
-        # Verificar fecha de inicio
+        # ✅ Verificar fecha de inicio (dentro de la misma sesión)
         url_torneo = f"https://api.challonge.com/v1/tournaments/{codigo_torneo}.json"
         async with session.get(url_torneo, auth=aiohttp.BasicAuth(config.CHALLONGE_USERNAME, config.CHALLONGE_API_KEY)) as resp:
             if resp.status != 200:
                 return False, "❌ No se pudo obtener la información del torneo."
+
             torneo_data = await resp.json()
             fecha_inicio = torneo_data["tournament"].get("start_at")
-            if fecha_inicio:
-                from datetime import datetime, timezone
-                fecha_inicio_dt = datetime.fromisoformat(fecha_inicio.replace("Z", "+00:00"))
-                ahora = datetime.now(timezone.utc)
-                if ahora >= fecha_inicio_dt:
-                    return False, "❌ El torneo ya ha comenzado. No puedes editar tu deck."
 
-    return True, None
+            if not fecha_inicio:
+                # Si no hay fecha de inicio configurada, permitir edición
+                return True, "✅ Sin fecha de inicio configurada. Edición permitida."
+
+            # Convertir fecha ISO a timestamp en milisegundos
+            fecha_inicio_dt = datetime.fromisoformat(fecha_inicio.replace("Z", "+00:00"))
+            timestamp_inicio_ms = int(fecha_inicio_dt.timestamp() * 1000)
+
+            # Obtener timestamp actual en milisegundos
+            timestamp_ahora_ms = int(time.time() * 1000)
+
+            # Calcular diferencia
+            diferencia_ms = timestamp_inicio_ms - timestamp_ahora_ms
+            diferencia_horas = diferencia_ms / (1000 * 3600)
+            diferencia_minutos = diferencia_ms / (1000 * 60)
+
+            # 📊 Log para debugging
+            print(f"🕐 Timestamp inicio (ms): {timestamp_inicio_ms}")
+            print(f"🕐 Timestamp ahora (ms): {timestamp_ahora_ms}")
+            print(f"🕐 Diferencia: {diferencia_horas:.2f} horas ({diferencia_minutos:.0f} minutos)")
+            print(f"🕐 Fecha inicio UTC: {datetime.fromtimestamp(timestamp_inicio_ms / 1000, tz=timezone.utc)}")
+            print(f"🕐 Fecha ahora UTC: {datetime.fromtimestamp(timestamp_ahora_ms / 1000, tz=timezone.utc)}")
+
+            # ❌ Verificar si el torneo ya comenzó
+            if timestamp_ahora_ms >= timestamp_inicio_ms:
+                tiempo_transcurrido = (timestamp_ahora_ms - timestamp_inicio_ms) / (1000 * 60)  # minutos
+                return False, f"❌ El torneo comenzó hace {int(tiempo_transcurrido)} minutos."
+
+            # ⚠️ Avisar si queda poco tiempo
+            if diferencia_horas < 1 and diferencia_horas > 0:
+                minutos_restantes = int(diferencia_minutos)
+                return True, f"⚠️ El torneo comienza en {minutos_restantes} minutos."
+
+            # ✅ Torneo no ha comenzado
+            return True, f"✅ El torneo comienza en {diferencia_horas:.1f} horas."
 
 async def leer_deck_tc_decks(ctx):
     author = ctx.author
-   
-    def dm_check(m): 
+
+    def dm_check(m):
         return m.author == author and isinstance(m.channel, discord.DMChannel)
 
     # Pedir URL del deck

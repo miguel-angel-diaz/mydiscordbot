@@ -438,7 +438,7 @@ async def best_decks_handle(ctx, codigo_torneo: str = None, channel: str = None)
 async def obtener_deck_en_canal(guild: discord.Guild, codigo_deck: str):
     """
     Busca en el canal 'submitted-decks' un deck con el código dado.
-    Retorna un dict con 'mensaje', 'nombre_deck', 'archetype', 'decklist', 'sideboard', o None si no existe.
+    Retorna un dict con todos los datos del deck, o None si no existe.
     """
     canal_submitted = discord.utils.get(guild.text_channels, name="submitted-decks")
     if not canal_submitted:
@@ -447,15 +447,38 @@ async def obtener_deck_en_canal(guild: discord.Guild, codigo_deck: str):
     async for mensaje in canal_submitted.history(limit=500):
         for embed in mensaje.embeds:
             if embed.description and codigo_deck in embed.description:
+                # Extraer campos del embed
                 campos = {field.name.lower(): field.value for field in embed.fields}
-                nombre_deck_extraido = embed.title.replace("🃏 Deck Subido: ", "").replace("🃏 Deck Actualizado: ", "")
-                  # Extraer torneo y jugador del código
-                id_torneo, jugador_id = codigo_deck.split("_")
-                 # ✅ Edited: si no existe, es 0
-                try:
-                    edited = int(campos.get("edited", 0))
-                except ValueError:
-                    edited = 0
+
+                # Extraer nombre del deck del título
+                nombre_deck_extraido = (
+                    embed.title
+                    .replace("🃏 Deck Subido: ", "")
+                    .replace("🃏 Deck Actualizado: ", "")
+                )
+
+                # Extraer torneo y jugador del código
+                partes = codigo_deck.split("_")
+                if len(partes) != 2:
+                    continue
+
+                id_torneo, jugador_id = partes
+
+                # ✅ Extraer el campo "edited" o "ediciones post-inicio"
+                edited = 0
+                for field_name in ["edited", "ediciones post-inicio"]:
+                    if field_name in campos:
+                        try:
+                            valor = campos[field_name]
+                            # Si es formato "1/1", tomar el primer número
+                            if "/" in valor:
+                                edited = int(valor.split("/")[0])
+                            else:
+                                edited = int(valor)
+                            break
+                        except (ValueError, IndexError):
+                            edited = 0
+
                 return {
                     "mensaje": mensaje,
                     "nombre_deck": nombre_deck_extraido,
@@ -466,6 +489,7 @@ async def obtener_deck_en_canal(guild: discord.Guild, codigo_deck: str):
                     "decklist": campos.get("decklist", ""),
                     "sideboard": campos.get("sideboard", "N/A")
                 }
+
     return None
 
 async def analizar_torneo_con_ia(ctx, cartas_data, decks_data):

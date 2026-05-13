@@ -13,14 +13,14 @@ async def aplicar_strike(ctx, miembro: discord.Member):
     await borrar_mensaje_seguro(ctx)
     if not await validar_canal_correcto(ctx, "preguntale-a-el-barbas", "!strike"):
         return
-   
+
     servidor = ctx.guild
     author = ctx.author
 
     # Verificar permisos
     if not await moderador_permisos_handle(ctx):
       return
-    
+
     def dm_check(m):
         return m.author == author and isinstance(m.channel, discord.DMChannel)
 

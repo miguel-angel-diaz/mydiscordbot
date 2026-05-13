@@ -316,7 +316,7 @@ async def iniciar_torneo(ctx, codigo_torneo: str = None):
 @comando_roles_permitidos("admin")
 async def iniciar_torneo_battle(ctx, codigo_torneo: str = None):
     """Inicia un torneo de tipo battle con el código proporcionado - !iniciar-torneo-battle <código_torneo>"""
-    await iniciar_torneo_battle_handle(ctx, codigo_torneo)    
+    await iniciar_torneo_battle_handle(ctx, codigo_torneo)
 
 
 @bot.command(name="actualizar-clasificacion",
