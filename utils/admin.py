@@ -475,13 +475,19 @@ async def moderador_permisos_handle(ctx, only_check: bool = False) -> bool:
     servidor = ctx.guild
     es_dueno = autor == servidor.owner
     rol_moderador = discord.utils.get(servidor.roles, name="admin")
-    tiene_permiso = es_dueno | (rol_moderador and rol_moderador in autor.roles)
+    tiene_permiso = (
+        es_dueno
+        or (rol_moderador is not None and rol_moderador in autor.roles)
+    )
 
-    if not tiene_permiso and not only_check:
-        await asignar_strike_automatico(ctx)
+    if not tiene_permiso:
+        if not only_check:
+            # await asignar_strike_automatico(ctx)
+            await ctx.author.send("❌ No tienes permisos de moderador.")
+            pass
         return False
 
-    return tiene_permiso
+    return True
 
 async def nuevo_sorteo_handle(ctx, *, args: str = None):
     await borrar_mensaje_seguro(ctx)

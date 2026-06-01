@@ -802,6 +802,10 @@ async def actualizar_clasificacion_handle(ctx, codigo_torneo: str, finish_tourna
         await canal.send(mensaje)
     
     if finish_tournament:
+        matches_pendientes = [m for m in matches_raw if m["match"]["state"] != "complete"]
+        if matches_pendientes:
+            await ctx.send(f"⚠️ **Advertencia**: Aún hay {len(matches_pendientes)} partido(s) pendiente(s). No puedes finalizar el torneo hasta completarlos.")
+            return
         await tournament_report_handle(ctx, codigo_torneo)
 
 async def partidos_pendientes_handle(ctx, codigo_torneo: str, type: str):

@@ -62,10 +62,24 @@ def enviar_ayuda_handle():
     return decorator
 
 def buscar_usuario_en_servidor(guild, nombre_busqueda: str):
-    nombre_busqueda = nombre_busqueda.lower()
+    nombre_busqueda = nombre_busqueda.strip().lower()
+
     for miembro in guild.members:
-        if nombre_busqueda in miembro.display_name.lower() or nombre_busqueda in miembro.name.lower():
+        if miembro.display_name.lower() == nombre_busqueda:
             return miembro
+
+    for miembro in guild.members:
+        if miembro.name.lower() == nombre_busqueda:
+            return miembro
+
+    for miembro in guild.members:
+        if nombre_busqueda in miembro.display_name.lower():
+            return miembro
+
+    for miembro in guild.members:
+        if nombre_busqueda in miembro.name.lower():
+            return miembro
+
     return None
 
 async def obtener_torneo_usuario(ctx, mensaje_inicial: str = None, complete=False):

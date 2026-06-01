@@ -112,14 +112,14 @@ async def out(ctx, miembro: discord.Member = None):
 @bot.command(name="eliminar-mensajes",
     aliases=["eliminar mensajes", "eliminar_mensajes"])
 @comando_roles_permitidos("admin")
-async def clear(ctx, canal: discord.TextChannel = None, cantidad: int = None):
+async def clearMessajes(ctx, canal: discord.TextChannel = None, cantidad: int = None):
     """Elimina una cantidad específica de mensajes en un canal - !eliminar-mensajes <canal> <cantidad>"""
     await eliminar_mensajes(ctx, canal, cantidad)
 
 @bot.command(name="eliminar-decks",
     aliases=["eliminar decks", "eliminar_decks"])
 @comando_roles_permitidos("admin")
-async def clear(ctx, codigo: str = None):
+async def clearDecks(ctx, codigo: str = None):
     """Elimina los decks submiteados para un torneo - !eliminar-decks <torneo>"""
     await eliminar_decks_handle(ctx,codigo)
 

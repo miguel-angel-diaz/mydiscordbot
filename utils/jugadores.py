@@ -13,13 +13,13 @@ import time
 from utils.torneos import actualizar_clasificacion_battle_handle, generar_codigo_unico, partidos_pendientes_handle
 from utils.admin import moderador_permisos_handle
 from utils.commons import (
-    borrar_mensaje_seguro, 
-    validar_canal_correcto, 
-    buscar_usuario_en_servidor, 
-    obtener_torneo_usuario, 
-    obtener_sugerencias_arquetipos, 
-    cartas_mas_jugadas, 
-    best_decks_handle, 
+    borrar_mensaje_seguro,
+    validar_canal_correcto,
+    buscar_usuario_en_servidor,
+    obtener_torneo_usuario,
+    obtener_sugerencias_arquetipos,
+    cartas_mas_jugadas,
+    best_decks_handle,
     obtener_deck_en_canal
 )
 
@@ -814,7 +814,6 @@ async def reportar_resultado_handle(ctx, codigo_torneo: str = None, jugador1: di
                 return
 
         # Validación de permisos
-        
 
     except asyncio.TimeoutError:
         await author.send("⏰ Tiempo agotado. Vuelve a intentar con `!reportar-resultado`.")
@@ -825,7 +824,7 @@ async def reportar_resultado_handle(ctx, codigo_torneo: str = None, jugador1: di
     except Exception as e:
         await author.send("❌ Ocurrió un error inesperado durante el proceso.")
         raise e
-    
+
     if author.id != jugador1.id and author.id != jugador2.id:
             es_mod = await moderador_permisos_handle(ctx, only_check=True)
             if not es_mod:
