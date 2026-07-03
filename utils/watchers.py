@@ -5,6 +5,8 @@ import discord
 import re
 import asyncio
 
+from utils.torneos_api import iniciar_servidor_web, regenerar_cache
+
 try:
     # Ajusta a tu zona horaria si quieres control exacto
     from zoneinfo import ZoneInfo

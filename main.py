@@ -1,5 +1,8 @@
 import discord
 from discord.ext import commands
+import asyncio
+
+from utils.torneos_api import regenerar_cache, iniciar_servidor_web
 
 from utils.admin import (
   aplicar_out, 
@@ -11,7 +14,8 @@ from utils.admin import (
   realizar_sorteo_handle,
   listar_torneos_handle,
   nuevo_comunicado_handle,
-  eliminar_decks_handle
+  eliminar_decks_handle, 
+  actualizar_web_handle
 )
 
 from utils.jugadores import (
@@ -352,6 +356,15 @@ async def listar_torneos(ctx):
 async def tournament_report(ctx):
         await tournament_report_handle(ctx)
 
+@bot.command(name="actualizar-web",
+    aliases=["actualizar web", "actualizar_web"])
+async def actualizar_web(ctx):
+    await actualizar_web_handle(ctx)
+    await ctx.send("🔄 Actualizando datos de la web...")
+    guild = ctx.guild
+    payload = await regenerar_cache(guild)
+    await ctx.send(f"✅ Web actualizada con {len(payload['torneos'])} torneo(s).")
+
 #########################################################################################################
 
 @bot.command(name="mis-comandos",
@@ -363,6 +376,11 @@ async def mis_comandos(ctx):
 async def on_ready():
     print(f"✅ Bot conectado como {bot.user}")
     cargar_tareas(bot)
+    asyncio.create_task(iniciar_servidor_web())
+
+    guild = bot.get_guild(1381551388907016252)
+    if guild:
+        payload = await regenerar_cache(guild)
 
 @bot.event
 async def on_message_delete(message):

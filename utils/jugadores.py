@@ -933,21 +933,28 @@ async def reportar_resultado_handle(ctx, codigo_torneo: str = None, jugador1: di
             )
     # Canal de resultados
     canal_resultados = discord.utils.get(ctx.guild.text_channels, name="🍺-quién‐se‐lleva‐la‐ronda")
+    canalHistoricoResultados = discord.utils.get(ctx.guild.text_channels, name="historico-resultados")
     if canal_resultados:
         if puntos_j1 == puntos_j2:
-            mensaje = (
-                f"🏆 Resultado reportado en `{codigo_torneo}`:\n"
-                f"**{jugador1.display_name}** {resultado} **{jugador2.display_name}**\n"
-                f"⚖️ Empate"
-            )
+            resultText = "⚖️ Empate"
         else:
-            ganador = jugador1 if puntos_j1 > puntos_j2 else jugador2
-            mensaje = (
-                f"🏆 Resultado reportado en `{codigo_torneo}`:\n"
-                f"**{jugador1.display_name}** {resultado} **{jugador2.display_name}**\n"
-                f"🏅 Ganador: {ganador.mention}"
-            )
+            resultText = "🏅 Ganador: {ganador.mention}"
+
+        mensaje = (
+            f"🏆 Resultado reportado en `{codigo_torneo}`:\n"
+            f"**{jugador1.display_name}** {resultado} **{jugador2.display_name}**\n"
+            f"{resultText}"
+        )
         await canal_resultados.send(mensaje)
+        otherMensaje = (
+            f"🏆 Resultado reportado en `{codigo_torneo}`:\n"
+            f"**{jugador1.display_name} - {id_jugador1}** {resultado} **{jugador2.display_name} - {id_jugador2}**\n"
+            f"{resultText}"
+            f"codigo_torneo: {codigo_torneo}"
+            f"jugador que reporto el resultado: {author.display_name}"
+        )
+
+        await canalHistoricoResultados.send(otherMensaje)
     await author.send(
         "✅ resultado reportado correctamente.:\n"
         f"**{jugador1.display_name}** {resultado} **{jugador2.display_name}**"
