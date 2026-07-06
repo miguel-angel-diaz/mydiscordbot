@@ -873,3 +873,9 @@ async def listar_torneos_handle(ctx):
     guild = ctx.guild
     payload = await regenerar_cache(guild)
     await ctx.author.send(f"✅ Web actualizada con {len(payload['torneos'])} torneo(s).")
+
+async def actualizar_web_handle(ctx):
+    await ctx.author.send("🔄 Actualizando cache de torneos...")
+    guild = ctx.guild
+    payload = await regenerar_cache(guild)
+    await ctx.author.send(f"✅ Cache actualizada con {len(payload['torneos'])} torneo(s).")

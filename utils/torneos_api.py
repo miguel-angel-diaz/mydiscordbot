@@ -2,20 +2,35 @@
 # ============================================================
 # Módulo autocontenido: obtiene todos los torneos finalizados
 # de Challonge, calcula sus clasificaciones cruzando con
-# Discord, y expone un endpoint HTTP para que la web consuma
-# los datos ya procesados.
+# Discord, y expone endpoints HTTP para que la web consuma
+# los datos ya procesados y envíe solicitudes de admisión.
 # ============================================================
 
 import aiohttp
 import discord
 import json
 import os
+import re
 from datetime import datetime, timezone
 from aiohttp import web
 
 import config  # reutiliza tus credenciales ya existentes
 
 CACHE_PATH = "cache/torneos.json"
+CANAL_ADMIN_NOMBRE = "solicitudes-admision"  # ajusta al nombre real de tu canal privado
+GUILD_ID_ADMISION = 1381551388907016252      # tu guild ID
+
+EMAIL_REGEX = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+# Referencia al bot — se rellena desde bot.py con set_bot_instance()
+_bot_instance = None
+
+
+def set_bot_instance(bot):
+    """Llamar desde bot.py una vez el bot esté creado, para que este
+    módulo pueda acceder a bot.get_guild() sin importarlo directamente."""
+    global _bot_instance
+    _bot_instance = bot
 
 
 # ============================================================
@@ -225,7 +240,7 @@ def leer_cache():
 
 
 # ============================================================
-# 4. SERVIDOR WEB — endpoint que consume la web
+# 4. ENDPOINTS HTTP
 # ============================================================
 
 async def api_torneos(request):
@@ -234,13 +249,69 @@ async def api_torneos(request):
         return web.json_response({"error": "Caché no disponible todavía"}, status=503)
 
     response = web.json_response(data)
-    response.headers['Access-Control-Allow-Origin'] = '*'  # permite fetch desde tu web
+    response.headers['Access-Control-Allow-Origin'] = '*'
     return response
+
+
+async def api_solicitar_acceso(request):
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "JSON inválido"}, status=400)
+
+    discord_nick = str(body.get("discord_nick", "")).strip()
+    email = str(body.get("email", "")).strip()
+    comentario = str(body.get("comentario", "")).strip()
+
+    if not discord_nick or len(discord_nick) > 100:
+        return web.json_response({"error": "Usuario de Discord no válido"}, status=400)
+
+    if not EMAIL_REGEX.match(email):
+        return web.json_response({"error": "Email no válido"}, status=400)
+
+    if not comentario or len(comentario) > 1000:
+        return web.json_response({"error": "Comentario no válido"}, status=400)
+
+    if _bot_instance is None:
+        return web.json_response({"error": "Servicio no disponible"}, status=503)
+
+    guild = _bot_instance.get_guild(GUILD_ID_ADMISION)
+    if not guild:
+        return web.json_response({"error": "Servicio no disponible"}, status=503)
+
+    canal = discord.utils.get(guild.text_channels, name=CANAL_ADMIN_NOMBRE)
+    if not canal:
+        return web.json_response({"error": "Servicio no disponible"}, status=503)
+
+    embed = discord.Embed(
+        title="📩 Nueva solicitud de admisión",
+        color=0xff8800
+    )
+    embed.add_field(name="Discord", value=discord_nick, inline=True)
+    embed.add_field(name="Email", value=email, inline=True)
+    embed.add_field(name="Comentario", value=comentario, inline=False)
+    embed.timestamp = datetime.now(timezone.utc)
+
+    await canal.send(embed=embed)
+
+    response = web.json_response({"ok": True})
+    response.headers['Access-Control-Allow-Origin'] = '*'
+    return response
+
+
+async def handle_options(request):
+    return web.Response(headers={
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Methods': 'POST, GET, OPTIONS',
+        'Access-Control-Allow-Headers': 'Content-Type',
+    })
 
 
 def crear_app():
     app = web.Application()
     app.router.add_get('/api/torneos', api_torneos)
+    app.router.add_post('/api/solicitar-acceso', api_solicitar_acceso)
+    app.router.add_route('OPTIONS', '/api/solicitar-acceso', handle_options)
     return app
 
 
@@ -251,4 +322,3 @@ async def iniciar_servidor_web():
     port = int(os.environ.get("PORT", 8080))
     site = web.TCPSite(runner, '0.0.0.0', port)
     await site.start()
-    print(f"🌐 Servidor web escuchando en el puerto {port}")

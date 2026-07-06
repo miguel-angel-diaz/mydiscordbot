@@ -2,7 +2,8 @@ import discord
 from discord.ext import commands
 import asyncio
 
-from utils.torneos_api import regenerar_cache, iniciar_servidor_web
+from utils.torneos_api import regenerar_cache, iniciar_servidor_web, set_bot_instance
+
 
 from utils.admin import (
   aplicar_out, 
@@ -80,6 +81,7 @@ bot = commands.Bot(
     intents=intents,
     case_insensitive=True 
 )
+set_bot_instance(bot)
 
 def normalize_string(s: str) -> str:
     """Convierte a minúsculas y elimina acentos"""
@@ -360,10 +362,6 @@ async def tournament_report(ctx):
     aliases=["actualizar web", "actualizar_web"])
 async def actualizar_web(ctx):
     await actualizar_web_handle(ctx)
-    await ctx.send("🔄 Actualizando datos de la web...")
-    guild = ctx.guild
-    payload = await regenerar_cache(guild)
-    await ctx.send(f"✅ Web actualizada con {len(payload['torneos'])} torneo(s).")
 
 #########################################################################################################
 
