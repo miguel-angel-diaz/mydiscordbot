@@ -14,6 +14,9 @@ import re
 from datetime import datetime, timezone
 from aiohttp import web
 
+
+import feedparser
+
 import config  # reutiliza tus credenciales ya existentes
 
 CACHE_PATH = "cache/torneos.json"
