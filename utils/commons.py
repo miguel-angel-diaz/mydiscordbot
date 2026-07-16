@@ -7,6 +7,8 @@ from collections import Counter
 import io
 import matplotlib.pyplot as plt
 import re
+import time
+from datetime import datetime, timezone
 
 from difflib import get_close_matches
 
@@ -888,3 +890,141 @@ async def obtener_decks_por_usuario(guild, discord_id: str, limite: int = 500):
                 decks.append(deck)
 
     return decks
+
+async def obtener_torneos_disponibles_web(discord_id: str):
+    """
+    Versión web (sin DM) de obtener_torneo_usuario: devuelve la lista
+    de torneos NO completados en los que el usuario está inscrito.
+    """
+
+    url_torneos = "https://api.challonge.com/v1/tournaments.json?state=all"
+
+    async with aiohttp.ClientSession() as session:
+        async with session.get(
+            url_torneos,
+            auth=aiohttp.BasicAuth(config.CHALLONGE_USERNAME, config.CHALLONGE_API_KEY)
+        ) as resp:
+            if resp.status != 200:
+                raise Exception("Error al obtener la lista de torneos.")
+            torneos_raw = await resp.json()
+
+        torneos = []
+
+        for entry in torneos_raw:
+            t = entry.get("tournament", {})
+            estado = t.get("state")
+
+            if estado == "complete":
+                continue  # solo torneos activos/pendientes
+
+            tid = t.get("url") or str(t.get("id"))
+            nombre = t.get("name") or "(sin nombre)"
+
+            url_participantes = f"https://api.challonge.com/v1/tournaments/{tid}/participants.json"
+            async with session.get(
+                url_participantes,
+                auth=aiohttp.BasicAuth(config.CHALLONGE_USERNAME, config.CHALLONGE_API_KEY)
+            ) as p_resp:
+                if p_resp.status != 200:
+                    continue
+                participantes_data = await p_resp.json()
+                inscritos = [p["participant"].get("name") for p in participantes_data]
+
+                if discord_id not in inscritos:
+                    continue
+
+            torneos.append({"codigo": tid, "nombre": nombre, "estado": estado})
+
+    return torneos
+
+
+def obtener_lista_arquetipos():
+    """Lista completa de arquetipos, para poblar un <select>/<datalist>."""
+    return [a["nombre"] for a in config.ARQUETIPOS_PREMODERN]
+
+async def validar_torneo_para_edicion(codigo_torneo: str, author: discord.Member):
+    """
+    Valida que el usuario pueda editar su deck en el torneo.
+    Retorna: (ok: bool, mensaje: str)
+    - ok=True: puede editar libremente (torneo no ha comenzado)
+    - ok=False: torneo ya comenzó (solo 1 edición permitida)
+    """
+    async with aiohttp.ClientSession() as session:
+        # ✅ Verificar inscripción
+        url_get = f"https://api.challonge.com/v1/tournaments/{codigo_torneo}/participants.json"
+        async with session.get(url_get, auth=aiohttp.BasicAuth(config.CHALLONGE_USERNAME, config.CHALLONGE_API_KEY)) as resp:
+            if resp.status != 200:
+                return False, f"❌ No se pudo comprobar tu inscripción: {await resp.text()}"
+
+            participantes = await resp.json()
+            inscrito = any(p["participant"]["name"] == str(author.id) for p in participantes)
+            if not inscrito:
+                return False, f"❌ No estás inscrito en el torneo `{codigo_torneo}`."
+
+        # ✅ Verificar fecha de inicio (dentro de la misma sesión)
+        url_torneo = f"https://api.challonge.com/v1/tournaments/{codigo_torneo}.json"
+        async with session.get(url_torneo, auth=aiohttp.BasicAuth(config.CHALLONGE_USERNAME, config.CHALLONGE_API_KEY)) as resp:
+            if resp.status != 200:
+                return False, "❌ No se pudo obtener la información del torneo."
+
+            torneo_data = await resp.json()
+            fecha_inicio = torneo_data["tournament"].get("start_at")
+
+            if not fecha_inicio:
+                # Si no hay fecha de inicio configurada, permitir edición
+                return True, "✅ Sin fecha de inicio configurada. Edición permitida."
+
+            # Convertir fecha ISO a timestamp en milisegundos
+            fecha_inicio_dt = datetime.fromisoformat(fecha_inicio.replace("Z", "+00:00"))
+            timestamp_inicio_ms = int(fecha_inicio_dt.timestamp() * 1000)
+
+            # Obtener timestamp actual en milisegundos
+            timestamp_ahora_ms = int(time.time() * 1000)
+
+            # Calcular diferencia
+            diferencia_ms = timestamp_inicio_ms - timestamp_ahora_ms
+            diferencia_horas = diferencia_ms / (1000 * 3600)
+            diferencia_minutos = diferencia_ms / (1000 * 60)
+
+            # 📊 Log para debugging
+            print(f"🕐 Timestamp inicio (ms): {timestamp_inicio_ms}")
+            print(f"🕐 Timestamp ahora (ms): {timestamp_ahora_ms}")
+            print(f"🕐 Diferencia: {diferencia_horas:.2f} horas ({diferencia_minutos:.0f} minutos)")
+            print(f"🕐 Fecha inicio UTC: {datetime.fromtimestamp(timestamp_inicio_ms / 1000, tz=timezone.utc)}")
+            print(f"🕐 Fecha ahora UTC: {datetime.fromtimestamp(timestamp_ahora_ms / 1000, tz=timezone.utc)}")
+
+            # ❌ Verificar si el torneo ya comenzó
+            if timestamp_ahora_ms >= timestamp_inicio_ms:
+                tiempo_transcurrido = (timestamp_ahora_ms - timestamp_inicio_ms) / (1000 * 60)  # minutos
+                return False, f"❌ El torneo comenzó hace {int(tiempo_transcurrido)} minutos."
+
+            # ⚠️ Avisar si queda poco tiempo
+            if diferencia_horas < 1 and diferencia_horas > 0:
+                minutos_restantes = int(diferencia_minutos)
+                return True, f"⚠️ El torneo comienza en {minutos_restantes} minutos."
+
+            # ✅ Torneo no ha comenzado
+            return True, f"✅ El torneo comienza en {diferencia_horas:.1f} horas."
+        
+def limpiar_deck_raw(lista_raw: str) -> str:
+    """Devuelve solo las líneas que empiezan con un número, eliminando encabezados y líneas vacías."""
+    lineas_validas = []
+    for linea in lista_raw.splitlines():
+        linea = linea.strip()
+        if not linea:
+            continue
+        if linea[0].isdigit():
+            lineas_validas.append(linea)
+    return "\n".join(lineas_validas)
+
+def contar_cartas(lista_raw: str) -> int:
+    """Cuenta el total de cartas en un deck limpio."""
+    total = 0
+    lista_limpia = limpiar_deck_raw(lista_raw)
+    for linea in lista_limpia.splitlines():
+        partes = linea.split(" ", 1)
+        try:
+            total += int(partes[0].replace("x", ""))
+        except ValueError:
+            continue
+    return total

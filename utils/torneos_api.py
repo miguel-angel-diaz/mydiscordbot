@@ -21,7 +21,16 @@ from aiohttp import web
 import feedparser
 
 import config
-from utils.commons import buscar_usuario_en_servidor, calcular_clasificacion_torneo, obtener_decks_por_usuario
+from utils.commons import (
+    buscar_usuario_en_servidor, 
+    calcular_clasificacion_torneo, 
+    obtener_decks_por_usuario,
+    validar_torneo_para_edicion,
+    limpiar_deck_raw,
+    contar_cartas,
+    obtener_lista_arquetipos,
+    obtener_torneos_disponibles_web,
+    obtener_sugerencias_arquetipos)
 
 calcular_clasificacion = calcular_clasificacion_torneo
 
@@ -415,6 +424,10 @@ def crear_app():
     app.router.add_get('/api/mis-torneos', api_mis_torneos)
     app.router.add_get('/api/mis-decks', api_mis_decks)
 
+    app.router.add_get('/api/torneos-disponibles', api_torneos_disponibles)
+    app.router.add_get('/api/arquetipos', api_arquetipos)
+    app.router.add_post('/api/subir-deck', api_subir_deck)
+
     return app
 
 
@@ -501,5 +514,141 @@ async def api_mis_decks(request):
         "username": sesion["username"],
         "decks": decks,
     })
+    response.headers['Access-Control-Allow-Origin'] = '*'
+    return response
+
+async def api_torneos_disponibles(request):
+    """Lista de torneos activos donde el usuario está inscrito, para el <select>."""
+
+    session_token = request.query.get("session")
+    sesion = sesiones_activas.get(session_token) if session_token else None
+
+    if not sesion or time.time() > sesion["expira"]:
+        return web.json_response({"error": "Sesión no válida"}, status=401)
+
+    try:
+        torneos = await obtener_torneos_disponibles_web(sesion["discord_id"])
+    except Exception as e:
+        return web.json_response({"error": str(e)}, status=500)
+
+    response = web.json_response({"torneos": torneos})
+    response.headers['Access-Control-Allow-Origin'] = '*'
+    return response
+
+
+async def api_arquetipos(request):
+    """Lista completa de arquetipos, para el <select>/<datalist>."""
+
+    response = web.json_response({"arquetipos": obtener_lista_arquetipos()})
+    response.headers['Access-Control-Allow-Origin'] = '*'
+    return response
+
+
+async def api_subir_deck(request):
+    """Recibe un deck desde el formulario web y lo publica en submitted-decks."""
+
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "JSON inválido"}, status=400)
+
+    session_token = body.get("session")
+    sesion = sesiones_activas.get(session_token) if session_token else None
+
+    if not sesion or time.time() > sesion["expira"]:
+        return web.json_response({"error": "Sesión no válida"}, status=401)
+
+    codigo_torneo = str(body.get("codigo_torneo", "")).strip()
+    nombre_deck = str(body.get("nombre_deck", "")).strip()
+    archetype_input = str(body.get("archetype", "")).strip()
+    decklist_raw = str(body.get("decklist", "")).strip()
+    sideboard_raw = str(body.get("sideboard", "")).strip()
+
+    if not codigo_torneo or not nombre_deck or not archetype_input or not decklist_raw:
+        return web.json_response({"error": "Faltan campos obligatorios"}, status=400)
+
+    if len(nombre_deck) > 100:
+        return web.json_response({"error": "Nombre de deck demasiado largo"}, status=400)
+
+    if _bot_instance is None:
+        return web.json_response({"error": "Servicio no disponible"}, status=503)
+
+    guild = _bot_instance.get_guild(config.GUILD_ID_ADMISION)
+    if not guild:
+        return web.json_response({"error": "Servicio no disponible"}, status=503)
+
+    discord_id = sesion["discord_id"]
+    miembro = guild.get_member(int(discord_id))
+
+    if not miembro:
+        return web.json_response({"error": "No se pudo verificar tu membresía en el servidor"}, status=403)
+
+    # Validar arquetipo contra la lista oficial
+    sugerencias = obtener_sugerencias_arquetipos(archetype_input, max_sugerencias=5)
+    coincidencia_exacta = next((s for s in sugerencias if s.lower() == archetype_input.lower()), None)
+
+    if not coincidencia_exacta:
+        return web.json_response({
+            "error": "Arquetipo no reconocido",
+            "sugerencias": sugerencias
+        }, status=400)
+
+    archetype = coincidencia_exacta
+
+    # Validar que el torneo aún permite subir decks
+    ok, mensaje_validacion = await validar_torneo_para_edicion(codigo_torneo, miembro)
+    if not ok:
+        return web.json_response({"error": mensaje_validacion}, status=400)
+
+    # Comprobar que no tenga ya un deck subido para este torneo
+    codigo_deck = f"{codigo_torneo}_{discord_id}"
+    decks_existentes = await obtener_decks_por_usuario(guild, discord_id)
+
+    if any(d["codigo_deck"] == codigo_deck for d in decks_existentes):
+        return web.json_response(
+            {"error": "Ya tienes un deck subido para este torneo. Usa la edición en Discord con !editar-deck."},
+            status=409
+        )
+
+    # Validar tamaño del mazo
+    decklist = limpiar_deck_raw(decklist_raw)
+    if contar_cartas(decklist) < 60:
+        return web.json_response({"error": "La decklist debe tener al menos 60 cartas"}, status=400)
+
+    if sideboard_raw.lower() in ("", "n/a"):
+        sideboard = "N/A"
+    else:
+        sideboard_limpio = limpiar_deck_raw(sideboard_raw)
+        if contar_cartas(sideboard_limpio) > 15:
+            return web.json_response({"error": "La sideboard no puede superar 15 cartas"}, status=400)
+        sideboard = sideboard_limpio
+
+    # Publicar embed en submitted-decks
+    embed_final = discord.Embed(
+        title=f"🃏 Deck Subido: {nombre_deck}",
+        description=f"**Código:** `{codigo_deck}`\n**Torneo:** `{codigo_torneo}`",
+        color=discord.Color.purple()
+    )
+    embed_final.add_field(name="Jugador", value=f"{miembro} (ID: {discord_id})", inline=False)
+    embed_final.add_field(name="Archetype", value=archetype, inline=False)
+    embed_final.add_field(name="Decklist", value=decklist[:1000], inline=False)
+    embed_final.add_field(name="Sideboard", value=sideboard[:1000], inline=False)
+    embed_final.add_field(name="edited", value="0", inline=False)
+    embed_final.set_footer(text="Deck subido correctamente (vía web).")
+
+    canal_submitted = discord.utils.get(guild.text_channels, name="submitted-decks")
+    if not canal_submitted:
+        return web.json_response({"error": "Canal de decks no encontrado"}, status=500)
+
+    await canal_submitted.send(embed=embed_final)
+
+    try:
+        await miembro.send(
+            f"✅ Tu deck **{nombre_deck}** ha sido enviado con éxito al torneo `{codigo_torneo}` (subido desde la web)."
+        )
+    except Exception:
+        pass
+
+    response = web.json_response({"ok": True, "mensaje": mensaje_validacion})
     response.headers['Access-Control-Allow-Origin'] = '*'
     return response
