@@ -6,6 +6,7 @@ from functools import wraps
 from collections import Counter
 import io
 import matplotlib.pyplot as plt
+import re
 
 from difflib import get_close_matches
 
@@ -675,3 +676,215 @@ def dividir_texto_inteligente(texto, limite=1000):
         bloques.append(texto)
 
     return bloques
+
+async def calcular_clasificacion_torneo(guild, codigo_torneo: str):
+    """
+    Calcula la clasificación completa de un torneo de Challonge,
+    cruzando los IDs de Discord guardados en Challonge con los
+    miembros reales del servidor.
+
+    Devuelve una lista de dicts, ya ordenada, con 'rank' asignado.
+    Cada jugador incluye: nombre, avatar, mp, omw, buchholz, diff,
+    wins, losses, draws, rank.
+    """
+
+    url_participants = f"https://api.challonge.com/v1/tournaments/{codigo_torneo}/participants.json"
+    url_matches = f"https://api.challonge.com/v1/tournaments/{codigo_torneo}/matches.json"
+
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url_participants, auth=aiohttp.BasicAuth(config.CHALLONGE_USERNAME, config.CHALLONGE_API_KEY)) as resp:
+            if resp.status != 200:
+                raise Exception("Error al obtener participantes.")
+            participantes_raw = await resp.json()
+
+        async with session.get(url_matches, auth=aiohttp.BasicAuth(config.CHALLONGE_USERNAME, config.CHALLONGE_API_KEY)) as resp:
+            if resp.status != 200:
+                raise Exception("Error al obtener emparejamientos.")
+            matches_raw = await resp.json()
+
+    jugadores = {}
+    for p in participantes_raw:
+        part = p["participant"]
+        jugadores[part["id"]] = {
+            "name": part["name"],
+            "mp": 0,
+            "games_won": 0,
+            "games_played": 0,
+            "wins": 0,
+            "losses": 0,
+            "draws": 0,
+            "opponents": []
+        }
+
+    for m in matches_raw:
+        match = m["match"]
+        if match["state"] != "complete":
+            continue
+
+        p1, p2 = match["player1_id"], match["player2_id"]
+        scores = match.get("scores_csv", "").strip()
+
+        if p1 and not p2 and p1 in jugadores:
+            jugadores[p1]["mp"] += 3
+            jugadores[p1]["wins"] += 1
+            continue
+        if p2 and not p1 and p2 in jugadores:
+            jugadores[p2]["mp"] += 3
+            jugadores[p2]["wins"] += 1
+            continue
+
+        try:
+            s1, s2 = map(int, scores.split("-"))
+        except Exception:
+            continue
+
+        if p1 not in jugadores or p2 not in jugadores:
+            continue
+
+        jugadores[p1]["opponents"].append(p2)
+        jugadores[p2]["opponents"].append(p1)
+        jugadores[p1]["games_won"] += s1
+        jugadores[p1]["games_played"] += s1 + s2
+        jugadores[p2]["games_won"] += s2
+        jugadores[p2]["games_played"] += s1 + s2
+
+        if s1 > s2:
+            jugadores[p1]["mp"] += 3
+            jugadores[p1]["wins"] += 1
+            jugadores[p2]["losses"] += 1
+        elif s2 > s1:
+            jugadores[p2]["mp"] += 3
+            jugadores[p2]["wins"] += 1
+            jugadores[p1]["losses"] += 1
+        else:
+            jugadores[p1]["mp"] += 1
+            jugadores[p2]["mp"] += 1
+            jugadores[p1]["draws"] += 1
+            jugadores[p2]["draws"] += 1
+
+    clasificacion = []
+    for pid, datos in jugadores.items():
+        omw = 0.0
+        for o in datos["opponents"]:
+            opp = jugadores.get(o)
+            if not opp:
+                continue
+            total_matches = opp["wins"] + opp["losses"] + opp["draws"]
+            if total_matches == 0:
+                continue
+            omw += opp["mp"] / (total_matches * 3)
+        omw = omw / len(datos["opponents"]) if datos["opponents"] else 0.0
+
+        buchholz_scores = []
+        for o in datos["opponents"]:
+            opp = jugadores.get(o)
+            if not opp:
+                continue
+            total_matches = opp["wins"] + opp["losses"] + opp["draws"]
+            if total_matches == 0:
+                continue
+            buchholz_scores.append(opp["mp"] / (total_matches * 3))
+        if buchholz_scores:
+            buchholz_scores_sorted = sorted(buchholz_scores)[1:-1] if len(buchholz_scores) > 2 else buchholz_scores
+            buchholz = sum(buchholz_scores_sorted) / len(buchholz_scores_sorted)
+        else:
+            buchholz = 0.0
+
+        diff = datos["games_won"] - (datos["games_played"] - datos["games_won"])
+
+        nombre = datos["name"]
+        avatar = None
+        try:
+            miembro = await guild.fetch_member(int(datos["name"]))
+            nombre = miembro.display_name
+            avatar = str(miembro.display_avatar.url)
+            discord_id_resuelto = str(miembro.id)
+        except (ValueError, discord.NotFound, AttributeError):
+            pass
+
+        clasificacion.append({
+            "nombre": nombre,
+            "avatar": avatar,
+            "mp": datos["mp"],
+            "omw": round(omw, 3),
+            "discord_id": discord_id_resuelto,   # NUEVO
+            "buchholz": round(buchholz, 5),
+            "diff": diff,
+            "wins": datos["wins"],
+            "losses": datos["losses"],
+            "draws": datos["draws"]
+        })
+
+    clasificacion.sort(key=lambda x: (-x["mp"], -x["omw"], -x["diff"], -x["buchholz"]))
+
+    for i, p in enumerate(clasificacion, 1):
+        p["rank"] = i
+
+    return clasificacion
+
+DECK_ID_REGEX = re.compile(r"\(ID:\s*(\d+)\)")
+
+
+def _parsear_embed_deck(embed: discord.Embed) -> dict | None:
+    """
+    Convierte un embed del canal 'submitted-decks' en un dict limpio.
+    Devuelve None si el embed no tiene la forma esperada de un deck.
+    """
+
+    campos = {f.name: f.value for f in embed.fields}
+
+    jugador_raw = campos.get("Jugador", "")
+    match_id = DECK_ID_REGEX.search(jugador_raw)
+    if not match_id:
+        return None  # no es un embed de deck reconocible
+
+    discord_id = match_id.group(1)
+
+    # Nombre del deck — quitamos el emoji/prefijo del título
+    titulo = embed.title or ""
+    nombre_deck = re.sub(r"^🃏\s*Deck (Subido|Editado):\s*", "", titulo).strip()
+    if not nombre_deck:
+        nombre_deck = titulo
+
+    # Código del torneo/deck — vienen en la description
+    descripcion = embed.description or ""
+    match_codigo = re.search(r"Código:\s*`([^`]+)`", descripcion)
+    match_torneo = re.search(r"Torneo:\s*`([^`]+)`", descripcion)
+
+    codigo_deck = match_codigo.group(1) if match_codigo else None
+    codigo_torneo = match_torneo.group(1) if match_torneo else None
+
+    return {
+        "nombre_deck": nombre_deck,
+        "codigo_deck": codigo_deck,
+        "codigo_torneo": codigo_torneo,
+        "discord_id": discord_id,
+        "archetype": campos.get("Archetype", "Desconocido"),
+        "decklist": campos.get("Decklist", ""),
+        "sideboard": campos.get("Sideboard", ""),
+        "edited": campos.get("edited", "0"),
+    }
+
+
+async def obtener_decks_por_usuario(guild, discord_id: str, limite: int = 500):
+    """
+    Recorre el canal 'submitted-decks' y devuelve todos los decks
+    subidos por un usuario concreto, identificado por su discord_id.
+    """
+
+    canal = discord.utils.get(guild.text_channels, name="submitted-decks")
+    if not canal:
+        return []
+
+    decks = []
+
+    async for mensaje in canal.history(limit=limite):
+        if not mensaje.embeds:
+            continue
+
+        for embed in mensaje.embeds:
+            deck = _parsear_embed_deck(embed)
+            if deck and deck["discord_id"] == discord_id:
+                decks.append(deck)
+
+    return decks

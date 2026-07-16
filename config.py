@@ -5,6 +5,8 @@ CHALLONGE_USERNAME = os.environ.get("CHALLONGE_USERNAME")
 CHALLONGE_API_KEY = os.environ.get("CHALLONGE_API_KEY")
 DISCORD_TOKEN = os.environ.get("DISCORD_TOKEN")
 OPENROUTER_API_KEY =  os.environ.get("OPENROUTER_API_KEY")
+GUILD_ID_ADMISION = os.environ.get("GUILD_ID_ADMISION")
+CACHE_PATH = os.environ.get("CACHE_PATH")
 
 if not CHALLONGE_USERNAME or not CHALLONGE_API_KEY or not DISCORD_TOKEN or not OPENROUTER_API_KEY:
     try:
@@ -12,12 +14,14 @@ if not CHALLONGE_USERNAME or not CHALLONGE_API_KEY or not DISCORD_TOKEN or not O
             CHALLONGE_USERNAME as LOCAL_USER,
             CHALLONGE_API_KEY as LOCAL_KEY,
             DISCORD_TOKEN as LOCAL_TOKEN,
-            OPENROUTER_API_KEY as LOCAL_OPENROUTER
+            OPENROUTER_API_KEY as LOCAL_OPENROUTER,
+            GUILD_ID_ADMISION as LOCAL_GUILD_ID
         )
         CHALLONGE_USERNAME = CHALLONGE_USERNAME or LOCAL_USER
         CHALLONGE_API_KEY = CHALLONGE_API_KEY or LOCAL_KEY
         DISCORD_TOKEN = DISCORD_TOKEN or LOCAL_TOKEN
         OPENROUTER_API_KEY = OPENROUTER_API_KEY or LOCAL_OPENROUTER
+        GUILD_ID_ADMISION = GUILD_ID_ADMISION or LOCAL_GUILD_ID
     except ImportError:
         pass
 
@@ -38,6 +42,19 @@ if not OPENROUTER_API_KEY:
         "❌ No se encontró la clave de OpenRouter. "
         "Define OPENROUTER_API_KEY en las variables de entorno."
     )
+# 🔹 GUILD_ID_ADMISION debe ser un entero, no un string
+if GUILD_ID_ADMISION:
+    GUILD_ID_ADMISION = int(GUILD_ID_ADMISION)
+else:
+    raise ValueError(
+        "❌ No se encontró GUILD_ID_ADMISION. "
+        "Define esta variable de entorno en Railway con el ID de tu servidor de Discord."
+    )
+
+# 🔹 CACHE_PATH con valor por defecto razonable si no se define
+if not CACHE_PATH:
+    CACHE_PATH = "cache/torneos.json"
+
 CHALLONGE_API_URL = "https://api.challonge.com/v1/tournaments.json"
 ROLES_TODOS = {"miembro", "socio", "second-chance-socio", "second-chance-miembro", "admin"}
 ROLES_BORRADOS = {"miembro", "socio", "second-chance-socio", "second-chance-miembro"}

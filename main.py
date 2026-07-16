@@ -376,7 +376,7 @@ async def on_ready():
     cargar_tareas(bot)
     asyncio.create_task(iniciar_servidor_web())
 
-    guild = bot.get_guild(1381551388907016252)
+    guild = bot.get_guild(config.GUILD_ID_ADMISION)
     if guild:
         payload = await regenerar_cache(guild)
 

@@ -3,7 +3,9 @@
 # Módulo autocontenido: obtiene todos los torneos finalizados
 # de Challonge, calcula sus clasificaciones cruzando con
 # Discord, y expone endpoints HTTP para que la web consuma
-# los datos ya procesados y envíe solicitudes de admisión.
+# los datos ya procesados, envíe solicitudes de admisión,
+# gestione el login de miembros vía código por DM, y sirva
+# el podcast y los artículos de Medium.
 # ============================================================
 
 import aiohttp
@@ -11,21 +13,26 @@ import discord
 import json
 import os
 import re
+import secrets
+import time
 from datetime import datetime, timezone
 from aiohttp import web
 
-
 import feedparser
 
-import config  # reutiliza tus credenciales ya existentes
+import config
+from utils.commons import buscar_usuario_en_servidor, calcular_clasificacion_torneo, obtener_decks_por_usuario
 
-CACHE_PATH = "cache/torneos.json"
-CANAL_ADMIN_NOMBRE = "solicitudes-admision"  # ajusta al nombre real de tu canal privado
-GUILD_ID_ADMISION = 1381551388907016252      # tu guild ID
+calcular_clasificacion = calcular_clasificacion_torneo
+
+
+CANAL_ADMIN_NOMBRE = "solicitudes-admision"
 
 EMAIL_REGEX = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
-# Referencia al bot — se rellena desde bot.py con set_bot_instance()
+PODCAST_RSS_URL = "https://feeds.ivoox.com/feed_fg_f12806786_filtro_1.xml"
+MEDIUM_RSS_URL = "https://medium.com/feed/@theklubmtg"
+
 _bot_instance = None
 
 
@@ -67,145 +74,6 @@ async def obtener_torneos_finalizados():
 
     return torneos
 
-
-# ============================================================
-# 2. CHALLONGE + DISCORD — calcular clasificación de un torneo
-# ============================================================
-
-async def calcular_clasificacion(guild, codigo_torneo: str):
-    url_participants = f"https://api.challonge.com/v1/tournaments/{codigo_torneo}/participants.json"
-    url_matches = f"https://api.challonge.com/v1/tournaments/{codigo_torneo}/matches.json"
-
-    async with aiohttp.ClientSession() as session:
-        async with session.get(url_participants, auth=aiohttp.BasicAuth(config.CHALLONGE_USERNAME, config.CHALLONGE_API_KEY)) as resp:
-            if resp.status != 200:
-                raise Exception("Error al obtener participantes.")
-            participantes_raw = await resp.json()
-
-        async with session.get(url_matches, auth=aiohttp.BasicAuth(config.CHALLONGE_USERNAME, config.CHALLONGE_API_KEY)) as resp:
-            if resp.status != 200:
-                raise Exception("Error al obtener emparejamientos.")
-            matches_raw = await resp.json()
-
-    jugadores = {}
-    for p in participantes_raw:
-        part = p["participant"]
-        jugadores[part["id"]] = {
-            "name": part["name"],
-            "mp": 0,
-            "games_won": 0,
-            "games_played": 0,
-            "wins": 0,
-            "losses": 0,
-            "draws": 0,
-            "opponents": []
-        }
-
-    for m in matches_raw:
-        match = m["match"]
-        if match["state"] != "complete":
-            continue
-
-        p1, p2 = match["player1_id"], match["player2_id"]
-        scores = match.get("scores_csv", "").strip()
-
-        if p1 and not p2 and p1 in jugadores:
-            jugadores[p1]["mp"] += 3
-            jugadores[p1]["wins"] += 1
-            continue
-        if p2 and not p1 and p2 in jugadores:
-            jugadores[p2]["mp"] += 3
-            jugadores[p2]["wins"] += 1
-            continue
-
-        try:
-            s1, s2 = map(int, scores.split("-"))
-        except Exception:
-            continue
-
-        if p1 not in jugadores or p2 not in jugadores:
-            continue
-
-        jugadores[p1]["opponents"].append(p2)
-        jugadores[p2]["opponents"].append(p1)
-        jugadores[p1]["games_won"] += s1
-        jugadores[p1]["games_played"] += s1 + s2
-        jugadores[p2]["games_won"] += s2
-        jugadores[p2]["games_played"] += s1 + s2
-
-        if s1 > s2:
-            jugadores[p1]["mp"] += 3
-            jugadores[p1]["wins"] += 1
-            jugadores[p2]["losses"] += 1
-        elif s2 > s1:
-            jugadores[p2]["mp"] += 3
-            jugadores[p2]["wins"] += 1
-            jugadores[p1]["losses"] += 1
-        else:
-            jugadores[p1]["mp"] += 1
-            jugadores[p2]["mp"] += 1
-            jugadores[p1]["draws"] += 1
-            jugadores[p2]["draws"] += 1
-
-    clasificacion = []
-    for pid, datos in jugadores.items():
-        omw = 0.0
-        for o in datos["opponents"]:
-            opp = jugadores.get(o)
-            if not opp:
-                continue
-            total_matches = opp["wins"] + opp["losses"] + opp["draws"]
-            if total_matches == 0:
-                continue
-            omw += opp["mp"] / (total_matches * 3)
-        omw = omw / len(datos["opponents"]) if datos["opponents"] else 0.0
-
-        buchholz_scores = []
-        for o in datos["opponents"]:
-            opp = jugadores.get(o)
-            if not opp:
-                continue
-            total_matches = opp["wins"] + opp["losses"] + opp["draws"]
-            if total_matches == 0:
-                continue
-            buchholz_scores.append(opp["mp"] / (total_matches * 3))
-        if buchholz_scores:
-            buchholz_scores_sorted = sorted(buchholz_scores)[1:-1] if len(buchholz_scores) > 2 else buchholz_scores
-            buchholz = sum(buchholz_scores_sorted) / len(buchholz_scores_sorted)
-        else:
-            buchholz = 0.0
-
-        diff = datos["games_won"] - (datos["games_played"] - datos["games_won"])
-
-        nombre = datos["name"]
-        avatar = None
-        try:
-            miembro = await guild.fetch_member(int(datos["name"]))
-            nombre = miembro.display_name
-            avatar = str(miembro.display_avatar.url)
-        except (ValueError, discord.NotFound, AttributeError):
-            pass
-
-        clasificacion.append({
-            "nombre": nombre,
-            "avatar": avatar,
-            "mp": datos["mp"],
-            "omw": round(omw, 3),
-            "buchholz": round(buchholz, 5),
-            "diff": diff,
-            "wins": datos["wins"],
-            "losses": datos["losses"],
-            "draws": datos["draws"]
-        })
-
-    clasificacion.sort(key=lambda x: (-x["mp"], -x["omw"], -x["diff"], -x["buchholz"]))
-
-    for i, p in enumerate(clasificacion, 1):
-        p["rank"] = i
-
-    return clasificacion
-
-
 # ============================================================
 # 3. CACHÉ — evita golpear Challonge/Discord en cada visita web
 # ============================================================
@@ -228,7 +96,7 @@ async def regenerar_cache(guild):
     }
 
     os.makedirs("cache", exist_ok=True)
-    with open(CACHE_PATH, "w", encoding="utf-8") as f:
+    with open(config.CACHE_PATH, "w", encoding="utf-8") as f:
         json.dump(payload, f, ensure_ascii=False, indent=2)
 
     print(f"✅ Caché regenerado con {len(resultado)} torneo(s).")
@@ -236,14 +104,14 @@ async def regenerar_cache(guild):
 
 
 def leer_cache():
-    if not os.path.exists(CACHE_PATH):
+    if not os.path.exists(config.CACHE_PATH):
         return None
-    with open(CACHE_PATH, "r", encoding="utf-8") as f:
+    with open(config.CACHE_PATH, "r", encoding="utf-8") as f:
         return json.load(f)
 
 
 # ============================================================
-# 4. ENDPOINTS HTTP
+# 4. ENDPOINTS HTTP — Torneos
 # ============================================================
 
 async def api_torneos(request):
@@ -255,6 +123,10 @@ async def api_torneos(request):
     response.headers['Access-Control-Allow-Origin'] = '*'
     return response
 
+
+# ============================================================
+# 5. ENDPOINTS HTTP — Admisión
+# ============================================================
 
 async def api_solicitar_acceso(request):
     try:
@@ -278,7 +150,7 @@ async def api_solicitar_acceso(request):
     if _bot_instance is None:
         return web.json_response({"error": "Servicio no disponible"}, status=503)
 
-    guild = _bot_instance.get_guild(GUILD_ID_ADMISION)
+    guild = _bot_instance.get_guild(config.GUILD_ID_ADMISION)
     if not guild:
         return web.json_response({"error": "Servicio no disponible"}, status=503)
 
@@ -301,19 +173,149 @@ async def api_solicitar_acceso(request):
     response.headers['Access-Control-Allow-Origin'] = '*'
     return response
 
-# contenido_api.py
+
 # ============================================================
-# Obtiene los últimos episodios del podcast (iVoox) y los
-# últimos artículos de Medium, para mostrarlos en la web.
+# 6. LOGIN — verificación de miembros vía código por DM
 # ============================================================
 
-import aiohttp
-import feedparser
-from aiohttp import web
+codigos_pendientes = {}
+sesiones_activas = {}
 
-PODCAST_RSS_URL = "https://feeds.ivoox.com/feed_fg_f12806786_filtro_1.xml"
-MEDIUM_RSS_URL = "https://medium.com/feed/@theklubmtg"
+CODIGO_EXPIRA_SEGUNDOS = 300              # 5 minutos
+CODIGO_REENVIO_MINIMO = 60                # no permitir reenvío antes de 60s
+SESION_DURA_SEGUNDOS = 60 * 60 * 24 * 7   # 7 días
 
+
+async def auth_solicitar_codigo(request):
+    """Paso 1: el usuario pide el código, se lo mandamos por DM."""
+
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "JSON inválido"}, status=400)
+
+    nombre = str(body.get("nombre", "")).strip()
+
+    if not nombre:
+        return web.json_response({"error": "Escribe tu usuario de Discord"}, status=400)
+
+    if _bot_instance is None:
+        return web.json_response({"error": "Servicio no disponible"}, status=503)
+
+    guild = _bot_instance.get_guild(config.GUILD_ID_ADMISION)
+    if not guild:
+        return web.json_response({"error": "Servicio no disponible"}, status=503)
+
+    nombre_key = nombre.lower()
+
+    pendiente_actual = codigos_pendientes.get(nombre_key)
+    if pendiente_actual:
+        segundos_desde_envio = time.time() - pendiente_actual.get("enviado_en", 0)
+        if segundos_desde_envio < CODIGO_REENVIO_MINIMO:
+            espera = int(CODIGO_REENVIO_MINIMO - segundos_desde_envio)
+            return web.json_response(
+                {"error": f"Espera {espera}s antes de pedir un nuevo código"},
+                status=429
+            )
+
+    miembro = buscar_usuario_en_servidor(guild, nombre)
+
+    if not miembro:
+        return web.json_response(
+            {"error": "No hemos podido verificarte. Comprueba tu usuario."},
+            status=404
+        )
+
+    codigo = f"{secrets.randbelow(1000000):06d}"
+
+    codigos_pendientes[nombre_key] = {
+        "codigo": codigo,
+        "discord_id": str(miembro.id),
+        "username": miembro.display_name,
+        "expira": time.time() + CODIGO_EXPIRA_SEGUNDOS,
+        "enviado_en": time.time(),
+    }
+
+    try:
+        await miembro.send(
+            f"🔐 Tu código de acceso para **The Klub** es: **{codigo}**\n"
+            f"Caduca en 5 minutos. Si no has solicitado esto, ignora este mensaje."
+        )
+    except Exception:
+        del codigos_pendientes[nombre_key]
+        return web.json_response(
+            {"error": "No hemos podido enviarte el código. Revisa que tienes los DMs abiertos para miembros del servidor."},
+            status=400
+        )
+
+    response = web.json_response({"ok": True, "mensaje": "Código enviado por Discord"})
+    response.headers['Access-Control-Allow-Origin'] = '*'
+    return response
+
+
+async def auth_verificar_codigo(request):
+    """Paso 2: el usuario introduce el código recibido por DM."""
+
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "JSON inválido"}, status=400)
+
+    nombre = str(body.get("nombre", "")).strip().lower()
+    codigo_introducido = str(body.get("codigo", "")).strip()
+
+    pendiente = codigos_pendientes.get(nombre)
+
+    if not pendiente:
+        return web.json_response({"error": "No hay ningún código pendiente para ese usuario"}, status=400)
+
+    if time.time() > pendiente["expira"]:
+        del codigos_pendientes[nombre]
+        return web.json_response({"error": "El código ha caducado, solicita uno nuevo"}, status=400)
+
+    if codigo_introducido != pendiente["codigo"]:
+        return web.json_response({"error": "Código incorrecto"}, status=400)
+
+    session_token = secrets.token_urlsafe(32)
+
+    sesiones_activas[session_token] = {
+        "discord_id": pendiente["discord_id"],
+        "username": pendiente["username"],
+        "expira": time.time() + SESION_DURA_SEGUNDOS,
+    }
+
+    del codigos_pendientes[nombre]
+
+    response = web.json_response({
+        "ok": True,
+        "session": session_token,
+        "username": pendiente["username"],
+    })
+    response.headers['Access-Control-Allow-Origin'] = '*'
+    return response
+
+
+async def auth_verificar_sesion(request):
+    """La web comprueba si una sesión sigue siendo válida."""
+
+    session_token = request.query.get("session")
+
+    sesion = sesiones_activas.get(session_token) if session_token else None
+
+    if not sesion or time.time() > sesion["expira"]:
+        return web.json_response({"autenticado": False})
+
+    response = web.json_response({
+        "autenticado": True,
+        "username": sesion["username"],
+    })
+    response.headers['Access-Control-Allow-Origin'] = '*'
+    return response
+
+
+# ============================================================
+# 7. CONTENIDO — Podcast y Artículos (RSS)
+# ============================================================
 
 async def _obtener_feed(url: str):
     async with aiohttp.ClientSession() as session:
@@ -325,7 +327,7 @@ async def _obtener_feed(url: str):
     return feedparser.parse(contenido)
 
 
-async def obtener_ultimos_episodios(limite: int = 3):
+async def obtener_ultimos_episodios(limite: int = 8):
     feed = await _obtener_feed(PODCAST_RSS_URL)
 
     episodios = []
@@ -347,7 +349,7 @@ async def obtener_ultimos_episodios(limite: int = 3):
     return episodios
 
 
-async def obtener_ultimos_articulos(limite: int = 3):
+async def obtener_ultimos_articulos(limite: int = 8):
     feed = await _obtener_feed(MEDIUM_RSS_URL)
 
     articulos = []
@@ -392,14 +394,27 @@ async def handle_options(request):
     })
 
 
+# ============================================================
+# 8. SERVIDOR WEB — registro de rutas
+# ============================================================
+
 def crear_app():
     app = web.Application()
+
     app.router.add_get('/api/torneos', api_torneos)
+
     app.router.add_post('/api/solicitar-acceso', api_solicitar_acceso)
     app.router.add_route('OPTIONS', '/api/solicitar-acceso', handle_options)
 
     app.router.add_get('/api/podcast', api_podcast)
     app.router.add_get('/api/articulos', api_articulos)
+
+    app.router.add_post('/auth/solicitar-codigo', auth_solicitar_codigo)
+    app.router.add_post('/auth/verificar-codigo', auth_verificar_codigo)
+    app.router.add_get('/auth/verificar-sesion', auth_verificar_sesion)
+    app.router.add_get('/api/mis-torneos', api_mis_torneos)
+    app.router.add_get('/api/mis-decks', api_mis_decks)
+
     return app
 
 
@@ -410,3 +425,81 @@ async def iniciar_servidor_web():
     port = int(os.environ.get("PORT", 8080))
     site = web.TCPSite(runner, '0.0.0.0', port)
     await site.start()
+
+async def api_mis_torneos(request):
+    """Devuelve solo los torneos/resultados del usuario logueado."""
+
+    session_token = request.query.get("session")
+
+    sesion = sesiones_activas.get(session_token) if session_token else None
+
+    if not sesion or time.time() > sesion["expira"]:
+        return web.json_response({"error": "Sesión no válida"}, status=401)
+
+    discord_id = sesion["discord_id"]
+
+    data = leer_cache()
+    if data is None:
+        return web.json_response({"error": "Datos no disponibles todavía"}, status=503)
+
+    mis_resultados = []
+
+    for torneo in data.get("torneos", []):
+        for jugador in torneo.get("clasificacion", []):
+            if jugador.get("discord_id") == discord_id:
+                mis_resultados.append({
+                    "torneo_nombre": torneo["nombre"],
+                    "torneo_codigo": torneo["codigo"],
+                    "fecha_fin": torneo["fecha_fin"],
+                    "rank": jugador["rank"],
+                    "total_participantes": torneo["participantes_count"],
+                    "mp": jugador["mp"],
+                    "wins": jugador["wins"],
+                    "losses": jugador["losses"],
+                    "draws": jugador["draws"],
+                    "omw": jugador["omw"],
+                    "buchholz": jugador["buchholz"],
+                    "diff": jugador["diff"],
+                })
+                break  # ya encontramos su fila en este torneo, pasamos al siguiente
+
+    # Ordenamos por fecha, más reciente primero
+    mis_resultados.sort(key=lambda x: x["fecha_fin"] or "", reverse=True)
+
+    response = web.json_response({
+        "username": sesion["username"],
+        "torneos": mis_resultados,
+    })
+    response.headers['Access-Control-Allow-Origin'] = '*'
+    return response
+
+async def api_mis_decks(request):
+    """Devuelve los decks del usuario logueado."""
+
+    session_token = request.query.get("session")
+
+    sesion = sesiones_activas.get(session_token) if session_token else None
+
+    if not sesion or time.time() > sesion["expira"]:
+        return web.json_response({"error": "Sesión no válida"}, status=401)
+
+    discord_id = sesion["discord_id"]
+
+    if _bot_instance is None:
+        return web.json_response({"error": "Servicio no disponible"}, status=503)
+
+    guild = _bot_instance.get_guild(config.GUILD_ID_ADMISION)
+    if not guild:
+        return web.json_response({"error": "Servicio no disponible"}, status=503)
+
+    try:
+        decks = await obtener_decks_por_usuario(guild, discord_id)
+    except Exception as e:
+        return web.json_response({"error": str(e)}, status=500)
+
+    response = web.json_response({
+        "username": sesion["username"],
+        "decks": decks,
+    })
+    response.headers['Access-Control-Allow-Origin'] = '*'
+    return response

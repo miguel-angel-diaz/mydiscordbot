@@ -15,7 +15,8 @@ from utils.commons import (
     obtener_torneo_usuario, 
     cartas_mas_jugadas, 
     best_decks_handle, 
-    analizar_torneo_con_ia
+    analizar_torneo_con_ia,
+    calcular_clasificacion_torneo
 )
 
 from utils.admin import moderador_permisos_handle
@@ -636,151 +637,20 @@ async def actualizar_clasificacion_handle(ctx, codigo_torneo: str, finish_tourna
         await ctx.author.send("❌ Necesitas enviar el código del torneo.")
         return
 
-    # 🔹 Obtener datos de Challonge
-    url_participants = f"https://api.challonge.com/v1/tournaments/{codigo_torneo}/participants.json"
-    url_matches = f"https://api.challonge.com/v1/tournaments/{codigo_torneo}/matches.json"
+    try:
+        clasificacion = await calcular_clasificacion_torneo(ctx.guild, codigo_torneo)
+    except Exception as e:
+        return await ctx.send(f"❌ {str(e)}")
 
-    async with aiohttp.ClientSession() as session:
-        async with session.get(url_participants, auth=aiohttp.BasicAuth(config.CHALLONGE_USERNAME, config.CHALLONGE_API_KEY)) as resp:
-            if resp.status != 200:
-                return await ctx.send("❌ Error al obtener participantes.")
-            participantes_raw = await resp.json()
-
-        async with session.get(url_matches, auth=aiohttp.BasicAuth(config.CHALLONGE_USERNAME, config.CHALLONGE_API_KEY)) as resp:
-            if resp.status != 200:
-                return await ctx.send("❌ Error al obtener emparejamientos.")
-            matches_raw = await resp.json()
-
-    # 🔹 Inicializar jugadores
-    jugadores = {}
-    for p in participantes_raw:
-        part = p["participant"]
-        jugadores[part["id"]] = {
-            "name": part["name"],
-            "mp": 0,  # puntos de torneo
-            "games_won": 0,
-            "games_played": 0,
-            "wins": 0,
-            "losses": 0,
-            "draws": 0,
-            "opponents": []
-        }
-
-    # 🔹 Procesar matches
-    for m in matches_raw:
-        match = m["match"]
-        if match["state"] != "complete":
-            continue
-
-        p1, p2 = match["player1_id"], match["player2_id"]
-        scores = match.get("scores_csv", "").strip()
-
-        # 🟡 Si uno de los jugadores es None → BYE
-        if p1 and not p2 and p1 in jugadores:
-            jugadores[p1]["mp"] += 3
-            jugadores[p1]["wins"] += 1
-            continue
-        if p2 and not p1 and p2 in jugadores:
-            jugadores[p2]["mp"] += 3
-            jugadores[p2]["wins"] += 1
-            continue
-
-        try:
-            s1, s2 = map(int, scores.split("-"))
-        except:
-            continue
-
-        if p1 not in jugadores or p2 not in jugadores:
-            continue
-
-        jugadores[p1]["opponents"].append(p2)
-        jugadores[p2]["opponents"].append(p1)
-
-        # Partidas jugadas
-        jugadores[p1]["games_won"] += s1
-        jugadores[p1]["games_played"] += s1 + s2
-        jugadores[p2]["games_won"] += s2
-        jugadores[p2]["games_played"] += s1 + s2
-
-        # 🔹 Reparto de puntos
-        if s1 > s2:
-            jugadores[p1]["mp"] += 3
-            jugadores[p1]["wins"] += 1
-            jugadores[p2]["losses"] += 1
-        elif s2 > s1:
-            jugadores[p2]["mp"] += 3
-            jugadores[p2]["wins"] += 1
-            jugadores[p1]["losses"] += 1
-        else:
-            jugadores[p1]["mp"] += 1
-            jugadores[p2]["mp"] += 1
-            jugadores[p1]["draws"] += 1
-            jugadores[p2]["draws"] += 1
-
-    # 🔹 Calcular desempates y construir clasificación
-    clasificacion = []
-    for pid, datos in jugadores.items():
-        # Tie Break #1: OMW% (Opponent Match Win)
-        omw = 0.0
-        for o in datos["opponents"]:
-            opp = jugadores.get(o)
-            if not opp:
-                continue
-            total_matches = opp["wins"] + opp["losses"] + opp["draws"]
-            if total_matches == 0:
-                continue
-            omw += opp["mp"] / (total_matches * 3)  # normalizamos a 3 puntos por victoria
-        omw = omw / len(datos["opponents"]) if datos["opponents"] else 0.0
-
-        # Tie Break #2: Median-Buchholz
-        buchholz_scores = []
-        for o in datos["opponents"]:
-            opp = jugadores.get(o)
-            if not opp:
-                continue
-            total_matches = opp["wins"] + opp["losses"] + opp["draws"]
-            if total_matches == 0:
-                continue
-            buchholz_scores.append(opp["mp"] / (total_matches * 3))
-        if buchholz_scores:
-            if len(buchholz_scores) > 2:
-                buchholz_scores_sorted = sorted(buchholz_scores)[1:-1]
-            else:
-                buchholz_scores_sorted = buchholz_scores
-            buchholz = sum(buchholz_scores_sorted) / len(buchholz_scores_sorted)
-        else:
-            buchholz = 0.0
-
-        diff = datos["games_won"] - (datos["games_played"] - datos["games_won"])
-
-        try:
-            miembro = await ctx.guild.fetch_member(int(datos["name"]))
-            nombre = f"@{miembro.display_name}"
-        except (ValueError, discord.NotFound):
-            nombre = datos["name"]
-
-        clasificacion.append({
-            "nombre": nombre,
-            "mp": datos["mp"],
-            "omw": omw,
-            "buchholz": buchholz,
-            "diff": diff,
-            "wins": datos["wins"],
-            "losses": datos["losses"],
-            "draws": datos["draws"]
-        })
-
-    # 🔹 Ordenar
-    clasificacion.sort(key=lambda x: (-x["mp"], -x["omw"], -x["diff"], -x["buchholz"]))
-
-    # 🔹 Construir tabla
+    # 🔹 Construir tabla — aquí SÍ formateamos con @ para Discord
     mensaje = f"📊 **Clasificación del torneo `{codigo_torneo}`:**\n"
     mensaje += "```markdown\n"
     mensaje += "Rango | Participante           | G-P-E | Pts  | OMW%   | Buchholz | Dif\n"
     mensaje += "------|------------------------|-------|------|--------|----------|-----\n"
-    for i, p in enumerate(clasificacion, 1):
+    for p in clasificacion:
         gpe = f"{p['wins']}-{p['losses']}-{p['draws']}"
-        linea = f"{i:<5} | {p['nombre'][:22]:<22} | {gpe:<5} | {p['mp']:<4} | {p['omw']:.3f}  | {p['buchholz']:.5f}  | {p['diff']:+}"
+        nombre_discord = f"@{p['nombre']}"
+        linea = f"{p['rank']:<5} | {nombre_discord[:22]:<22} | {gpe:<5} | {p['mp']:<4} | {p['omw']:.3f}  | {p['buchholz']:.5f}  | {p['diff']:+}"
         mensaje += linea + "\n"
     mensaje += "```"
 
@@ -800,12 +670,8 @@ async def actualizar_clasificacion_handle(ctx, codigo_torneo: str, finish_tourna
         await mensaje_existente.edit(content=mensaje)
     else:
         await canal.send(mensaje)
-    
+
     if finish_tournament:
-        matches_pendientes = [m for m in matches_raw if m["match"]["state"] != "complete"]
-        if matches_pendientes:
-            await ctx.send(f"⚠️ **Advertencia**: Aún hay {len(matches_pendientes)} partido(s) pendiente(s). No puedes finalizar el torneo hasta completarlos.")
-            return
         await tournament_report_handle(ctx, codigo_torneo)
 
 async def partidos_pendientes_handle(ctx, codigo_torneo: str, type: str):
