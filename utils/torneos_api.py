@@ -1,12 +1,4 @@
-# torneos_api.py
-# ============================================================
-# Módulo autocontenido: obtiene todos los torneos finalizados
-# de Challonge, calcula sus clasificaciones cruzando con
-# Discord, y expone endpoints HTTP para que la web consuma
-# los datos ya procesados, envíe solicitudes de admisión,
-# gestione el login de miembros vía código por DM, y sirva
-# el podcast y los artículos de Medium.
-# ============================================================
+######## torneos_api.py #######
 
 import aiohttp
 import discord
@@ -30,7 +22,9 @@ from utils.commons import (
     contar_cartas,
     obtener_lista_arquetipos,
     obtener_torneos_disponibles_web,
-    obtener_sugerencias_arquetipos)
+    obtener_sugerencias_arquetipos,
+    obtener_estado_torneos_usuario,
+    inscribir_usuario_web)
 
 calcular_clasificacion = calcular_clasificacion_torneo
 
@@ -402,43 +396,6 @@ async def handle_options(request):
         'Access-Control-Allow-Headers': 'Content-Type',
     })
 
-
-# ============================================================
-# 8. SERVIDOR WEB — registro de rutas
-# ============================================================
-
-def crear_app():
-    app = web.Application()
-
-    app.router.add_get('/api/torneos', api_torneos)
-
-    app.router.add_post('/api/solicitar-acceso', api_solicitar_acceso)
-    app.router.add_route('OPTIONS', '/api/solicitar-acceso', handle_options)
-
-    app.router.add_get('/api/podcast', api_podcast)
-    app.router.add_get('/api/articulos', api_articulos)
-
-    app.router.add_post('/auth/solicitar-codigo', auth_solicitar_codigo)
-    app.router.add_post('/auth/verificar-codigo', auth_verificar_codigo)
-    app.router.add_get('/auth/verificar-sesion', auth_verificar_sesion)
-    app.router.add_get('/api/mis-torneos', api_mis_torneos)
-    app.router.add_get('/api/mis-decks', api_mis_decks)
-
-    app.router.add_get('/api/torneos-disponibles', api_torneos_disponibles)
-    app.router.add_get('/api/arquetipos', api_arquetipos)
-    app.router.add_post('/api/subir-deck', api_subir_deck)
-
-    return app
-
-
-async def iniciar_servidor_web():
-    app = crear_app()
-    runner = web.AppRunner(app)
-    await runner.setup()
-    port = int(os.environ.get("PORT", 8080))
-    site = web.TCPSite(runner, '0.0.0.0', port)
-    await site.start()
-
 async def api_mis_torneos(request):
     """Devuelve solo los torneos/resultados del usuario logueado."""
 
@@ -652,3 +609,113 @@ async def api_subir_deck(request):
     response = web.json_response({"ok": True, "mensaje": mensaje_validacion})
     response.headers['Access-Control-Allow-Origin'] = '*'
     return response
+
+async def api_estado_torneos(request):
+    """Torneos activos donde el usuario puede jugar, con su estado de inscripción/deck."""
+
+    session_token = request.query.get("session")
+    sesion = sesiones_activas.get(session_token) if session_token else None
+
+    if not sesion or time.time() > sesion["expira"]:
+        return web.json_response({"error": "Sesión no válida"}, status=401)
+
+    if _bot_instance is None:
+        return web.json_response({"error": "Servicio no disponible"}, status=503)
+
+    guild = _bot_instance.get_guild(config.GUILD_ID_ADMISION)
+    if not guild:
+        return web.json_response({"error": "Servicio no disponible"}, status=503)
+
+    miembro = guild.get_member(int(sesion["discord_id"]))
+    if not miembro:
+        return web.json_response({"error": "No se pudo verificar tu membresía"}, status=403)
+
+    try:
+        torneos = await obtener_estado_torneos_usuario(guild, miembro)
+    except Exception as e:
+        return web.json_response({"error": str(e)}, status=500)
+
+    response = web.json_response({"torneos": torneos})
+    response.headers['Access-Control-Allow-Origin'] = '*'
+    return response
+
+async def api_inscribirse(request):
+    """Inscribe al usuario logueado en un torneo activo."""
+
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "JSON inválido"}, status=400)
+
+    session_token = body.get("session")
+    sesion = sesiones_activas.get(session_token) if session_token else None
+
+    if not sesion or time.time() > sesion["expira"]:
+        return web.json_response({"error": "Sesión no válida"}, status=401)
+
+    codigo_torneo = str(body.get("codigo_torneo", "")).strip()
+    if not codigo_torneo:
+        return web.json_response({"error": "Falta el código del torneo"}, status=400)
+
+    if _bot_instance is None:
+        return web.json_response({"error": "Servicio no disponible"}, status=503)
+
+    guild = _bot_instance.get_guild(config.GUILD_ID_ADMISION)
+    if not guild:
+        return web.json_response({"error": "Servicio no disponible"}, status=503)
+
+    miembro = guild.get_member(int(sesion["discord_id"]))
+    if not miembro:
+        return web.json_response({"error": "No se pudo verificar tu membresía"}, status=403)
+
+    ok, mensaje = await inscribir_usuario_web(guild, miembro, codigo_torneo)
+
+    if not ok:
+        return web.json_response({"error": mensaje}, status=400)
+
+    # Anunciar en el canal público, igual que hace el comando de Discord
+    canal_anuncios = discord.utils.get(guild.text_channels, name="📰-cartelera‐torneos")
+    if canal_anuncios:
+        await canal_anuncios.send(f"📥 {miembro.mention} se ha inscrito en el torneo `{codigo_torneo}` (vía web).")
+
+    response = web.json_response({"ok": True, "mensaje": mensaje})
+    response.headers['Access-Control-Allow-Origin'] = '*'
+    return response
+
+# ============================================================
+# 8. SERVIDOR WEB — registro de rutas
+# ============================================================
+
+def crear_app():
+    app = web.Application()
+
+    app.router.add_get('/api/torneos', api_torneos)
+
+    app.router.add_post('/api/solicitar-acceso', api_solicitar_acceso)
+    app.router.add_route('OPTIONS', '/api/solicitar-acceso', handle_options)
+
+    app.router.add_get('/api/podcast', api_podcast)
+    app.router.add_get('/api/articulos', api_articulos)
+
+    app.router.add_post('/auth/solicitar-codigo', auth_solicitar_codigo)
+    app.router.add_post('/auth/verificar-codigo', auth_verificar_codigo)
+    app.router.add_get('/auth/verificar-sesion', auth_verificar_sesion)
+    app.router.add_get('/api/mis-torneos', api_mis_torneos)
+    app.router.add_get('/api/mis-decks', api_mis_decks)
+
+    app.router.add_get('/api/torneos-disponibles', api_torneos_disponibles)
+    app.router.add_get('/api/arquetipos', api_arquetipos)
+    app.router.add_post('/api/subir-deck', api_subir_deck)
+    app.router.add_get('/api/estado-torneos', api_estado_torneos)
+    app.router.add_post('/api/inscribirse', api_inscribirse)
+
+    return app
+
+
+async def iniciar_servidor_web():
+    app = crear_app()
+    runner = web.AppRunner(app)
+    await runner.setup()
+    port = int(os.environ.get("PORT", 8080))
+    site = web.TCPSite(runner, '0.0.0.0', port)
+    await site.start()

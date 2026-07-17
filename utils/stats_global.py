@@ -1,3 +1,4 @@
+######## stats-global.py #######
 import discord
 import asyncio
 import aiohttp
@@ -324,3 +325,5 @@ async def stats_global_handle(ctx):
     # Enviar análisis textual
     analisis_texto = analizar_trayectoria(resumen_global, jugador.display_name, ctx.guild)
     await ctx.author.send(analisis_texto)
+
+

@@ -1,4 +1,5 @@
-# tareas_diarias.py
+######## watchers.py #######
+
 from discord.ext import tasks, commands
 from datetime import datetime, timedelta, date, time as dtime
 import discord

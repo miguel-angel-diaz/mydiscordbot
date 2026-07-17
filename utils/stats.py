@@ -1,3 +1,4 @@
+######## stats.py #######
 import aiohttp
 import discord
 import asyncio
@@ -183,3 +184,5 @@ async def stats_handle(ctx):
 
     except asyncio.TimeoutError:
         await ctx.author.send("⌛ Tiempo agotado. Vuelve a usar `!stats`.")
+
+        

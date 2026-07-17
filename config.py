@@ -1,3 +1,5 @@
+######## config.py #######
+
 import os
 
 # Leer variables de entorno

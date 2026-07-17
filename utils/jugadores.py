@@ -1,3 +1,4 @@
+######## jugadores.py #######
 import aiohttp
 import discord
 import asyncio
@@ -11,7 +12,11 @@ import re
 import config
 import time
 
-from utils.torneos import actualizar_clasificacion_battle_handle, generar_codigo_unico, partidos_pendientes_handle
+from utils.torneos import (
+    actualizar_clasificacion_battle_handle, 
+    generar_codigo_unico, 
+    partidos_pendientes_handle
+)
 from utils.admin import moderador_permisos_handle
 from utils.commons import (
     borrar_mensaje_seguro,
@@ -24,7 +29,8 @@ from utils.commons import (
     obtener_deck_en_canal,
     validar_torneo_para_edicion,
     limpiar_deck_raw,
-    contar_cartas
+    contar_cartas,
+    tiene_rol_permitido
 )
 
 import config
@@ -388,10 +394,6 @@ async def nueva_peticion_handle(ctx, descripcion):
     except discord.Forbidden:
         await ctx.send(f"✅ Tu petición ha sido registrada con el código `{codigo}`, pero no pude enviarte mensaje privado.")
     
-
-def tiene_rol_permitido(member: discord.Member, roles_permitidos: set):
-    return any(role.name in roles_permitidos for role in member.roles)
-
 
 async def inscribirse_handler(ctx, codigo_torneo: str, usuario: discord.Member = None):
     # Eliminar mensaje original si es posible
@@ -2290,3 +2292,4 @@ async def reportar_resultado_battle_handle(ctx, codigo_battle: str = None, jugad
 
 async def best_decks(ctx, codigo_torneo: str = None, channel: str = None):
     await best_decks_handle(ctx, codigo_torneo, channel)
+

@@ -1,3 +1,4 @@
+######## events.py #######
 import discord
 from discord.ext import commands
 from datetime import datetime, timezone
@@ -416,3 +417,4 @@ async def member_join_handle(member, before, after):
 
         # Reiniciar el tiempo en el nuevo canal
         tiempos_entrada[member.id] = datetime.now(timezone.utc)
+

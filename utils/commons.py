@@ -1,3 +1,4 @@
+######## commons.py #######
 import asyncio
 import aiohttp
 import config
@@ -11,6 +12,7 @@ import time
 from datetime import datetime, timezone
 
 from difflib import get_close_matches
+
 
 async def borrar_mensaje_seguro(ctx):
     try:
@@ -1028,3 +1030,159 @@ def contar_cartas(lista_raw: str) -> int:
         except ValueError:
             continue
     return total
+
+async def obtener_torneos_activos_canal(guild):
+    """
+    Lee el canal #torneos-activos y devuelve la lista de torneos
+    anunciados, con su código, nivel y plazas máximas.
+    """
+
+    canal_torneos = discord.utils.get(guild.text_channels, name="torneos-activos")
+    if not canal_torneos:
+        return []
+
+    torneos = []
+
+    async for mensaje in canal_torneos.history(limit=100):
+        lineas = mensaje.content.splitlines()
+        codigo = None
+        nivel = "Todos"
+        total_maximo = None
+
+        for linea in lineas:
+            if "**Código:**" in linea:
+                codigo = linea.split("**Código:**")[-1].strip().strip("`")
+            if "Nivel:" in linea or "Roles permitidos:" in linea:
+                linea_limpia = linea.replace("*", "").lower()
+                if "nivel:" in linea_limpia:
+                    nivel = linea_limpia.split("nivel:")[-1].strip()
+                elif "roles permitidos:" in linea_limpia:
+                    nivel = linea_limpia.split("roles permitidos:")[-1].strip()
+            if linea.startswith("👥"):
+                try:
+                    total_maximo = int(linea.split("👥 **Jugadores:**")[-1].strip())
+                except ValueError:
+                    total_maximo = None
+
+        if not codigo:
+            continue
+
+        torneos.append({
+            "codigo": codigo,
+            "nivel": nivel.capitalize(),
+            "total_maximo": total_maximo,
+        })
+
+    return torneos
+
+
+async def obtener_estado_torneos_usuario(guild, member: discord.Member):
+    """
+    Para cada torneo activo que el usuario PUEDE jugar (según sus roles),
+    comprueba si ya está inscrito, cuántas plazas quedan, y si tiene
+    deck subido para ese torneo.
+    """
+
+    torneos_activos = await obtener_torneos_activos_canal(guild)
+    if not torneos_activos:
+        return []
+
+    decks_usuario = await obtener_decks_por_usuario(guild, str(member.id))
+    decks_por_torneo = {d["codigo_torneo"]: d for d in decks_usuario if d.get("codigo_torneo")}
+
+    resultado = []
+
+    async with aiohttp.ClientSession() as session:
+
+        for torneo in torneos_activos:
+
+            tipo_socios = "socio" in torneo["codigo"].lower() or torneo["nivel"].lower() == "socios"
+            roles_permitidos = config.ROLES_SOCIOS if tipo_socios else config.ROLES_TODOS
+
+            if not tiene_rol_permitido(member, roles_permitidos):
+                continue  # el usuario no puede jugar este torneo, no se lo mostramos
+
+            url_participantes = f"https://api.challonge.com/v1/tournaments/{torneo['codigo']}/participants.json"
+            async with session.get(
+                url_participantes,
+                auth=aiohttp.BasicAuth(config.CHALLONGE_USERNAME, config.CHALLONGE_API_KEY)
+            ) as resp:
+                if resp.status != 200:
+                    continue
+                participantes = await resp.json()
+
+            inscritos_ids = [p["participant"].get("name") for p in participantes]
+            total_inscritos = len(participantes)
+            inscrito = str(member.id) in inscritos_ids
+
+            plazas_restantes = None
+            if torneo["total_maximo"]:
+                plazas_restantes = torneo["total_maximo"] - total_inscritos
+
+            deck = decks_por_torneo.get(torneo["codigo"])
+
+            resultado.append({
+                "codigo": torneo["codigo"],
+                "nivel": torneo["nivel"],
+                "inscrito": inscrito,
+                "total_inscritos": total_inscritos,
+                "total_maximo": torneo["total_maximo"],
+                "plazas_restantes": plazas_restantes,
+                "deck_subido": bool(deck),
+                "deck_nombre": deck["nombre_deck"] if deck else None,
+            })
+
+    return resultado
+
+
+async def inscribir_usuario_web(guild, member: discord.Member, codigo_torneo: str):
+    """
+    Versión web (sin DMs) de la inscripción: valida roles y plazas,
+    e inscribe al usuario en Challonge. Devuelve (ok: bool, mensaje: str).
+    """
+
+    torneos_activos = await obtener_torneos_activos_canal(guild)
+    torneo = next((t for t in torneos_activos if t["codigo"] == codigo_torneo), None)
+
+    if not torneo:
+        return False, "Ese torneo ya no está activo o no se encontró."
+
+    tipo_socios = "socio" in codigo_torneo.lower() or torneo["nivel"].lower() == "socios"
+    roles_permitidos = config.ROLES_SOCIOS if tipo_socios else config.ROLES_TODOS
+
+    if not tiene_rol_permitido(member, roles_permitidos):
+        return False, "No tienes los roles necesarios para inscribirte a este torneo."
+
+    async with aiohttp.ClientSession() as session:
+
+        url_get = f"https://api.challonge.com/v1/tournaments/{codigo_torneo}/participants.json"
+        async with session.get(
+            url_get,
+            auth=aiohttp.BasicAuth(config.CHALLONGE_USERNAME, config.CHALLONGE_API_KEY)
+        ) as resp:
+            if resp.status != 200:
+                return False, "No se pudo comprobar los inscritos actuales."
+            participantes = await resp.json()
+
+        if str(member.id) in [p["participant"].get("name") for p in participantes]:
+            return False, "Ya estás inscrito en este torneo."
+
+        if torneo["total_maximo"] and len(participantes) >= torneo["total_maximo"]:
+            return False, "No quedan plazas disponibles para este torneo."
+
+        payload = {
+            "api_key": config.CHALLONGE_API_KEY,
+            "participant": {"name": str(member.id)}
+        }
+        url_post = f"https://api.challonge.com/v1/tournaments/{codigo_torneo}/participants.json"
+        async with session.post(
+            url_post, json=payload,
+            auth=aiohttp.BasicAuth(config.CHALLONGE_USERNAME, config.CHALLONGE_API_KEY)
+        ) as resp:
+            if resp.status not in (200, 201):
+                return False, "Error al inscribirte en Challonge."
+
+    return True, f"Te has inscrito correctamente en `{codigo_torneo}`."
+
+def tiene_rol_permitido(member: discord.Member, roles_permitidos: set):
+    return any(role.name in roles_permitidos for role in member.roles)
