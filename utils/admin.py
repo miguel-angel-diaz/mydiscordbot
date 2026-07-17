@@ -641,44 +641,29 @@ async def realizar_sorteo_handle(ctx, codigo: str):
 
 
 async def listar_torneos_handle(ctx):
+    """Lista los torneos disponibles en la caché para eliminar."""
     await borrar_mensaje_seguro(ctx)
-   
+
     if not await moderador_permisos_handle(ctx):
         return
 
-    await ctx.author.send("📋 Obteniendo lista de torneos...")
+    from utils.torneos_api import leer_cache
 
-    async with aiohttp.ClientSession() as session:
-        async with session.get(
-            "https://api.challonge.com/v1/tournaments.json",
-            auth=aiohttp.BasicAuth(config.CHALLONGE_USERNAME, config.CHALLONGE_API_KEY)
-        ) as resp:
-            if resp.status != 200:
-                await ctx.author.send("❌ Error al obtener torneos de Challonge.")
-                return
-            torneos = await resp.json()
-
-    # 🔹 Filtrar torneos válidos
-    torneos_validos = []
-    for t in torneos:
-        torneo = t["tournament"]
-        state = torneo.get("state")
-        open_matches = torneo.get("open_match_count", 0)
-
-        if state == "pending" or (state == "complete" and open_matches == 0):
-            torneos_validos.append(torneo)
-
-    if not torneos_validos:
-        await ctx.author.send("❌ No hay torneos válidos para eliminar.")
+    cache = leer_cache()
+    if not cache or not cache.get("torneos"):
+        await ctx.author.send("❌ No hay torneos en la caché. Usa `!actualizar-web` para generarla.")
         return
 
-    mensaje = "📋 **Torneos válidos para eliminar:**\n"
+    torneos = cache["torneos"]
+    if not torneos:
+        await ctx.author.send("❌ No hay torneos finalizados en la caché.")
+        return
 
-    for i, t in enumerate(torneos_validos):
-        mensaje += f"{i+1}. {t['name']} (Estado: {t['state']})\n"  # fallback a números normales
+    mensaje = "📋 **Torneos disponibles para eliminar:**\n"
+    for i, t in enumerate(torneos, 1):
+        mensaje += f"{i}. {t['nombre']} (Código: {t['codigo']}) - {t.get('fecha_fin', 'Sin fecha')}\n"
 
-    mensaje += "✏️ Escribe el número del torneo que deseas eliminar:"
-
+    mensaje += "\n✏️ Escribe el número del torneo que deseas eliminar:"
     await ctx.author.send(mensaje)
 
     def dm_check(m):
@@ -687,16 +672,16 @@ async def listar_torneos_handle(ctx):
     try:
         respuesta = await ctx.bot.wait_for("message", check=dm_check, timeout=90.0)
         seleccion = respuesta.content.strip()
-        if not seleccion.isdigit() or int(seleccion) < 1 or int(seleccion) > len(torneos_validos):
+        if not seleccion.isdigit() or int(seleccion) < 1 or int(seleccion) > len(torneos):
             await ctx.author.send("❌ Selección inválida. Cancelando.")
             return
-        torneo_elegido = torneos_validos[int(seleccion)-1]
+        torneo_elegido = torneos[int(seleccion) - 1]
     except asyncio.TimeoutError:
         await ctx.author.send("⏰ Tiempo agotado. Cancelando operación.")
         return
 
-    # 🔹 Confirmar eliminación
-    await ctx.author.send(f"⚠️ Estás a punto de eliminar el torneo `{torneo_elegido['name']}`. ¿Confirmas? (sí/no)")
+    # Confirmar eliminación
+    await ctx.author.send(f"⚠️ Estás a punto de eliminar el torneo `{torneo_elegido['nombre']}` (Código: {torneo_elegido['codigo']}). ¿Confirmas? (sí/no)")
     try:
         confirmacion = await ctx.bot.wait_for("message", check=dm_check, timeout=60.0)
         if confirmacion.content.lower() not in ["sí", "si", "s"]:
@@ -706,17 +691,17 @@ async def listar_torneos_handle(ctx):
         await ctx.author.send("⏰ Tiempo agotado. Cancelando operación.")
         return
 
-    # 🔹 Eliminar torneo
+    # Eliminar torneo en Challonge (usando el código)
     async with aiohttp.ClientSession() as session:
-        async with session.delete(
-            f"https://api.challonge.com/v1/tournaments/{torneo_elegido['id']}.json",
-            auth=aiohttp.BasicAuth(config.CHALLONGE_USERNAME, config.CHALLONGE_API_KEY)
-        ) as resp:
+        url_delete = f"https://api.challonge.com/v1/tournaments/{torneo_elegido['codigo']}.json"
+        async with session.delete(url_delete, auth=aiohttp.BasicAuth(config.CHALLONGE_USERNAME, config.CHALLONGE_API_KEY)) as resp:
             if resp.status == 200:
-                await ctx.author.send(f"✅ Torneo `{torneo_elegido['name']}` eliminado correctamente.")
+                await ctx.author.send(f"✅ Torneo `{torneo_elegido['nombre']}` eliminado correctamente.")
+                # Opcional: regenerar caché tras eliminar
+                from utils.torneos_api import regenerar_cache
+                await regenerar_cache(ctx.guild)
             else:
                 await ctx.author.send(f"❌ Error al eliminar el torneo. Status: {resp.status}")
-                
 async def nuevo_comunicado_handle(ctx, mensaje: str = None):
     await borrar_mensaje_seguro(ctx)
     

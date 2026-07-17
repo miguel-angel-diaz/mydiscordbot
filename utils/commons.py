@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 from difflib import get_close_matches
 
 
+
 async def borrar_mensaje_seguro(ctx):
     try:
         await ctx.message.delete()
@@ -828,186 +829,85 @@ async def calcular_clasificacion_torneo(guild, codigo_torneo: str):
 
 DECK_ID_REGEX = re.compile(r"\(ID:\s*(\d+)\)")
 
-
-def _parsear_embed_deck(embed: discord.Embed) -> dict | None:
-    """
-    Convierte un embed del canal 'submitted-decks' en un dict limpio.
-    Devuelve None si el embed no tiene la forma esperada de un deck.
-    """
-
-    campos = {f.name: f.value for f in embed.fields}
-
-    jugador_raw = campos.get("Jugador", "")
-    match_id = DECK_ID_REGEX.search(jugador_raw)
-    if not match_id:
-        return None  # no es un embed de deck reconocible
-
-    discord_id = match_id.group(1)
-
-    # Nombre del deck — quitamos el emoji/prefijo del título
-    titulo = embed.title or ""
-    nombre_deck = re.sub(r"^🃏\s*Deck (Subido|Editado):\s*", "", titulo).strip()
-    if not nombre_deck:
-        nombre_deck = titulo
-
-    # Código del torneo/deck — vienen en la description
-    descripcion = embed.description or ""
-    match_codigo = re.search(r"Código:\s*`([^`]+)`", descripcion)
-    match_torneo = re.search(r"Torneo:\s*`([^`]+)`", descripcion)
-
-    codigo_deck = match_codigo.group(1) if match_codigo else None
-    codigo_torneo = match_torneo.group(1) if match_torneo else None
-
-    return {
-        "nombre_deck": nombre_deck,
-        "codigo_deck": codigo_deck,
-        "codigo_torneo": codigo_torneo,
-        "discord_id": discord_id,
-        "archetype": campos.get("Archetype", "Desconocido"),
-        "decklist": campos.get("Decklist", ""),
-        "sideboard": campos.get("Sideboard", ""),
-        "edited": campos.get("edited", "0"),
-    }
-
-
-async def obtener_decks_por_usuario(guild, discord_id: str, limite: int = 500):
-    """
-    Recorre el canal 'submitted-decks' y devuelve todos los decks
-    subidos por un usuario concreto, identificado por su discord_id.
-    """
-
-    canal = discord.utils.get(guild.text_channels, name="submitted-decks")
-    if not canal:
-        return []
-
-    decks = []
-
-    async for mensaje in canal.history(limit=limite):
-        if not mensaje.embeds:
-            continue
-
-        for embed in mensaje.embeds:
-            deck = _parsear_embed_deck(embed)
-            if deck and deck["discord_id"] == discord_id:
-                decks.append(deck)
-
-    return decks
-
-async def obtener_torneos_disponibles_web(discord_id: str):
-    """
-    Versión web (sin DM) de obtener_torneo_usuario: devuelve la lista
-    de torneos NO completados en los que el usuario está inscrito.
-    """
-
-    url_torneos = "https://api.challonge.com/v1/tournaments.json?state=all"
-
-    async with aiohttp.ClientSession() as session:
-        async with session.get(
-            url_torneos,
-            auth=aiohttp.BasicAuth(config.CHALLONGE_USERNAME, config.CHALLONGE_API_KEY)
-        ) as resp:
-            if resp.status != 200:
-                raise Exception("Error al obtener la lista de torneos.")
-            torneos_raw = await resp.json()
-
-        torneos = []
-
-        for entry in torneos_raw:
-            t = entry.get("tournament", {})
-            estado = t.get("state")
-
-            if estado == "complete":
-                continue  # solo torneos activos/pendientes
-
-            tid = t.get("url") or str(t.get("id"))
-            nombre = t.get("name") or "(sin nombre)"
-
-            url_participantes = f"https://api.challonge.com/v1/tournaments/{tid}/participants.json"
-            async with session.get(
-                url_participantes,
-                auth=aiohttp.BasicAuth(config.CHALLONGE_USERNAME, config.CHALLONGE_API_KEY)
-            ) as p_resp:
-                if p_resp.status != 200:
-                    continue
-                participantes_data = await p_resp.json()
-                inscritos = [p["participant"].get("name") for p in participantes_data]
-
-                if discord_id not in inscritos:
-                    continue
-
-            torneos.append({"codigo": tid, "nombre": nombre, "estado": estado})
-
-    return torneos
-
-
 def obtener_lista_arquetipos():
     """Lista completa de arquetipos, para poblar un <select>/<datalist>."""
     return [a["nombre"] for a in config.ARQUETIPOS_PREMODERN]
 
-async def validar_torneo_para_edicion(codigo_torneo: str, author: discord.Member):
+async def obtener_info_torneo_canal(guild, codigo_torneo):
+    """
+    Busca en #torneos-activos el mensaje del torneo y devuelve información
+    (fecha_inicio, nivel, total_maximo) sin llamar a Challonge.
+    """
+    canal = discord.utils.get(guild.text_channels, name="torneos-activos")
+    if not canal:
+        return None
+    async for msg in canal.history(limit=100):
+        if codigo_torneo in msg.content:
+            lineas = msg.content.splitlines()
+            info = {}
+            for linea in lineas:
+                if "📅 Inicio:" in linea:
+                    info["fecha_inicio"] = linea.split("📅 Inicio:")[1].strip()
+                elif "🎯 Nivel:" in linea:
+                    info["nivel"] = linea.split("🎯 Nivel:")[1].strip()
+                elif "👥 Jugadores:" in linea:
+                    try:
+                        info["total_maximo"] = int(linea.split("👥 **Jugadores:**")[1].strip())
+                    except:
+                        pass
+            return info
+    return None
+
+async def validar_torneo_para_edicion(codigo_torneo: str, author: discord.Member, bot=None):
     """
     Valida que el usuario pueda editar su deck en el torneo.
+    Usa el estado y el canal #torneos-activos, sin llamar a Challonge.
     Retorna: (ok: bool, mensaje: str)
-    - ok=True: puede editar libremente (torneo no ha comenzado)
-    - ok=False: torneo ya comenzó (solo 1 edición permitida)
     """
-    async with aiohttp.ClientSession() as session:
-        # ✅ Verificar inscripción
-        url_get = f"https://api.challonge.com/v1/tournaments/{codigo_torneo}/participants.json"
-        async with session.get(url_get, auth=aiohttp.BasicAuth(config.CHALLONGE_USERNAME, config.CHALLONGE_API_KEY)) as resp:
-            if resp.status != 200:
-                return False, f"❌ No se pudo comprobar tu inscripción: {await resp.text()}"
+    from utils.torneos_estado import leer_estado
+    from datetime import datetime, timezone
+    import time
 
-            participantes = await resp.json()
-            inscrito = any(p["participant"]["name"] == str(author.id) for p in participantes)
-            if not inscrito:
-                return False, f"❌ No estás inscrito en el torneo `{codigo_torneo}`."
+    if bot is None:
+        bot = author._state._get_client()
 
-        # ✅ Verificar fecha de inicio (dentro de la misma sesión)
-        url_torneo = f"https://api.challonge.com/v1/tournaments/{codigo_torneo}.json"
-        async with session.get(url_torneo, auth=aiohttp.BasicAuth(config.CHALLONGE_USERNAME, config.CHALLONGE_API_KEY)) as resp:
-            if resp.status != 200:
-                return False, "❌ No se pudo obtener la información del torneo."
+    guild = author.guild
 
-            torneo_data = await resp.json()
-            fecha_inicio = torneo_data["tournament"].get("start_at")
+    # 1. Verificar inscripción desde el estado
+    estado = await leer_estado(bot)
+    torneo_estado = next((t for t in estado.get("torneos", []) if t.get("codigo") == codigo_torneo), None)
+    if not torneo_estado:
+        return False, f"❌ El torneo `{codigo_torneo}` no está activo o no existe en el estado."
 
-            if not fecha_inicio:
-                # Si no hay fecha de inicio configurada, permitir edición
-                return True, "✅ Sin fecha de inicio configurada. Edición permitida."
+    inscritos_ids = torneo_estado.get("inscritos_ids", [])
+    if str(author.id) not in inscritos_ids:
+        return False, f"❌ No estás inscrito en el torneo `{codigo_torneo}`."
 
-            # Convertir fecha ISO a timestamp en milisegundos
-            fecha_inicio_dt = datetime.fromisoformat(fecha_inicio.replace("Z", "+00:00"))
-            timestamp_inicio_ms = int(fecha_inicio_dt.timestamp() * 1000)
+    # 2. Verificar fecha de inicio desde el canal #torneos-activos
+    info_canal = await obtener_info_torneo_canal(guild, codigo_torneo)
+    if not info_canal:
+        # Si no hay info en el canal, pero está en el estado, permitimos edición (por si acaso)
+        return True, "✅ Torneo encontrado en el estado, pero sin fecha de inicio en el canal. Edición permitida."
 
-            # Obtener timestamp actual en milisegundos
-            timestamp_ahora_ms = int(time.time() * 1000)
+    fecha_inicio_str = info_canal.get("fecha_inicio")
+    if not fecha_inicio_str:
+        return True, "✅ Sin fecha de inicio configurada. Edición permitida."
 
-            # Calcular diferencia
-            diferencia_ms = timestamp_inicio_ms - timestamp_ahora_ms
-            diferencia_horas = diferencia_ms / (1000 * 3600)
-            diferencia_minutos = diferencia_ms / (1000 * 60)
-
-            # 📊 Log para debugging
-            print(f"🕐 Timestamp inicio (ms): {timestamp_inicio_ms}")
-            print(f"🕐 Timestamp ahora (ms): {timestamp_ahora_ms}")
-            print(f"🕐 Diferencia: {diferencia_horas:.2f} horas ({diferencia_minutos:.0f} minutos)")
-            print(f"🕐 Fecha inicio UTC: {datetime.fromtimestamp(timestamp_inicio_ms / 1000, tz=timezone.utc)}")
-            print(f"🕐 Fecha ahora UTC: {datetime.fromtimestamp(timestamp_ahora_ms / 1000, tz=timezone.utc)}")
-
-            # ❌ Verificar si el torneo ya comenzó
-            if timestamp_ahora_ms >= timestamp_inicio_ms:
-                tiempo_transcurrido = (timestamp_ahora_ms - timestamp_inicio_ms) / (1000 * 60)  # minutos
-                return False, f"❌ El torneo comenzó hace {int(tiempo_transcurrido)} minutos."
-
-            # ⚠️ Avisar si queda poco tiempo
-            if diferencia_horas < 1 and diferencia_horas > 0:
-                minutos_restantes = int(diferencia_minutos)
-                return True, f"⚠️ El torneo comienza en {minutos_restantes} minutos."
-
-            # ✅ Torneo no ha comenzado
-            return True, f"✅ El torneo comienza en {diferencia_horas:.1f} horas."
-        
+    # Convertir a timestamp (formato DD/MM/YYYY)
+    try:
+        fecha_inicio_dt = datetime.strptime(fecha_inicio_str, "%d/%m/%Y")
+        # Asumimos hora 00:00 UTC
+        timestamp_inicio = fecha_inicio_dt.replace(tzinfo=timezone.utc).timestamp()
+        timestamp_ahora = time.time()
+        if timestamp_ahora >= timestamp_inicio:
+            return False, f"❌ El torneo ya comenzó (inicio: {fecha_inicio_str})."
+        else:
+            horas_restantes = (timestamp_inicio - timestamp_ahora) / 3600
+            return True, f"✅ El torneo comienza en {horas_restantes:.1f} horas."
+    except Exception as e:
+        print(f"Error parseando fecha: {e}")
+        return True, "⚠️ No se pudo verificar la fecha de inicio. Edición permitida con precaución."
+    
 def limpiar_deck_raw(lista_raw: str) -> str:
     """Devuelve solo las líneas que empiezan con un número, eliminando encabezados y líneas vacías."""
     lineas_validas = []
@@ -1075,13 +975,11 @@ async def obtener_torneos_activos_canal(guild):
 
     return torneos
 
-
 async def obtener_estado_torneos_usuario(guild, member: discord.Member):
     """
-    Para cada torneo activo que el usuario PUEDE jugar (según sus roles),
-    comprueba si ya está inscrito, cuántas plazas quedan, y si tiene
-    deck subido para ese torneo.
+    Versión SIN llamadas a Challonge. Lee el estado desde el canal de estado.
     """
+    from utils.torneos_estado import leer_estado
 
     torneos_activos = await obtener_torneos_activos_canal(guild)
     if not torneos_activos:
@@ -1090,50 +988,36 @@ async def obtener_estado_torneos_usuario(guild, member: discord.Member):
     decks_usuario = await obtener_decks_por_usuario(guild, str(member.id))
     decks_por_torneo = {d["codigo_torneo"]: d for d in decks_usuario if d.get("codigo_torneo")}
 
+    # Leer estado completo (una sola vez)
+    estado = await leer_estado(guild._state._get_client())
+    torneos_estado = {t["codigo"]: t for t in estado.get("torneos", [])}
+
     resultado = []
+    for torneo in torneos_activos:
+        codigo = torneo["codigo"]
+        tipo_socios = "socio" in codigo.lower() or torneo["nivel"].lower() == "socios"
+        roles_permitidos = config.ROLES_SOCIOS if tipo_socios else config.ROLES_TODOS
+        if not tiene_rol_permitido(member, roles_permitidos):
+            continue
 
-    async with aiohttp.ClientSession() as session:
+        info_estado = torneos_estado.get(codigo, {})
+        inscritos_ids = info_estado.get("inscritos_ids", [])
+        total_inscritos = len(inscritos_ids)
+        total_maximo = torneo.get("total_maximo")
+        plazas_restantes = total_maximo - total_inscritos if total_maximo else None
 
-        for torneo in torneos_activos:
-
-            tipo_socios = "socio" in torneo["codigo"].lower() or torneo["nivel"].lower() == "socios"
-            roles_permitidos = config.ROLES_SOCIOS if tipo_socios else config.ROLES_TODOS
-
-            if not tiene_rol_permitido(member, roles_permitidos):
-                continue  # el usuario no puede jugar este torneo, no se lo mostramos
-
-            url_participantes = f"https://api.challonge.com/v1/tournaments/{torneo['codigo']}/participants.json"
-            async with session.get(
-                url_participantes,
-                auth=aiohttp.BasicAuth(config.CHALLONGE_USERNAME, config.CHALLONGE_API_KEY)
-            ) as resp:
-                if resp.status != 200:
-                    continue
-                participantes = await resp.json()
-
-            inscritos_ids = [p["participant"].get("name") for p in participantes]
-            total_inscritos = len(participantes)
-            inscrito = str(member.id) in inscritos_ids
-
-            plazas_restantes = None
-            if torneo["total_maximo"]:
-                plazas_restantes = torneo["total_maximo"] - total_inscritos
-
-            deck = decks_por_torneo.get(torneo["codigo"])
-
-            resultado.append({
-                "codigo": torneo["codigo"],
-                "nivel": torneo["nivel"],
-                "inscrito": inscrito,
-                "total_inscritos": total_inscritos,
-                "total_maximo": torneo["total_maximo"],
-                "plazas_restantes": plazas_restantes,
-                "deck_subido": bool(deck),
-                "deck_nombre": deck["nombre_deck"] if deck else None,
-            })
-
+        deck = decks_por_torneo.get(codigo)
+        resultado.append({
+            "codigo": codigo,
+            "nivel": torneo["nivel"],
+            "inscrito": str(member.id) in inscritos_ids,
+            "total_inscritos": total_inscritos,
+            "total_maximo": total_maximo,
+            "plazas_restantes": plazas_restantes,
+            "deck_subido": bool(deck),
+            "deck_nombre": deck["nombre_deck"] if deck else None,
+        })
     return resultado
-
 
 async def inscribir_usuario_web(guild, member: discord.Member, codigo_torneo: str):
     """
@@ -1186,3 +1070,116 @@ async def inscribir_usuario_web(guild, member: discord.Member, codigo_torneo: st
 
 def tiene_rol_permitido(member: discord.Member, roles_permitidos: set):
     return any(role.name in roles_permitidos for role in member.roles)
+
+def _parsear_embed_deck(embed: discord.Embed) -> dict | None:
+
+    campos = {f.name: f.value for f in embed.fields}
+
+    jugador_raw = campos.get("Jugador", "")
+    match_id = DECK_ID_REGEX.search(jugador_raw)
+    if not match_id:
+        return None
+
+    discord_id = match_id.group(1)
+
+    titulo = embed.title or ""
+    nombre_deck = re.sub(r"^🃏\s*Deck (Subido|Actualizado):\s*", "", titulo).strip()
+    if not nombre_deck:
+        nombre_deck = titulo
+
+    descripcion = embed.description or ""
+    match_codigo = re.search(r"Código:\s*`([^`]+)`", descripcion)
+    match_torneo = re.search(r"Torneo:\s*`([^`]+)`", descripcion)
+
+    codigo_deck = match_codigo.group(1) if match_codigo else None
+    codigo_torneo = match_torneo.group(1) if match_torneo else None
+
+    try:
+        edited = int(campos.get("Ediciones post-inicio", campos.get("edited", "0")).split("/")[0])
+    except (ValueError, AttributeError):
+        edited = 0
+
+    return {
+        "nombre_deck": nombre_deck,
+        "codigo_deck": codigo_deck,
+        "codigo_torneo": codigo_torneo,
+        "discord_id": discord_id,
+        "archetype": campos.get("Archetype", "Desconocido"),
+        "decklist": campos.get("Decklist", ""),
+        "sideboard": campos.get("Sideboard", ""),
+        "edited": edited,
+    }
+
+
+async def obtener_decks_por_usuario(guild, discord_id: str, limite: int = 500):
+
+    canal = discord.utils.get(guild.text_channels, name="submitted-decks")
+    if not canal:
+        return []
+
+    decks = []
+
+    async for mensaje in canal.history(limit=limite):
+        if not mensaje.embeds:
+            continue
+
+        for embed in mensaje.embeds:
+            deck = _parsear_embed_deck(embed)
+            if deck and deck["discord_id"] == discord_id:
+                deck["_mensaje"] = mensaje  # referencia para poder editarlo luego
+                decks.append(deck)
+
+    return decks
+
+
+async def editar_deck_web(guild, member: discord.Member, codigo_torneo: str, nombre_deck: str, archetype: str, decklist: str, sideboard: str):
+    """
+    Versión web (sin DMs) de editar_deck_handle: aplica exactamente las
+    mismas reglas de ediciones permitidas que el flujo de Discord.
+    """
+
+    codigo_deck = f"{codigo_torneo}_{member.id}"
+
+    decks = await obtener_decks_por_usuario(guild, str(member.id))
+    deck_actual = next((d for d in decks if d["codigo_deck"] == codigo_deck), None)
+
+    if not deck_actual:
+        return False, "No se encontró tu deck para este torneo. Debes subirlo primero."
+
+    ok_validacion, mensaje_validacion = await validar_torneo_para_edicion(codigo_torneo, member)
+
+    edited_actual = deck_actual["edited"]
+
+    if not ok_validacion:
+        if edited_actual >= 1:
+            return False, f"No puedes editar tu deck: ya usaste tu única edición disponible. {mensaje_validacion}"
+        nuevo_edited = edited_actual + 1
+    else:
+        nuevo_edited = edited_actual
+
+    color_embed = discord.Color.blue() if nuevo_edited == 0 else discord.Color.orange()
+
+    embed_final = discord.Embed(
+        title=f"🃏 Deck Actualizado: {nombre_deck}",
+        description=f"**Código:** `{codigo_deck}`\n**Torneo:** `{codigo_torneo}`",
+        color=color_embed
+    )
+    embed_final.add_field(name="Jugador", value=f"{member.mention} (ID: {member.id})", inline=False)
+    embed_final.add_field(name="Archetype", value=archetype, inline=False)
+    embed_final.add_field(name="Decklist", value=decklist[:1000], inline=False)
+    embed_final.add_field(name="Sideboard", value=sideboard[:1000], inline=False)
+    embed_final.add_field(name="Ediciones post-inicio", value=f"{nuevo_edited}/1", inline=False)
+
+    fecha_legible = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    embed_final.set_footer(text=f"Última edición: {fecha_legible} (vía web)")
+
+    mensaje = deck_actual["_mensaje"]
+
+    try:
+        await mensaje.edit(embed=embed_final)
+    except discord.NotFound:
+        return False, "No se pudo actualizar el deck (el mensaje original ya no existe). Contacta con un administrador."
+    except discord.Forbidden:
+        return False, "No tengo permisos para editar el mensaje del deck."
+
+    return True, mensaje_validacion

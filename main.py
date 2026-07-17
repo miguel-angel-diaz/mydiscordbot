@@ -3,9 +3,12 @@
 import discord
 from discord.ext import commands
 import asyncio
+import logging
+import os
+import unicodedata
 
-from utils.torneos_api import regenerar_cache, iniciar_servidor_web, set_bot_instance
-
+from utils.torneos_api import iniciar_servidor_web, set_bot_instance
+from utils.torneos_estado import sincronizar_estado_handle
 
 from utils.admin import (
   aplicar_out, 
@@ -64,15 +67,12 @@ from utils.events import (
 from utils.watchers import cargar_tareas;
 from utils.stats import stats_handle;
 from utils.commons import best_decks_handle;
-# from utils.stats_global import stats_global_handle;
-
-import config
-import os
-import unicodedata
-import webserver
 
 DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
 
+# Configurar logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -297,9 +297,6 @@ async def best_decks(ctx, codigo_torneo: str = None):
     """analiza los mejores decks de un torneo"""
     await best_decks_handle(ctx, codigo_torneo)
 
-
-
-
 #########################################################################################################
 
 ######################################### COMANDOS TORNEOS ##############################################
@@ -367,6 +364,14 @@ async def actualizar_web(ctx):
 
 
 
+@bot.command(name="sincronizar-estado")
+@commands.has_permissions(administrator=True)
+async def sincronizar_estado(ctx):
+    await sincronizar_estado_handle(ctx)
+
+
+
+
 #########################################################################################################
 
 @bot.command(name="mis-comandos",
@@ -380,9 +385,14 @@ async def on_ready():
     cargar_tareas(bot)
     asyncio.create_task(iniciar_servidor_web())
 
-    guild = bot.get_guild(config.GUILD_ID_ADMISION)
-    if guild:
-        payload = await regenerar_cache(guild)
+    # Cargar caché de torneos si existe (sin regenerar)
+    from utils.torneos_api import leer_cache
+    cache = leer_cache()
+    if cache:
+        print(f"✅ Caché de torneos cargada: {len(cache.get('torneos', []))} torneos")
+    else:
+        print("⚠️ No hay caché de torneos. Usa !actualizar-web para generarla.")
+
 
 @bot.event
 async def on_message_delete(message):

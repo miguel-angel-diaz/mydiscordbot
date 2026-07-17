@@ -12,6 +12,7 @@ import re
 import config
 import time
 
+from utils.torneos_estado import actualizar_torneo_estado
 from utils.torneos import (
     actualizar_clasificacion_battle_handle, 
     generar_codigo_unico, 
@@ -396,19 +397,17 @@ async def nueva_peticion_handle(ctx, descripcion):
     
 
 async def inscribirse_handler(ctx, codigo_torneo: str, usuario: discord.Member = None):
-    # Eliminar mensaje original si es posible
     await borrar_mensaje_seguro(ctx)
     if not await validar_canal_correcto(ctx, "preguntale-a-el-barbas", "!inscribirse"):
         return
-    
+
     if usuario and usuario != ctx.author:
         tiene_permiso = await moderador_permisos_handle(ctx)
         if not tiene_permiso:
             return
-    
+
     if not codigo_torneo:
         try:
-            # Recoger torneos disponibles en #torneos-activos
             canal_torneos = discord.utils.get(ctx.guild.text_channels, name="torneos-activos")
             if not canal_torneos:
                 await ctx.author.send("⚠️ No encontré el canal `#torneos-activos`.")
@@ -441,7 +440,6 @@ async def inscribirse_handler(ctx, codigo_torneo: str, usuario: discord.Member =
                 await ctx.author.send("⚠️ No hay torneos activos disponibles.")
                 return
 
-            # Mostrar lista con números
             mensaje_lista = "🎯 **Torneos disponibles:**\n"
             for idx, (codigo, nivel) in enumerate(torneos_disponibles, 1):
                 mensaje_lista += f"{idx}. `{codigo}` — Nivel: {nivel}\n"
@@ -449,7 +447,6 @@ async def inscribirse_handler(ctx, codigo_torneo: str, usuario: discord.Member =
 
             await ctx.author.send(mensaje_lista)
 
-            # Esperar respuesta con número
             def dm_check(m):
                 return m.author == ctx.author and isinstance(m.channel, discord.DMChannel)
 
@@ -470,6 +467,7 @@ async def inscribirse_handler(ctx, codigo_torneo: str, usuario: discord.Member =
         except discord.Forbidden:
             await ctx.send("❌ No puedo enviarte mensajes privados. Activa los DMs para continuar.")
             return
+
     apuntado = usuario or ctx.author
 
     tipo_torneo_socios = "socio" in codigo_torneo.lower()
@@ -479,7 +477,6 @@ async def inscribirse_handler(ctx, codigo_torneo: str, usuario: discord.Member =
         await ctx.author.send(f"❌ El usuario {apuntado.display_name} no tiene los roles necesarios para inscribirse a este torneo.")
         return
 
-    # Buscar canal de torneos activos
     canal_torneos = discord.utils.get(ctx.guild.text_channels, name="torneos-activos")
     if not canal_torneos:
         await ctx.author.send("⚠️ No encontré el canal `#torneos-activos` para extraer información del torneo.")
@@ -503,7 +500,7 @@ async def inscribirse_handler(ctx, codigo_torneo: str, usuario: discord.Member =
         await ctx.author.send(f"❌ El torneo `{codigo_torneo}` no está activo o no fue encontrado en `#torneos-activos`.")
         return
 
-    # Obtener participantes actuales desde Challonge
+    # Obtener participantes actuales desde Challonge y verificar plazas
     url_get = f"https://api.challonge.com/v1/tournaments/{codigo_torneo}/participants.json"
     async with aiohttp.ClientSession() as session:
         async with session.get(url_get, auth=aiohttp.BasicAuth(config.CHALLONGE_USERNAME, config.CHALLONGE_API_KEY)) as get_resp:
@@ -530,13 +527,31 @@ async def inscribirse_handler(ctx, codigo_torneo: str, usuario: discord.Member =
                     await ctx.author.send(f"❌ Error al inscribir al usuario: {error_text}")
                     return
 
+    # --- ACTUALIZAR ESTADO (guardar inscritos) ---
+    try:
+        # Obtener lista actualizada de participantes
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url_get, auth=aiohttp.BasicAuth(config.CHALLONGE_USERNAME, config.CHALLONGE_API_KEY)) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    inscritos_ids = [str(p["participant"]["name"]) for p in data]
+                    await actualizar_torneo_estado(ctx.bot, codigo_torneo, {
+                        "inscritos_ids": inscritos_ids,
+                        "nivel": "Socios" if tipo_torneo_socios else "Todos",
+                        "total_maximo": total_maximo
+                    })
+    except Exception as e:
+        print(f"⚠️ Error al actualizar estado de torneo: {e}")
+
     # Preguntar al jugador si quiere subir su deck
     try:
         await apuntado.send(
             f"✅ Estás inscrito en el torneo `{codigo_torneo}`.\n"
             f"¿Quieres subir tu deck ahora? Responde con `sí` o `no`."
         )
-        def dm_check(m): return m.author == apuntado and isinstance(m.channel, discord.DMChannel)
+        def dm_check(m):
+            return m.author == apuntado and isinstance(m.channel, discord.DMChannel)
+
         respuesta = await ctx.bot.wait_for("message", check=dm_check, timeout=90.0)
 
         if respuesta.content.lower() in ["sí", "si", "s"]:
@@ -546,10 +561,10 @@ async def inscribirse_handler(ctx, codigo_torneo: str, usuario: discord.Member =
     except (asyncio.TimeoutError, discord.Forbidden):
         await ctx.author.send("⚠️ No pude enviar el mensaje para subir deck. Podrás hacerlo más tarde con el comando adecuado.")
 
-   # Anunciar inscripción en canal público
+    # Anunciar inscripción en canal público
     canal_anuncios_torneos = discord.utils.get(ctx.guild.text_channels, name="📰-cartelera‐torneos")
     if canal_anuncios_torneos:
-        plazas_ocupadas = total_inscritos + 1  # el que acaba de inscribirse
+        plazas_ocupadas = total_inscritos + 1
         if total_maximo:
             plazas_restantes = total_maximo - plazas_ocupadas
             mensaje = (
@@ -563,11 +578,10 @@ async def inscribirse_handler(ctx, codigo_torneo: str, usuario: discord.Member =
         await ctx.author.send("⚠️ No encontré el canal `#📰-cartelera‐torneos` para anunciar la inscripción.")
 
 async def desinscribirse_handler(ctx, codigo_torneo: str, usuario: discord.Member = None):
-      # Eliminar mensaje original si es posible
     await borrar_mensaje_seguro(ctx)
     if not await validar_canal_correcto(ctx, "preguntale-a-el-barbas", "!desinscribirse"):
         return
-    
+
     if not codigo_torneo:
         codigo_torneo = await obtener_torneo_usuario(
             ctx,
@@ -575,17 +589,15 @@ async def desinscribirse_handler(ctx, codigo_torneo: str, usuario: discord.Membe
                             "Elige uno de los torneos en los que estás inscrito para desinscribirte:"
         )
         if not codigo_torneo:
-            return  # Si devuelve None, se cancela la operación
-    
+            return
+
     apuntado = usuario or ctx.author
 
-    # Si el autor quiere desinscribir a otro, requiere permisos de moderador
     if apuntado != ctx.author:
         tiene_permiso = await moderador_permisos_handle(ctx)
         if not tiene_permiso:
             return
 
-    # Buscar el ID del participante en Challonge
     url_get = f"https://api.challonge.com/v1/tournaments/{codigo_torneo}/participants.json"
     participant_id = None
     total_inscritos = 0
@@ -616,6 +628,19 @@ async def desinscribirse_handler(ctx, codigo_torneo: str, usuario: discord.Membe
                 await ctx.author.send(f"❌ Error al desinscribir: {error_text}")
                 return
 
+    # --- ACTUALIZAR ESTADO (guardar inscritos) ---
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url_get, auth=aiohttp.BasicAuth(config.CHALLONGE_USERNAME, config.CHALLONGE_API_KEY)) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    inscritos_ids = [str(p["participant"]["name"]) for p in data]
+                    await actualizar_torneo_estado(ctx.bot, codigo_torneo, {
+                        "inscritos_ids": inscritos_ids
+                    })
+    except Exception as e:
+        print(f"⚠️ Error al actualizar estado de torneo: {e}")
+
     await ctx.author.send(f"✅ {apuntado.display_name} ha sido desinscrito del torneo `{codigo_torneo}`.")
     if apuntado != ctx.author:
         try:
@@ -629,9 +654,7 @@ async def desinscribirse_handler(ctx, codigo_torneo: str, usuario: discord.Membe
             await ctx.author.send(
                 f"⚠️ No se pudo enviar el mensaje a {apuntado.display_name} por un error inesperado: {str(e)}"
             )
-        
 
-    # Buscar canal de torneos activos
     canal_torneos = discord.utils.get(ctx.guild.text_channels, name="torneos-activos")
     canal_anuncios_torneos = discord.utils.get(ctx.guild.text_channels, name="📰-cartelera‐torneos")
 
@@ -639,15 +662,13 @@ async def desinscribirse_handler(ctx, codigo_torneo: str, usuario: discord.Membe
         await ctx.author.send("⚠️ No se encontraron los canales `#torneos-activos` o `#inscripciones` para notificar.")
         return
 
-   
     total_maximo = None
-
     async for mensaje in canal_torneos.history(limit=100):
         if codigo_torneo in mensaje.content:
             for linea in mensaje.content.splitlines():
                 if linea.startswith("👥"):
                     try:
-                        total_maximo =int(linea.split("👥 **Jugadores:**")[-1].strip())
+                        total_maximo = int(linea.split("👥 **Jugadores:**")[-1].strip())
                     except ValueError:
                         total_maximo = None
             break
@@ -658,6 +679,7 @@ async def desinscribirse_handler(ctx, codigo_torneo: str, usuario: discord.Membe
             f"📤 {apuntado.mention} se ha desinscrito del torneo `{codigo_torneo}`.\n"
             f"🪑 Plazas disponibles: {plazas_disponibles}/{total_maximo}"
         )
+
     # 🔹 Eliminar deck enviado si existe en submitted-decks
     canal_submitted = discord.utils.get(ctx.guild.text_channels, name="submitted-decks")
     if canal_submitted:
@@ -665,35 +687,30 @@ async def desinscribirse_handler(ctx, codigo_torneo: str, usuario: discord.Membe
         async for mensaje in canal_submitted.history(limit=200):
             if mensaje.embeds:
                 for embed in mensaje.embeds:
-                    # Revisar título
                     if embed.title and codigo_deck in embed.title:
                         try:
                             await mensaje.delete()
-                            ctx.author.send(f"[INFO] Se eliminó el deck {codigo_deck} de submitted-decks")
-                        except discord.Forbidden:
-                            await ctx.author.send(f"⚠️ No tengo permisos para eliminar el deck `{codigo_deck}`.")
-                        except discord.HTTPException as e:
-                            await ctx.author.send(f"⚠️ Error al eliminar el deck `{codigo_deck}`: {str(e)}")
-                        break  # ya borramos el mensaje, pasamos al siguiente
-
-                    # Revisar descripción
-                    if embed.description and codigo_deck in embed.description:
-                        try:
-                            await mensaje.delete()
-                            ctx.author.send(f"[INFO] Se eliminó el deck {codigo_deck} de submitted-decks")
+                            await ctx.author.send(f"[INFO] Se eliminó el deck {codigo_deck} de submitted-decks")
                         except discord.Forbidden:
                             await ctx.author.send(f"⚠️ No tengo permisos para eliminar el deck `{codigo_deck}`.")
                         except discord.HTTPException as e:
                             await ctx.author.send(f"⚠️ Error al eliminar el deck `{codigo_deck}`: {str(e)}")
                         break
-
-                    # Revisar campos
+                    if embed.description and codigo_deck in embed.description:
+                        try:
+                            await mensaje.delete()
+                            await ctx.author.send(f"[INFO] Se eliminó el deck {codigo_deck} de submitted-decks")
+                        except discord.Forbidden:
+                            await ctx.author.send(f"⚠️ No tengo permisos para eliminar el deck `{codigo_deck}`.")
+                        except discord.HTTPException as e:
+                            await ctx.author.send(f"⚠️ Error al eliminar el deck `{codigo_deck}`: {str(e)}")
+                        break
                     if embed.fields:
                         for field in embed.fields:
                             if codigo_deck in field.value or codigo_deck in field.name:
                                 try:
                                     await mensaje.delete()
-                                    ctx.author.send(f"[INFO] Se eliminó el deck {codigo_deck} de submitted-decks")
+                                    await ctx.author.send(f"[INFO] Se eliminó el deck {codigo_deck} de submitted-decks")
                                 except discord.Forbidden:
                                     await ctx.author.send(f"⚠️ No tengo permisos para eliminar el deck `{codigo_deck}`.")
                                 except discord.HTTPException as e:

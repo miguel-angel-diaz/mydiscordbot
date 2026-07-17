@@ -21,10 +21,10 @@ from utils.commons import (
     limpiar_deck_raw,
     contar_cartas,
     obtener_lista_arquetipos,
-    obtener_torneos_disponibles_web,
     obtener_sugerencias_arquetipos,
     obtener_estado_torneos_usuario,
-    inscribir_usuario_web)
+    inscribir_usuario_web,
+    editar_deck_web)
 
 calcular_clasificacion = calcular_clasificacion_torneo
 
@@ -81,31 +81,36 @@ async def obtener_torneos_finalizados():
 # 3. CACHÉ — evita golpear Challonge/Discord en cada visita web
 # ============================================================
 
+# utils/torneos_api.py
+
 async def regenerar_cache(guild):
-    torneos = await obtener_torneos_finalizados()
+    try:
+        torneos = await obtener_torneos_finalizados()
+        resultado = []
+        for torneo in torneos:
+            try:
+                clasificacion = await calcular_clasificacion(guild, torneo["codigo"])
+                resultado.append({**torneo, "clasificacion": clasificacion})
+            except Exception as e:
+                continue
 
-    resultado = []
-    for torneo in torneos:
-        try:
-            clasificacion = await calcular_clasificacion(guild, torneo["codigo"])
-            resultado.append({**torneo, "clasificacion": clasificacion})
-        except Exception as e:
-            print(f"⚠️ Error procesando {torneo['codigo']}: {e}")
-            continue
+        payload = {
+            "actualizado": datetime.now(timezone.utc).isoformat(),
+            "torneos": resultado
+        }
 
-    payload = {
-        "actualizado": datetime.now(timezone.utc).isoformat(),
-        "torneos": resultado
-    }
+        os.makedirs("cache", exist_ok=True)
+        with open(config.CACHE_PATH, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
 
-    os.makedirs("cache", exist_ok=True)
-    with open(config.CACHE_PATH, "w", encoding="utf-8") as f:
-        json.dump(payload, f, ensure_ascii=False, indent=2)
+        print(f"✅ Caché regenerado con {len(resultado)} torneo(s).")
+        return payload
 
-    print(f"✅ Caché regenerado con {len(resultado)} torneo(s).")
-    return payload
-
-
+    except Exception as e:
+        print(f"❌ Error regenerando caché: {e}")
+        # Devolver un payload vacío para no romper el bot
+        return {"actualizado": datetime.now(timezone.utc).isoformat(), "torneos": []}
+    
 def leer_cache():
     if not os.path.exists(config.CACHE_PATH):
         return None
@@ -475,23 +480,44 @@ async def api_mis_decks(request):
     return response
 
 async def api_torneos_disponibles(request):
-    """Lista de torneos activos donde el usuario está inscrito, para el <select>."""
-
+    """
+    Lista de torneos activos donde el usuario está inscrito, para el <select>.
+    NO llama a Challonge, usa el estado del canal #torneos-estado.
+    """
     session_token = request.query.get("session")
     sesion = sesiones_activas.get(session_token) if session_token else None
 
     if not sesion or time.time() > sesion["expira"]:
         return web.json_response({"error": "Sesión no válida"}, status=401)
 
-    try:
-        torneos = await obtener_torneos_disponibles_web(sesion["discord_id"])
-    except Exception as e:
-        return web.json_response({"error": str(e)}, status=500)
+    if _bot_instance is None:
+        return web.json_response({"error": "Servicio no disponible"}, status=503)
 
-    response = web.json_response({"torneos": torneos})
+    guild = _bot_instance.get_guild(config.GUILD_ID_ADMISION)
+    if not guild:
+        return web.json_response({"error": "Servicio no disponible"}, status=503)
+
+    miembro = guild.get_member(int(sesion["discord_id"]))
+    if not miembro:
+        return web.json_response({"error": "No se pudo verificar tu membresía"}, status=403)
+
+    from utils.torneos_estado import leer_estado
+    estado = await leer_estado(_bot_instance)
+    torneos_estado = estado.get("torneos", [])
+
+    torneos_usuario = []
+    for t in torneos_estado:
+        if str(miembro.id) in t.get("inscritos_ids", []):
+            torneos_usuario.append({
+                "codigo": t.get("codigo"),
+                "nombre": t.get("nombre", "Torneo sin nombre"),
+                "estado": "activo",
+                "nivel": t.get("nivel", "todos")
+            })
+
+    response = web.json_response({"torneos": torneos_usuario})
     response.headers['Access-Control-Allow-Origin'] = '*'
     return response
-
 
 async def api_arquetipos(request):
     """Lista completa de arquetipos, para el <select>/<datalist>."""
@@ -668,15 +694,105 @@ async def api_inscribirse(request):
     if not miembro:
         return web.json_response({"error": "No se pudo verificar tu membresía"}, status=403)
 
+    # Llamada a la función de inscripción (que valida roles, plazas, y escribe en Challonge)
     ok, mensaje = await inscribir_usuario_web(guild, miembro, codigo_torneo)
 
     if not ok:
         return web.json_response({"error": mensaje}, status=400)
 
+    # --- ACTUALIZAR ESTADO (guardar inscritos) ---
+    try:
+        from utils.torneos_estado import actualizar_torneo_estado
+        # Obtener lista actualizada de participantes
+        url_get = f"https://api.challonge.com/v1/tournaments/{codigo_torneo}/participants.json"
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                url_get,
+                auth=aiohttp.BasicAuth(config.CHALLONGE_USERNAME, config.CHALLONGE_API_KEY)
+            ) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    inscritos_ids = [str(p["participant"]["name"]) for p in data]
+                    # Opcional: podríamos obtener nivel y total_maximo del estado previo o del canal
+                    await actualizar_torneo_estado(_bot_instance, codigo_torneo, {
+                        "inscritos_ids": inscritos_ids
+                    })
+                else:
+                    print(f"⚠️ No se pudo obtener lista de participantes para actualizar estado: {resp.status}")
+    except Exception as e:
+        # Si falla la actualización del estado, no bloqueamos la respuesta, solo lo registramos
+        print(f"⚠️ Error al actualizar estado de torneo en api_inscribirse: {e}")
+
     # Anunciar en el canal público, igual que hace el comando de Discord
     canal_anuncios = discord.utils.get(guild.text_channels, name="📰-cartelera‐torneos")
     if canal_anuncios:
         await canal_anuncios.send(f"📥 {miembro.mention} se ha inscrito en el torneo `{codigo_torneo}` (vía web).")
+
+    response = web.json_response({"ok": True, "mensaje": mensaje})
+    response.headers['Access-Control-Allow-Origin'] = '*'
+    return response
+
+async def api_editar_deck(request):
+
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "JSON inválido"}, status=400)
+
+    session_token = body.get("session")
+    sesion = sesiones_activas.get(session_token) if session_token else None
+
+    if not sesion or time.time() > sesion["expira"]:
+        return web.json_response({"error": "Sesión no válida"}, status=401)
+
+    codigo_torneo = str(body.get("codigo_torneo", "")).strip()
+    nombre_deck = str(body.get("nombre_deck", "")).strip()
+    archetype_input = str(body.get("archetype", "")).strip()
+    decklist_raw = str(body.get("decklist", "")).strip()
+    sideboard_raw = str(body.get("sideboard", "")).strip()
+
+    if not codigo_torneo or not nombre_deck or not archetype_input or not decklist_raw:
+        return web.json_response({"error": "Faltan campos obligatorios"}, status=400)
+
+    if _bot_instance is None:
+        return web.json_response({"error": "Servicio no disponible"}, status=503)
+
+    guild = _bot_instance.get_guild(config.GUILD_ID_ADMISION)
+    if not guild:
+        return web.json_response({"error": "Servicio no disponible"}, status=503)
+
+    discord_id = sesion["discord_id"]
+    miembro = guild.get_member(int(discord_id))
+    if not miembro:
+        return web.json_response({"error": "No se pudo verificar tu membresía en el servidor"}, status=403)
+
+    sugerencias = obtener_sugerencias_arquetipos(archetype_input, max_sugerencias=5)
+    coincidencia_exacta = next((s for s in sugerencias if s.lower() == archetype_input.lower()), None)
+
+    if not coincidencia_exacta:
+        return web.json_response({
+            "error": "Arquetipo no reconocido",
+            "sugerencias": sugerencias
+        }, status=400)
+
+    archetype = coincidencia_exacta
+
+    decklist = limpiar_deck_raw(decklist_raw)
+    if contar_cartas(decklist) < 60:
+        return web.json_response({"error": "La decklist debe tener al menos 60 cartas"}, status=400)
+
+    if sideboard_raw.lower() in ("", "n/a"):
+        sideboard = "N/A"
+    else:
+        sideboard_limpio = limpiar_deck_raw(sideboard_raw)
+        if contar_cartas(sideboard_limpio) > 15:
+            return web.json_response({"error": "La sideboard no puede superar 15 cartas"}, status=400)
+        sideboard = sideboard_limpio
+
+    ok, mensaje = await editar_deck_web(guild, miembro, codigo_torneo, nombre_deck, archetype, decklist, sideboard)
+
+    if not ok:
+        return web.json_response({"error": mensaje}, status=400)
 
     response = web.json_response({"ok": True, "mensaje": mensaje})
     response.headers['Access-Control-Allow-Origin'] = '*'
@@ -717,6 +833,9 @@ def crear_app():
 
     app.router.add_post('/api/inscribirse', api_inscribirse)
     app.router.add_route('OPTIONS', '/api/inscribirse', handle_options)
+
+    app.router.add_post('/api/editar-deck', api_editar_deck)
+    app.router.add_route('OPTIONS', '/api/editar-deck', handle_options)
 
     return app
 

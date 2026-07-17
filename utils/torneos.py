@@ -107,12 +107,14 @@ async def new_tournament_assistance_handle(ctx, *, args=None):
         await ctx.author.send("⏰ Tiempo agotado. Ejecuta `!nuevo-torneo` para intentarlo de nuevo.")
 
 
+# utils/torneos.py
+
 async def nuevo_torneo(ctx, *, args: str):
     await borrar_mensaje_seguro(ctx)
 
     if not await validar_canal_correcto(ctx, "preguntale-a-el-barbas", "!nuevo-torneo"):
         return
-    
+
     # Solo moderadores
     if not await moderador_permisos_handle(ctx):
         return
@@ -146,7 +148,6 @@ async def nuevo_torneo(ctx, *, args: str):
     # 🟦  CASO ESPECIAL: BATTLE ROYALE (NO CHALLONGE)
     # -------------------------------------------------------------
     if tipo.lower() in ("battle royale", "battle"):
-        
         codigo = generar_codigo_unico()
         codigo_slug = f"br{slugify_challonge(formato)}{codigo}"
 
@@ -175,6 +176,17 @@ async def nuevo_torneo(ctx, *, args: str):
                 f"🔒 Nivel: {nivel}"
             )
 
+        # --- AÑADIR AL ESTADO (BATTLE ROYALE) ---
+        try:
+            from utils.torneos_estado import actualizar_torneo_estado
+            await actualizar_torneo_estado(ctx.bot, codigo_slug, {
+                "nivel": nivel,
+                "total_maximo": jugadores,
+                "inscritos_ids": []
+            })
+        except Exception as e:
+            print(f"⚠️ Error al añadir battle royale al estado: {e}")
+
         # Confirmación al creador
         await ctx.author.send(
             f"✅ Torneo Battle Royale creado correctamente.\n"
@@ -183,7 +195,7 @@ async def nuevo_torneo(ctx, *, args: str):
             f"📌 No se ha creado ningún torneo en Challonge (modo Battle Royale)."
         )
         return
-    
+
     # -------------------------------------------------------------
     # 🟥 RESTO DE TORNEOS (SE USA CHALLONGE)
     # -------------------------------------------------------------
@@ -227,6 +239,17 @@ async def nuevo_torneo(ctx, *, args: str):
                 data = await response.json()
                 tournament = data["tournament"]
 
+                # --- AÑADIR AL ESTADO (CHALLONGE) ---
+                try:
+                    from utils.torneos_estado import actualizar_torneo_estado
+                    await actualizar_torneo_estado(ctx.bot, url_challonge, {
+                        "nivel": nivel,
+                        "total_maximo": jugadores,
+                        "inscritos_ids": []
+                    })
+                except Exception as e:
+                    print(f"⚠️ Error al añadir torneo al estado: {e}")
+
                 # DM al creador
                 await ctx.author.send(
                     f"✅ Torneo creado con éxito: **{tournament['name']}**\n"
@@ -260,7 +283,6 @@ async def nuevo_torneo(ctx, *, args: str):
             else:
                 error = await response.text()
                 await ctx.author.send(f"❌ Error al crear el torneo:\n```{error}```")
-
 
 async def iniciar_torneo_handle(ctx, codigo_torneo: str):
     await borrar_mensaje_seguro(ctx)
@@ -893,19 +915,40 @@ async def forzar_ronda_handle(ctx, codigo_torneo: str):
     await ctx.send(f"🤝 Se han forzado {empates_aplicados} empates en la ronda {ronda_actual}.")
     await partidos_pendientes_handle(ctx, codigo_torneo, 'torneos')
 
+# utils/torneos.py
+
 async def finalizar_torneo_handle(ctx, codigo_torneo: str):
+    """
+    Finaliza un torneo en Challonge, limpia canales, anuncia y elimina el torneo del estado.
+    """
     # 0️⃣ Llamar a la API de Challonge para finalizar el torneo
     url_finalize = f"https://api.challonge.com/v1/tournaments/{codigo_torneo}/finalize.json"
     async with aiohttp.ClientSession() as session:
-        async with session.post(url_finalize, auth=aiohttp.BasicAuth(config.CHALLONGE_USERNAME, config.CHALLONGE_API_KEY)) as resp:
+        async with session.post(
+            url_finalize,
+            auth=aiohttp.BasicAuth(config.CHALLONGE_USERNAME, config.CHALLONGE_API_KEY)
+        ) as resp:
             if resp.status == 200:
                 await ctx.send(f"✅ Torneo `{codigo_torneo}` marcado como finalizado en Challonge.")
             else:
                 texto_error = await resp.text()
-                await ctx.send(f"⚠️ No se pudo finalizar el torneo `{codigo_torneo}` en Challonge. "
-                               f"Status: {resp.status}, Response: {texto_error}")
+                await ctx.send(
+                    f"⚠️ No se pudo finalizar el torneo `{codigo_torneo}` en Challonge. "
+                    f"Status: {resp.status}, Response: {texto_error}"
+                )
+                # Aunque falle la finalización en Challonge, igual eliminamos del estado
+                # para que no quede huérfano. Pero podríamos optar por no hacerlo si falla.
+                # Lo dejamos como fallback.
 
-    # 1️⃣ Limpiar los canales definidos
+    # --- ELIMINAR DEL ESTADO (independientemente de si Challonge respondió ok) ---
+    try:
+        from utils.torneos_estado import eliminar_torneo_estado
+        await eliminar_torneo_estado(ctx.bot, codigo_torneo)
+        print(f"🗑️ Torneo `{codigo_torneo}` eliminado del estado.")
+    except Exception as e:
+        print(f"⚠️ Error al eliminar torneo del estado: {e}")
+
+    # 1️⃣ Limpiar los canales definidos (los mensajes que hacían referencia al torneo)
     canales_a_limpiar = [
         "🍺-quién‐se‐lleva‐la‐ronda",
         "🍸-citas‐a‐ciegas"
@@ -919,11 +962,12 @@ async def finalizar_torneo_handle(ctx, codigo_torneo: str):
         try:
             def filtro(msg):
                 return codigo_torneo in msg.content
+            # Purga solo los mensajes que contienen el código del torneo
             await canal.purge(check=filtro)
         except Exception as e:
             await ctx.send(f"⚠️ No se pudo limpiar el canal `{nombre_canal}`: {e}")
 
-    # 2️⃣ Enviar anuncio al canal #anuncios
+    # 2️⃣ Enviar anuncio al canal de anuncios
     canal_anuncios = discord.utils.get(ctx.guild.text_channels, name="📰-cartelera‐torneos")
     if canal_anuncios:
         try:
@@ -935,9 +979,8 @@ async def finalizar_torneo_handle(ctx, codigo_torneo: str):
         except Exception as e:
             await ctx.send(f"⚠️ No se pudo enviar el mensaje en `#anuncios`: {e}")
 
-    # 3️⃣ Publicar clasificación final
+    # 3️⃣ Publicar clasificación final (esto actualiza el mensaje en el canal de ranking)
     await actualizar_clasificacion_handle(ctx, codigo_torneo, True)
-
 async def actualizar_clasificacion_battle_handle(ctx, codigo_battle: str):
     await borrar_mensaje_seguro(ctx)
 
