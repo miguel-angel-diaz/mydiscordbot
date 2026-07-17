@@ -1,6 +1,7 @@
 ######## torneos_api.py #######
 
 import aiohttp
+import aiohttp_cors
 import discord
 import json
 import os
@@ -690,24 +691,31 @@ def crear_app():
     app = web.Application()
 
     app.router.add_get('/api/torneos', api_torneos)
-
     app.router.add_post('/api/solicitar-acceso', api_solicitar_acceso)
-    app.router.add_route('OPTIONS', '/api/solicitar-acceso', handle_options)
-
     app.router.add_get('/api/podcast', api_podcast)
     app.router.add_get('/api/articulos', api_articulos)
-
     app.router.add_post('/auth/solicitar-codigo', auth_solicitar_codigo)
     app.router.add_post('/auth/verificar-codigo', auth_verificar_codigo)
     app.router.add_get('/auth/verificar-sesion', auth_verificar_sesion)
     app.router.add_get('/api/mis-torneos', api_mis_torneos)
     app.router.add_get('/api/mis-decks', api_mis_decks)
-
     app.router.add_get('/api/torneos-disponibles', api_torneos_disponibles)
     app.router.add_get('/api/arquetipos', api_arquetipos)
     app.router.add_post('/api/subir-deck', api_subir_deck)
     app.router.add_get('/api/estado-torneos', api_estado_torneos)
     app.router.add_post('/api/inscribirse', api_inscribirse)
+
+    cors = aiohttp_cors.setup(app, defaults={
+        "*": aiohttp_cors.ResourceOptions(
+            allow_credentials=True,
+            expose_headers="*",
+            allow_headers="*",
+            allow_methods="*",
+        )
+    })
+
+    for route in list(app.router.routes()):
+        cors.add(route)
 
     return app
 
