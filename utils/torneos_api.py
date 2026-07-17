@@ -1,7 +1,6 @@
 ######## torneos_api.py #######
 
 import aiohttp
-import aiohttp_cors
 import discord
 import json
 import os
