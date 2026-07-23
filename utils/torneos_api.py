@@ -1,5 +1,4 @@
-######## torneos_api.py #######
-
+# utils/torneos_api.py
 import aiohttp
 import discord
 import json
@@ -14,8 +13,8 @@ import feedparser
 
 import config
 from utils.commons import (
-    buscar_usuario_en_servidor, 
-    calcular_clasificacion_torneo, 
+    buscar_usuario_en_servidor,
+    calcular_clasificacion_torneo,
     obtener_decks_por_usuario,
     validar_torneo_para_edicion,
     limpiar_deck_raw,
@@ -44,6 +43,26 @@ def set_bot_instance(bot):
     módulo pueda acceder a bot.get_guild() sin importarlo directamente."""
     global _bot_instance
     _bot_instance = bot
+
+
+# ============================================================
+# 0. MIDDLEWARE CORS GLOBAL
+# ============================================================
+
+@web.middleware
+async def cors_middleware(request, handler):
+    """Middleware que añade CORS a todas las respuestas, incluso errores."""
+    try:
+        response = await handler(request)
+    except Exception as e:
+        # Capturar cualquier excepción y devolver error 500 con CORS
+        print(f"❌ Error en API: {e}")
+        response = web.json_response({"error": "Error interno del servidor"}, status=500)
+    # Añadir cabeceras CORS a cualquier respuesta
+    response.headers['Access-Control-Allow-Origin'] = '*'
+    response.headers['Access-Control-Allow-Methods'] = 'POST, GET, OPTIONS, PUT, DELETE'
+    response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
+    return response
 
 
 # ============================================================
@@ -80,8 +99,6 @@ async def obtener_torneos_finalizados():
 # ============================================================
 # 3. CACHÉ — evita golpear Challonge/Discord en cada visita web
 # ============================================================
-
-# utils/torneos_api.py
 
 async def regenerar_cache(guild):
     try:
@@ -126,10 +143,7 @@ async def api_torneos(request):
     data = leer_cache()
     if data is None:
         return web.json_response({"error": "Caché no disponible todavía"}, status=503)
-
-    response = web.json_response(data)
-    response.headers['Access-Control-Allow-Origin'] = '*'
-    return response
+    return web.json_response(data)
 
 
 # ============================================================
@@ -177,9 +191,7 @@ async def api_solicitar_acceso(request):
 
     await canal.send(embed=embed)
 
-    response = web.json_response({"ok": True})
-    response.headers['Access-Control-Allow-Origin'] = '*'
-    return response
+    return web.json_response({"ok": True})
 
 
 # ============================================================
@@ -256,9 +268,7 @@ async def auth_solicitar_codigo(request):
             status=400
         )
 
-    response = web.json_response({"ok": True, "mensaje": "Código enviado por Discord"})
-    response.headers['Access-Control-Allow-Origin'] = '*'
-    return response
+    return web.json_response({"ok": True, "mensaje": "Código enviado por Discord"})
 
 
 async def auth_verificar_codigo(request):
@@ -294,13 +304,11 @@ async def auth_verificar_codigo(request):
 
     del codigos_pendientes[nombre]
 
-    response = web.json_response({
+    return web.json_response({
         "ok": True,
         "session": session_token,
         "username": pendiente["username"],
     })
-    response.headers['Access-Control-Allow-Origin'] = '*'
-    return response
 
 
 async def auth_verificar_sesion(request):
@@ -313,12 +321,10 @@ async def auth_verificar_sesion(request):
     if not sesion or time.time() > sesion["expira"]:
         return web.json_response({"autenticado": False})
 
-    response = web.json_response({
+    return web.json_response({
         "autenticado": True,
         "username": sesion["username"],
     })
-    response.headers['Access-Control-Allow-Origin'] = '*'
-    return response
 
 
 # ============================================================
@@ -377,10 +383,7 @@ async def api_podcast(request):
         episodios = await obtener_ultimos_episodios()
     except Exception as e:
         return web.json_response({"error": str(e)}, status=503)
-
-    response = web.json_response({"episodios": episodios})
-    response.headers['Access-Control-Allow-Origin'] = '*'
-    return response
+    return web.json_response({"episodios": episodios})
 
 
 async def api_articulos(request):
@@ -388,24 +391,21 @@ async def api_articulos(request):
         articulos = await obtener_ultimos_articulos()
     except Exception as e:
         return web.json_response({"error": str(e)}, status=503)
-
-    response = web.json_response({"articulos": articulos})
-    response.headers['Access-Control-Allow-Origin'] = '*'
-    return response
+    return web.json_response({"articulos": articulos})
 
 
 async def handle_options(request):
     return web.Response(headers={
         'Access-Control-Allow-Origin': '*',
-        'Access-Control-Allow-Methods': 'POST, GET, OPTIONS',
-        'Access-Control-Allow-Headers': 'Content-Type',
+        'Access-Control-Allow-Methods': 'POST, GET, OPTIONS, PUT, DELETE',
+        'Access-Control-Allow-Headers': 'Content-Type, Authorization',
     })
+
 
 async def api_mis_torneos(request):
     """Devuelve solo los torneos/resultados del usuario logueado."""
 
     session_token = request.query.get("session")
-
     sesion = sesiones_activas.get(session_token) if session_token else None
 
     if not sesion or time.time() > sesion["expira"]:
@@ -441,90 +441,99 @@ async def api_mis_torneos(request):
     # Ordenamos por fecha, más reciente primero
     mis_resultados.sort(key=lambda x: x["fecha_fin"] or "", reverse=True)
 
-    response = web.json_response({
+    return web.json_response({
         "username": sesion["username"],
         "torneos": mis_resultados,
     })
-    response.headers['Access-Control-Allow-Origin'] = '*'
-    return response
+
 
 async def api_mis_decks(request):
     """Devuelve los decks del usuario logueado."""
 
-    session_token = request.query.get("session")
-
-    sesion = sesiones_activas.get(session_token) if session_token else None
-
-    if not sesion or time.time() > sesion["expira"]:
-        return web.json_response({"error": "Sesión no válida"}, status=401)
-
-    discord_id = sesion["discord_id"]
-
-    if _bot_instance is None:
-        return web.json_response({"error": "Servicio no disponible"}, status=503)
-
-    guild = _bot_instance.get_guild(config.GUILD_ID_ADMISION)
-    if not guild:
-        return web.json_response({"error": "Servicio no disponible"}, status=503)
-
     try:
-        decks = await obtener_decks_por_usuario(guild, discord_id)
-    except Exception as e:
-        return web.json_response({"error": str(e)}, status=500)
+        session_token = request.query.get("session")
+        sesion = sesiones_activas.get(session_token) if session_token else None
 
-    response = web.json_response({
-        "username": sesion["username"],
-        "decks": decks,
-    })
-    response.headers['Access-Control-Allow-Origin'] = '*'
-    return response
+        if not sesion or time.time() > sesion["expira"]:
+            return web.json_response({"error": "Sesión no válida"}, status=401)
+
+        discord_id = sesion["discord_id"]
+
+        if _bot_instance is None:
+            return web.json_response({"error": "Servicio no disponible"}, status=503)
+
+        guild = _bot_instance.get_guild(config.GUILD_ID_ADMISION)
+        if not guild:
+            return web.json_response({"error": "Servidor no encontrado"}, status=404)
+
+        miembro = guild.get_member(int(discord_id))
+        if not miembro:
+            return web.json_response({"error": "No eres miembro del servidor"}, status=403)
+
+        # Intentar obtener decks con manejo de errores
+        try:
+            decks = await obtener_decks_por_usuario(guild, discord_id)
+        except Exception as e:
+            print(f"❌ Error obteniendo decks: {e}")
+            return web.json_response({"error": f"Error al leer decks: {str(e)}"}, status=500)
+
+        return web.json_response({
+            "username": sesion["username"],
+            "decks": decks,
+        })
+
+    except Exception as e:
+        print(f"❌ Error inesperado en api_mis_decks: {e}")
+        return web.json_response({"error": f"Error inesperado: {str(e)}"}, status=500)
+
 
 async def api_torneos_disponibles(request):
     """
     Lista de torneos activos donde el usuario está inscrito, para el <select>.
     NO llama a Challonge, usa el estado del canal #torneos-estado.
     """
-    session_token = request.query.get("session")
-    sesion = sesiones_activas.get(session_token) if session_token else None
+    try:
+        session_token = request.query.get("session")
+        sesion = sesiones_activas.get(session_token) if session_token else None
 
-    if not sesion or time.time() > sesion["expira"]:
-        return web.json_response({"error": "Sesión no válida"}, status=401)
+        if not sesion or time.time() > sesion["expira"]:
+            return web.json_response({"error": "Sesión no válida"}, status=401)
 
-    if _bot_instance is None:
-        return web.json_response({"error": "Servicio no disponible"}, status=503)
+        if _bot_instance is None:
+            return web.json_response({"error": "Servicio no disponible"}, status=503)
 
-    guild = _bot_instance.get_guild(config.GUILD_ID_ADMISION)
-    if not guild:
-        return web.json_response({"error": "Servicio no disponible"}, status=503)
+        guild = _bot_instance.get_guild(config.GUILD_ID_ADMISION)
+        if not guild:
+            return web.json_response({"error": "Servicio no disponible"}, status=503)
 
-    miembro = guild.get_member(int(sesion["discord_id"]))
-    if not miembro:
-        return web.json_response({"error": "No se pudo verificar tu membresía"}, status=403)
+        miembro = guild.get_member(int(sesion["discord_id"]))
+        if not miembro:
+            return web.json_response({"error": "No se pudo verificar tu membresía"}, status=403)
 
-    from utils.torneos_estado import leer_estado
-    estado = await leer_estado(_bot_instance)
-    torneos_estado = estado.get("torneos", [])
+        from utils.torneos_estado import leer_estado
+        estado = await leer_estado(_bot_instance)
+        torneos_estado = estado.get("torneos", [])
 
-    torneos_usuario = []
-    for t in torneos_estado:
-        if str(miembro.id) in t.get("inscritos_ids", []):
-            torneos_usuario.append({
-                "codigo": t.get("codigo"),
-                "nombre": t.get("nombre", "Torneo sin nombre"),
-                "estado": "activo",
-                "nivel": t.get("nivel", "todos")
-            })
+        torneos_usuario = []
+        for t in torneos_estado:
+            if str(miembro.id) in t.get("inscritos_ids", []):
+                torneos_usuario.append({
+                    "codigo": t.get("codigo"),
+                    "nombre": t.get("nombre", "Torneo sin nombre"),
+                    "estado": "activo",
+                    "nivel": t.get("nivel", "todos")
+                })
 
-    response = web.json_response({"torneos": torneos_usuario})
-    response.headers['Access-Control-Allow-Origin'] = '*'
-    return response
+        return web.json_response({"torneos": torneos_usuario})
+
+    except Exception as e:
+        print(f"❌ Error en api_torneos_disponibles: {e}")
+        return web.json_response({"error": f"Error: {str(e)}"}, status=500)
+
 
 async def api_arquetipos(request):
     """Lista completa de arquetipos, para el <select>/<datalist>."""
-
-    response = web.json_response({"arquetipos": obtener_lista_arquetipos()})
-    response.headers['Access-Control-Allow-Origin'] = '*'
-    return response
+    return web.json_response({"arquetipos": obtener_lista_arquetipos()})
 
 
 async def api_subir_deck(request):
@@ -579,7 +588,7 @@ async def api_subir_deck(request):
     archetype = coincidencia_exacta
 
     # Validar que el torneo aún permite subir decks
-    ok, mensaje_validacion = await validar_torneo_para_edicion(codigo_torneo, miembro)
+    ok, mensaje_validacion = await validar_torneo_para_edicion(codigo_torneo, miembro, _bot_instance)
     if not ok:
         return web.json_response({"error": mensaje_validacion}, status=400)
 
@@ -632,38 +641,37 @@ async def api_subir_deck(request):
     except Exception:
         pass
 
-    response = web.json_response({"ok": True, "mensaje": mensaje_validacion})
-    response.headers['Access-Control-Allow-Origin'] = '*'
-    return response
+    return web.json_response({"ok": True, "mensaje": mensaje_validacion})
+
 
 async def api_estado_torneos(request):
     """Torneos activos donde el usuario puede jugar, con su estado de inscripción/deck."""
 
-    session_token = request.query.get("session")
-    sesion = sesiones_activas.get(session_token) if session_token else None
-
-    if not sesion or time.time() > sesion["expira"]:
-        return web.json_response({"error": "Sesión no válida"}, status=401)
-
-    if _bot_instance is None:
-        return web.json_response({"error": "Servicio no disponible"}, status=503)
-
-    guild = _bot_instance.get_guild(config.GUILD_ID_ADMISION)
-    if not guild:
-        return web.json_response({"error": "Servicio no disponible"}, status=503)
-
-    miembro = guild.get_member(int(sesion["discord_id"]))
-    if not miembro:
-        return web.json_response({"error": "No se pudo verificar tu membresía"}, status=403)
-
     try:
+        session_token = request.query.get("session")
+        sesion = sesiones_activas.get(session_token) if session_token else None
+
+        if not sesion or time.time() > sesion["expira"]:
+            return web.json_response({"error": "Sesión no válida"}, status=401)
+
+        if _bot_instance is None:
+            return web.json_response({"error": "Servicio no disponible"}, status=503)
+
+        guild = _bot_instance.get_guild(config.GUILD_ID_ADMISION)
+        if not guild:
+            return web.json_response({"error": "Servicio no disponible"}, status=503)
+
+        miembro = guild.get_member(int(sesion["discord_id"]))
+        if not miembro:
+            return web.json_response({"error": "No se pudo verificar tu membresía"}, status=403)
+
         torneos = await obtener_estado_torneos_usuario(guild, miembro)
+        return web.json_response({"torneos": torneos})
+
     except Exception as e:
+        print(f"❌ Error en api_estado_torneos: {e}")
         return web.json_response({"error": str(e)}, status=500)
 
-    response = web.json_response({"torneos": torneos})
-    response.headers['Access-Control-Allow-Origin'] = '*'
-    return response
 
 async def api_inscribirse(request):
     """Inscribe al usuario logueado en un torneo activo."""
@@ -703,7 +711,6 @@ async def api_inscribirse(request):
     # --- ACTUALIZAR ESTADO (guardar inscritos) ---
     try:
         from utils.torneos_estado import actualizar_torneo_estado
-        # Obtener lista actualizada de participantes
         url_get = f"https://api.challonge.com/v1/tournaments/{codigo_torneo}/participants.json"
         async with aiohttp.ClientSession() as session:
             async with session.get(
@@ -713,27 +720,23 @@ async def api_inscribirse(request):
                 if resp.status == 200:
                     data = await resp.json()
                     inscritos_ids = [str(p["participant"]["name"]) for p in data]
-                    # Opcional: podríamos obtener nivel y total_maximo del estado previo o del canal
                     await actualizar_torneo_estado(_bot_instance, codigo_torneo, {
                         "inscritos_ids": inscritos_ids
                     })
                 else:
                     print(f"⚠️ No se pudo obtener lista de participantes para actualizar estado: {resp.status}")
     except Exception as e:
-        # Si falla la actualización del estado, no bloqueamos la respuesta, solo lo registramos
         print(f"⚠️ Error al actualizar estado de torneo en api_inscribirse: {e}")
 
-    # Anunciar en el canal público, igual que hace el comando de Discord
+    # Anunciar en el canal público
     canal_anuncios = discord.utils.get(guild.text_channels, name="📰-cartelera‐torneos")
     if canal_anuncios:
         await canal_anuncios.send(f"📥 {miembro.mention} se ha inscrito en el torneo `{codigo_torneo}` (vía web).")
 
-    response = web.json_response({"ok": True, "mensaje": mensaje})
-    response.headers['Access-Control-Allow-Origin'] = '*'
-    return response
+    return web.json_response({"ok": True, "mensaje": mensaje})
+
 
 async def api_editar_deck(request):
-
     try:
         body = await request.json()
     except Exception:
@@ -794,19 +797,17 @@ async def api_editar_deck(request):
     if not ok:
         return web.json_response({"error": mensaje}, status=400)
 
-    response = web.json_response({"ok": True, "mensaje": mensaje})
-    response.headers['Access-Control-Allow-Origin'] = '*'
-    return response
+    return web.json_response({"ok": True, "mensaje": mensaje})
+
 
 # ============================================================
 # 8. SERVIDOR WEB — registro de rutas
 # ============================================================
 
 def crear_app():
-    app = web.Application()
+    app = web.Application(middlewares=[cors_middleware])  # <-- Añadir middleware
 
     app.router.add_get('/api/torneos', api_torneos)
-
     app.router.add_post('/api/solicitar-acceso', api_solicitar_acceso)
     app.router.add_route('OPTIONS', '/api/solicitar-acceso', handle_options)
 

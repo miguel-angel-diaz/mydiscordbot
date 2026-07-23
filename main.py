@@ -64,6 +64,17 @@ from utils.events import (
   member_join_handle
 )
 
+from utils.swiss_handle import (
+    swiss_nuevo_handle,
+    swiss_inscribir_handle,
+    swiss_desinscribir_handle,
+    swiss_iniciar_handle,
+    swiss_reportar_handle,
+    swiss_clasificacion_handle,
+    swiss_siguiente_ronda_handle,
+    swiss_eliminar_handle
+)
+
 from utils.watchers import cargar_tareas;
 from utils.stats import stats_handle;
 from utils.commons import best_decks_handle;
@@ -368,6 +379,46 @@ async def actualizar_web(ctx):
 @commands.has_permissions(administrator=True)
 async def sincronizar_estado(ctx):
     await sincronizar_estado_handle(ctx)
+
+
+
+#####################################################################################################
+@bot.command(name="nuevo-swiss")
+@commands.has_permissions(administrator=True)
+async def nuevo_swiss(ctx, codigo: str, nombre: str, max_jugadores: int, nivel: str = "todos"):
+    await swiss_nuevo_handle(ctx, codigo, nombre, max_jugadores, nivel)
+
+@bot.command(name="inscribir-swiss")
+async def inscribir_swiss(ctx, codigo: str):
+    await swiss_inscribir_handle(ctx, codigo)
+
+@bot.command(name="desinscribir-swiss")
+async def desinscribir_swiss(ctx, codigo: str):
+    await swiss_desinscribir_handle(ctx, codigo)
+
+@bot.command(name="iniciar-swiss")
+@commands.has_permissions(administrator=True)
+async def iniciar_swiss(ctx, codigo: str):
+    await swiss_iniciar_handle(ctx, codigo)
+
+@bot.command(name="reportar-swiss")
+async def reportar_swiss(ctx, codigo: str, jugador1: discord.Member, resultado: str, jugador2: discord.Member):
+    await swiss_reportar_handle(ctx, codigo, jugador1, resultado, jugador2)
+
+@bot.command(name="clasificacion-swiss")
+async def clasificacion_swiss(ctx, codigo: str):
+    await swiss_clasificacion_handle(ctx, codigo)
+
+@bot.command(name="siguiente-ronda-swiss")
+@commands.has_permissions(administrator=True)
+async def siguiente_ronda_swiss(ctx, codigo: str):
+    await swiss_siguiente_ronda_handle(ctx, codigo)
+
+@bot.command(name="eliminar-swiss")
+@commands.has_permissions(administrator=True)
+async def eliminar_swiss(ctx, codigo: str):
+    await swiss_eliminar_handle(ctx, codigo)
+#####################################################################################################
 
 
 
