@@ -609,37 +609,20 @@ async def api_inscribirse(request):
     if not miembro:
         return web.json_response({"error": "No se pudo verificar tu membresía"}, status=403)
 
+    # Usar la nueva función (sin Challonge)
     ok, mensaje = await inscribir_usuario_web(guild, miembro, codigo_torneo)
 
     if not ok:
         return web.json_response({"error": mensaje}, status=400)
 
-    # --- ACTUALIZAR ESTADO ---
-    try:
-        from utils.torneos_estado import actualizar_torneo_estado
-        url_get = f"https://api.challonge.com/v1/tournaments/{codigo_torneo}/participants.json"
-        async with aiohttp.ClientSession() as session:
-            async with session.get(
-                url_get,
-                auth=aiohttp.BasicAuth(config.CHALLONGE_USERNAME, config.CHALLONGE_API_KEY)
-            ) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    inscritos_ids = [str(p["participant"]["name"]) for p in data]
-                    await actualizar_torneo_estado(_bot_instance, codigo_torneo, {
-                        "inscritos_ids": inscritos_ids
-                    })
-                else:
-                    print(f"⚠️ No se pudo obtener lista de participantes para actualizar estado: {resp.status}")
-    except Exception as e:
-        print(f"⚠️ Error al actualizar estado de torneo en api_inscribirse: {e}")
-
+    # Anunciar en el canal público
     canal_anuncios = discord.utils.get(guild.text_channels, name="📰-cartelera‐torneos")
     if canal_anuncios:
         await canal_anuncios.send(f"📥 {miembro.mention} se ha inscrito en el torneo `{codigo_torneo}` (vía web).")
 
-    return web.json_response({"ok": True, "mensaje": mensaje})
-
+    response = web.json_response({"ok": True, "mensaje": mensaje})
+    response.headers['Access-Control-Allow-Origin'] = '*'
+    return response
 async def api_editar_deck(request):
     try:
         body = await request.json()

@@ -1019,52 +1019,45 @@ async def obtener_estado_torneos_usuario(guild, member: discord.Member):
         })
     return resultado
 
+# utils/commons.py
+
 async def inscribir_usuario_web(guild, member: discord.Member, codigo_torneo: str):
     """
-    Versión web (sin DMs) de la inscripción: valida roles y plazas,
-    e inscribe al usuario en Challonge. Devuelve (ok: bool, mensaje: str).
+    Versión SIN Challonge: inscribe al usuario en el torneo usando el estado del canal.
+    Devuelve (ok: bool, mensaje: str).
     """
+    from utils.torneos_estado import leer_estado, guardar_estado
 
-    torneos_activos = await obtener_torneos_activos_canal(guild)
-    torneo = next((t for t in torneos_activos if t["codigo"] == codigo_torneo), None)
+    # 1. Leer el estado completo
+    estado = await leer_estado(guild._state._get_client())  # pasamos el bot
+    torneos_estado = estado.get("torneos", [])
+    torneo = next((t for t in torneos_estado if t.get("codigo") == codigo_torneo), None)
 
     if not torneo:
-        return False, "Ese torneo ya no está activo o no se encontró."
+        return False, "Ese torneo no está activo o no se encontró en el estado."
 
-    tipo_socios = "socio" in codigo_torneo.lower() or torneo["nivel"].lower() == "socios"
-    roles_permitidos = config.ROLES_SOCIOS if tipo_socios else config.ROLES_TODOS
-
+    # 2. Validar roles (nivel)
+    nivel = torneo.get("nivel", "todos").lower()
+    roles_permitidos = config.ROLES_SOCIOS if nivel == "socios" else config.ROLES_TODOS
     if not tiene_rol_permitido(member, roles_permitidos):
         return False, "No tienes los roles necesarios para inscribirte a este torneo."
 
-    async with aiohttp.ClientSession() as session:
+    # 3. Verificar si ya está inscrito
+    inscritos_ids = torneo.get("inscritos_ids", [])
+    if str(member.id) in inscritos_ids:
+        return False, "Ya estás inscrito en este torneo."
 
-        url_get = f"https://api.challonge.com/v1/tournaments/{codigo_torneo}/participants.json"
-        async with session.get(
-            url_get,
-            auth=aiohttp.BasicAuth(config.CHALLONGE_USERNAME, config.CHALLONGE_API_KEY)
-        ) as resp:
-            if resp.status != 200:
-                return False, "No se pudo comprobar los inscritos actuales."
-            participantes = await resp.json()
+    # 4. Verificar plazas
+    total_maximo = torneo.get("total_maximo")
+    if total_maximo and len(inscritos_ids) >= total_maximo:
+        return False, "No quedan plazas disponibles para este torneo."
 
-        if str(member.id) in [p["participant"].get("name") for p in participantes]:
-            return False, "Ya estás inscrito en este torneo."
+    # 5. Añadir al usuario
+    inscritos_ids.append(str(member.id))
+    torneo["inscritos_ids"] = inscritos_ids
 
-        if torneo["total_maximo"] and len(participantes) >= torneo["total_maximo"]:
-            return False, "No quedan plazas disponibles para este torneo."
-
-        payload = {
-            "api_key": config.CHALLONGE_API_KEY,
-            "participant": {"name": str(member.id)}
-        }
-        url_post = f"https://api.challonge.com/v1/tournaments/{codigo_torneo}/participants.json"
-        async with session.post(
-            url_post, json=payload,
-            auth=aiohttp.BasicAuth(config.CHALLONGE_USERNAME, config.CHALLONGE_API_KEY)
-        ) as resp:
-            if resp.status not in (200, 201):
-                return False, "Error al inscribirte en Challonge."
+    # 6. Guardar el estado actualizado
+    await guardar_estado(guild._state._get_client(), estado)
 
     return True, f"Te has inscrito correctamente en `{codigo_torneo}`."
 

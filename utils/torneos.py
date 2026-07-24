@@ -179,7 +179,8 @@ async def nuevo_torneo(ctx, *, args: str):
         # --- AÑADIR AL ESTADO (BATTLE ROYALE) ---
         try:
             from utils.torneos_estado import actualizar_torneo_estado
-            await actualizar_torneo_estado(ctx.bot, codigo_slug, {
+            await actualizar_torneo_estado(ctx.bot, url_challonge, {
+                "nombre": nombre,          # <-- AÑADIR ESTO
                 "nivel": nivel,
                 "total_maximo": jugadores,
                 "inscritos_ids": []
