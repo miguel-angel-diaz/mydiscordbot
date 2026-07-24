@@ -78,39 +78,35 @@ async def obtener_inscritos_ids(bot, codigo_torneo) -> List[str]:
   return []
 
 async def sincronizar_estado_handle(ctx):
-  """Sincroniza el estado de torneos activos desde Challonge y lo guarda en el canal de estado."""
-  await ctx.author.send("🔄 Sincronizando estado de torneos...")
 
-  from utils.torneos_estado import guardar_estado, actualizar_torneo_estado
-  from utils.commons import obtener_torneos_activos_canal
 
-  guild = ctx.guild
-  torneos_activos = await obtener_torneos_activos_canal(guild)
-  if not torneos_activos:
-      await ctx.author.send("❌ No hay torneos activos en el canal #torneos-activos.")
-      return
+    """Sincroniza el estado de torneos activos SIN llamar a Challonge."""
+    await ctx.author.send("🔄 Sincronizando estado de torneos desde #torneos-activos...")
 
-  torneos_estado = []
-  async with aiohttp.ClientSession() as session:
-      for torneo in torneos_activos:
-          codigo = torneo["codigo"]
-          url = f"https://api.challonge.com/v1/tournaments/{codigo}/participants.json"
-          async with session.get(url, auth=aiohttp.BasicAuth(config.CHALLONGE_USERNAME, config.CHALLONGE_API_KEY)) as resp:
-              if resp.status == 200:
-                  data = await resp.json()
-                  inscritos_ids = [str(p["participant"]["name"]) for p in data]
-                  torneos_estado.append({
-                      "codigo": codigo,
-                      "nivel": torneo["nivel"],
-                      "total_maximo": torneo["total_maximo"],
-                      "inscritos_ids": inscritos_ids,
-                  })
-              else:
-                  await ctx.author.send(f"⚠️ Error obteniendo participantes de {codigo} (status {resp.status})")
+    from utils.torneos_estado import guardar_estado
+    from utils.commons import obtener_torneos_activos_canal
 
-  # Guardar en el canal de estado
-  await guardar_estado(ctx.bot, {"torneos": torneos_estado})
-  await ctx.author.send(f"✅ Estado sincronizado con {len(torneos_estado)} torneos activos.")
+    guild = ctx.guild
+    torneos_activos = await obtener_torneos_activos_canal(guild)
+    if not torneos_activos:
+        await ctx.author.send("❌ No hay torneos activos en el canal #torneos-activos.")
+        return
+
+    # Crear estado SIN llamar a Challonge
+    torneos_estado = []
+    for torneo in torneos_activos:
+        torneos_estado.append({
+            "codigo": torneo["codigo"],
+            "nombre": torneo.get("nombre", "Torneo sin nombre"),
+            "nivel": torneo["nivel"],
+            "total_maximo": torneo["total_maximo"],
+            "inscritos_ids": []  # Vacío, se irá llenando con inscripciones
+        })
+
+    # Guardar en el canal de estado
+    await guardar_estado(ctx.bot, {"torneos": torneos_estado})
+    await ctx.author.send(f"✅ Estado sincronizado con {len(torneos_estado)} torneos activos (sin participantes).")
+
 
 async def obtener_torneos_activos_estado(bot):
     """Devuelve la lista de torneos activos desde el estado (sin llamar a Challonge)."""

@@ -932,26 +932,25 @@ def contar_cartas(lista_raw: str) -> int:
     return total
 
 async def obtener_torneos_activos_canal(guild):
-    """
-    Lee el canal #torneos-activos y devuelve la lista de torneos
-    anunciados, con su código, nivel y plazas máximas.
-    """
-
     canal_torneos = discord.utils.get(guild.text_channels, name="torneos-activos")
     if not canal_torneos:
         return []
 
     torneos = []
-
     async for mensaje in canal_torneos.history(limit=100):
         lineas = mensaje.content.splitlines()
         codigo = None
+        nombre = None
         nivel = "Todos"
         total_maximo = None
 
         for linea in lineas:
-            if "**Código:**" in linea:
-                codigo = linea.split("**Código:**")[-1].strip().strip("`")
+            if "🏷️ Código:" in linea:
+                codigo = linea.split("🏷️ Código:")[-1].strip().strip("`")
+            if "🎮 **Torneo creado:**" in linea:
+                nombre = linea.split("🎮 **Torneo creado:**")[-1].strip()
+            elif "🏷️ **Nombre:**" in linea:
+                nombre = linea.split("🏷️ **Nombre:**")[-1].strip()
             if "Nivel:" in linea or "Roles permitidos:" in linea:
                 linea_limpia = linea.replace("*", "").lower()
                 if "nivel:" in linea_limpia:
@@ -969,12 +968,12 @@ async def obtener_torneos_activos_canal(guild):
 
         torneos.append({
             "codigo": codigo,
+            "nombre": nombre or "Torneo sin nombre",
             "nivel": nivel.capitalize(),
             "total_maximo": total_maximo,
         })
 
     return torneos
-
 async def obtener_estado_torneos_usuario(guild, member: discord.Member):
     """
     Versión SIN llamadas a Challonge. Lee el estado desde el canal de estado.
