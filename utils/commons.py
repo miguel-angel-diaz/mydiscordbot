@@ -1111,14 +1111,18 @@ def _parsear_embed_deck(embed: discord.Embed) -> dict | None:
     }
 
 
-async def obtener_decks_por_usuario(guild, discord_id: str, limite: int = 500):
+# utils/commons.py
 
+async def obtener_decks_por_usuario(guild, discord_id: str, limite: int = 500, include_message: bool = False):
+    """
+    Obtiene los decks de un usuario desde el canal 'submitted-decks'.
+    Si include_message es False, no incluye el objeto _mensaje (no serializable).
+    """
     canal = discord.utils.get(guild.text_channels, name="submitted-decks")
     if not canal:
         return []
 
     decks = []
-
     async for mensaje in canal.history(limit=limite):
         if not mensaje.embeds:
             continue
@@ -1126,7 +1130,9 @@ async def obtener_decks_por_usuario(guild, discord_id: str, limite: int = 500):
         for embed in mensaje.embeds:
             deck = _parsear_embed_deck(embed)
             if deck and deck["discord_id"] == discord_id:
-                deck["_mensaje"] = mensaje  # referencia para poder editarlo luego
+                if include_message:
+                    deck["_mensaje"] = mensaje  # referencia para edición posterior
+                # Si no se pide _mensaje, no lo añadimos
                 decks.append(deck)
 
     return decks

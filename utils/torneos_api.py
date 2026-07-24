@@ -390,14 +390,16 @@ async def api_mis_torneos(request):
         "torneos": mis_resultados,
     })
 
+
 async def api_mis_decks(request):
+    """Devuelve los decks del usuario logueado."""
     session_token = request.query.get("session")
     sesion = sesiones_activas.get(session_token) if session_token else None
 
     if not sesion or time.time() > sesion["expira"]:
         return web.json_response({"error": "Sesión no válida"}, status=401)
 
-    discord_id = sesion["discord_id"]
+    discord_id = sesion["discord_id"]  # ya es un string
 
     if _bot_instance is None:
         return web.json_response({"error": "Servicio no disponible"}, status=503)
@@ -406,24 +408,18 @@ async def api_mis_decks(request):
     if not guild:
         return web.json_response({"error": "Servicio no disponible"}, status=503)
 
-    # Obtener el miembro del gremio usando el ID de Discord
-    member = guild.get_member(int(discord_id))
-    if not member:
-        return web.json_response({"error": "No se pudo verificar tu membresía"}, status=403)
-
     try:
-        decks = await obtener_decks_por_usuario(guild, str(member.id), include_message=True)
-        # Eliminar el campo _mensaje que no es JSON serializable
-        for deck in decks:
-            deck.pop("_mensaje", None)
+        # Llamamos sin include_message para que no devuelva objetos no serializables
+        decks = await obtener_decks_por_usuario(guild, discord_id, include_message=False)
     except Exception as e:
         return web.json_response({"error": str(e)}, status=500)
 
-    return web.json_response({
+    response = web.json_response({
         "username": sesion["username"],
         "decks": decks,
     })
-
+    response.headers['Access-Control-Allow-Origin'] = '*'
+    return response
 async def api_torneos_disponibles(request):
     session_token = request.query.get("session")
     sesion = sesiones_activas.get(session_token) if session_token else None
