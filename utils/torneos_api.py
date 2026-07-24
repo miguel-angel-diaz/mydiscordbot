@@ -406,6 +406,11 @@ async def api_mis_decks(request):
     if not guild:
         return web.json_response({"error": "Servicio no disponible"}, status=503)
 
+    # Obtener el miembro del gremio usando el ID de Discord
+    member = guild.get_member(int(discord_id))
+    if not member:
+        return web.json_response({"error": "No se pudo verificar tu membresía"}, status=403)
+
     try:
         decks = await obtener_decks_por_usuario(guild, str(member.id), include_message=True)
         # Eliminar el campo _mensaje que no es JSON serializable
