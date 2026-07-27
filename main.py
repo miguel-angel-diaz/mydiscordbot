@@ -65,14 +65,14 @@ from utils.events import (
 )
 
 from utils.swiss_handle import (
-    swiss_nuevo_handle,
-    swiss_inscribir_handle,
-    swiss_desinscribir_handle,
-    swiss_iniciar_handle,
-    swiss_reportar_handle,
-    swiss_clasificacion_handle,
-    swiss_siguiente_ronda_handle,
-    swiss_eliminar_handle
+    swiss_nuevo_asistente_handle,
+    swiss_inscribir_asistente_handle,
+    swiss_desinscribir_asistente_handle,
+    swiss_iniciar_asistente_handle,
+    swiss_reportar_asistente_handle,
+    swiss_clasificacion_asistente_handle,
+    swiss_siguiente_ronda_asistente_handle,
+    swiss_eliminar_asistente_handle
 )
 
 from utils.watchers import cargar_tareas;
@@ -383,41 +383,45 @@ async def sincronizar_estado(ctx):
 
 
 #####################################################################################################
+# main.py (o donde tengas los comandos)
+
 @bot.command(name="nuevo-swiss")
 @commands.has_permissions(administrator=True)
-async def nuevo_swiss(ctx, codigo: str, nombre: str, max_jugadores: int, nivel: str = "todos"):
-    await swiss_nuevo_handle(ctx, codigo, nombre, max_jugadores, nivel)
+async def nuevo_swiss(ctx):
+    await swiss_nuevo_asistente_handle(ctx)
 
 @bot.command(name="inscribir-swiss")
-async def inscribir_swiss(ctx, codigo: str):
-    await swiss_inscribir_handle(ctx, codigo)
+async def inscribir_swiss(ctx):
+    await swiss_inscribir_asistente_handle(ctx)
 
 @bot.command(name="desinscribir-swiss")
-async def desinscribir_swiss(ctx, codigo: str):
-    await swiss_desinscribir_handle(ctx, codigo)
+async def desinscribir_swiss(ctx):
+    await swiss_desinscribir_asistente_handle(ctx)
 
 @bot.command(name="iniciar-swiss")
 @commands.has_permissions(administrator=True)
-async def iniciar_swiss(ctx, codigo: str):
-    await swiss_iniciar_handle(ctx, codigo)
+async def iniciar_swiss(ctx):
+    await swiss_iniciar_asistente_handle(ctx)
 
 @bot.command(name="reportar-swiss")
-async def reportar_swiss(ctx, codigo: str, jugador1: discord.Member, resultado: str, jugador2: discord.Member):
-    await swiss_reportar_handle(ctx, codigo, jugador1, resultado, jugador2)
+async def reportar_swiss(ctx):
+    await swiss_reportar_asistente_handle(ctx)
 
 @bot.command(name="clasificacion-swiss")
-async def clasificacion_swiss(ctx, codigo: str):
-    await swiss_clasificacion_handle(ctx, codigo)
+async def clasificacion_swiss(ctx):
+    await swiss_clasificacion_asistente_handle(ctx)
 
 @bot.command(name="siguiente-ronda-swiss")
 @commands.has_permissions(administrator=True)
-async def siguiente_ronda_swiss(ctx, codigo: str):
-    await swiss_siguiente_ronda_handle(ctx, codigo)
+async def siguiente_ronda_swiss(ctx):
+    await swiss_siguiente_ronda_asistente_handle(ctx)
 
 @bot.command(name="eliminar-swiss")
 @commands.has_permissions(administrator=True)
-async def eliminar_swiss(ctx, codigo: str):
-    await swiss_eliminar_handle(ctx, codigo)
+async def eliminar_swiss(ctx):
+    await swiss_eliminar_asistente_handle(ctx)
+
+
 #####################################################################################################
 
 
@@ -473,7 +477,6 @@ async def on_command(ctx):
         usuario=ctx.author,
         comando=ctx.command.name if ctx.command else "desconocido",
         tipo="correcto",
-        
         fecha=ctx.message.created_at
     )
 

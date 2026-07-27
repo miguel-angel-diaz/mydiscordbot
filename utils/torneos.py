@@ -9,8 +9,6 @@ import asyncio
 import re
 import config
 from datetime import datetime
-import random
-import string
 
 from utils.commons import (
     borrar_mensaje_seguro, 
@@ -19,13 +17,11 @@ from utils.commons import (
     cartas_mas_jugadas, 
     best_decks_handle, 
     analizar_torneo_con_ia,
-    calcular_clasificacion_torneo
+    calcular_clasificacion_torneo,
+    generar_codigo_unico
 )
 
 from utils.admin import moderador_permisos_handle
-
-def generar_codigo_unico(longitud=6):
-    return ''.join(random.choices(string.ascii_uppercase + string.digits, k=longitud))
 
 def slugify_challonge(value: str) -> str:
     # Convierte a minúsculas y elimina cualquier carácter que no sea letra o número
@@ -107,7 +103,7 @@ async def new_tournament_assistance_handle(ctx, *, args=None):
         await ctx.author.send("⏰ Tiempo agotado. Ejecuta `!nuevo-torneo` para intentarlo de nuevo.")
 
 
-# utils/torneos.py
+
 
 async def nuevo_torneo(ctx, *, args: str):
     await borrar_mensaje_seguro(ctx)

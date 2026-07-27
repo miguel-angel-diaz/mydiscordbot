@@ -10,6 +10,8 @@ import matplotlib.pyplot as plt
 import re
 import time
 from datetime import datetime, timezone
+import random
+import string
 
 from difflib import get_close_matches
 
@@ -974,41 +976,47 @@ async def obtener_torneos_activos_canal(guild):
         })
 
     return torneos
+
+# utils/commons.py
+
 async def obtener_estado_torneos_usuario(guild, member: discord.Member):
     """
-    Versión SIN llamadas a Challonge. Lee el estado desde el canal de estado.
+    Versión que LEE del estado (torneos-estado) sin llamar a Challonge.
+    Devuelve torneos activos (tipo 'swiss' o 'challonge').
     """
     from utils.torneos_estado import leer_estado
+    from utils.commons import obtener_decks_por_usuario
 
-    torneos_activos = await obtener_torneos_activos_canal(guild)
-    if not torneos_activos:
-        return []
+    bot = guild._state._get_client()
+    estado = await leer_estado(bot)
+    torneos_estado = estado.get("torneos", [])
 
-    decks_usuario = await obtener_decks_por_usuario(guild, str(member.id))
+    # Obtener decks del usuario para saber si tiene deck subido en cada torneo
+    decks_usuario = await obtener_decks_por_usuario(guild, str(member.id), include_message=False)
     decks_por_torneo = {d["codigo_torneo"]: d for d in decks_usuario if d.get("codigo_torneo")}
 
-    # Leer estado completo (una sola vez)
-    estado = await leer_estado(guild._state._get_client())
-    torneos_estado = {t["codigo"]: t for t in estado.get("torneos", [])}
-
     resultado = []
-    for torneo in torneos_activos:
-        codigo = torneo["codigo"]
-        tipo_socios = "socio" in codigo.lower() or torneo["nivel"].lower() == "socios"
-        roles_permitidos = config.ROLES_SOCIOS if tipo_socios else config.ROLES_TODOS
+    for t in torneos_estado:
+        codigo = t.get("codigo")
+        if not codigo:
+            continue
+
+        # Determinar roles permitidos según nivel
+        nivel = t.get("nivel", "todos").lower()
+        roles_permitidos = config.ROLES_SOCIOS if nivel == "socios" else config.ROLES_TODOS
         if not tiene_rol_permitido(member, roles_permitidos):
             continue
 
-        info_estado = torneos_estado.get(codigo, {})
-        inscritos_ids = info_estado.get("inscritos_ids", [])
+        inscritos_ids = t.get("inscritos_ids", [])
         total_inscritos = len(inscritos_ids)
-        total_maximo = torneo.get("total_maximo")
+        total_maximo = t.get("total_maximo")
         plazas_restantes = total_maximo - total_inscritos if total_maximo else None
 
         deck = decks_por_torneo.get(codigo)
+
         resultado.append({
             "codigo": codigo,
-            "nivel": torneo["nivel"],
+            "nivel": nivel.capitalize(),
             "inscrito": str(member.id) in inscritos_ids,
             "total_inscritos": total_inscritos,
             "total_maximo": total_maximo,
@@ -1016,47 +1024,66 @@ async def obtener_estado_torneos_usuario(guild, member: discord.Member):
             "deck_subido": bool(deck),
             "deck_nombre": deck["nombre_deck"] if deck else None,
         })
-    return resultado
 
-# utils/commons.py
+    return resultado
 
 async def inscribir_usuario_web(guild, member: discord.Member, codigo_torneo: str):
     """
-    Versión SIN Challonge: inscribe al usuario en el torneo usando el estado del canal.
-    Devuelve (ok: bool, mensaje: str).
+    Inscribe al usuario en un torneo. Soporta torneos Swiss (desde el estado) y Challonge (legacy).
     """
     from utils.torneos_estado import leer_estado, guardar_estado
+    from utils.swiss_core import inscribir_jugador
+    import aiohttp
+    import config
 
-    # 1. Leer el estado completo
-    estado = await leer_estado(guild._state._get_client())  # pasamos el bot
-    torneos_estado = estado.get("torneos", [])
-    torneo = next((t for t in torneos_estado if t.get("codigo") == codigo_torneo), None)
+    bot = guild._state._get_client()
+    estado = await leer_estado(bot)
+    torneo = next((t for t in estado.get("torneos", []) if t.get("codigo") == codigo_torneo), None)
 
     if not torneo:
         return False, "Ese torneo no está activo o no se encontró en el estado."
 
-    # 2. Validar roles (nivel)
+    # === CASO SWISS ===
+    if torneo.get("tipo") == "swiss":
+        ok, mensaje = await inscribir_jugador(bot, codigo_torneo, member.id)
+        if ok:
+            # Actualizar el estado en memoria para que el anuncio refleje el cambio
+            # (inscribir_jugador ya guarda en el estado, pero la variable torneo puede estar desactualizada)
+            pass
+        return ok, mensaje
+
+    # === CASO CHALLONGE (legacy) ===
     nivel = torneo.get("nivel", "todos").lower()
     roles_permitidos = config.ROLES_SOCIOS if nivel == "socios" else config.ROLES_TODOS
     if not tiene_rol_permitido(member, roles_permitidos):
         return False, "No tienes los roles necesarios para inscribirte a este torneo."
 
-    # 3. Verificar si ya está inscrito
-    inscritos_ids = torneo.get("inscritos_ids", [])
-    if str(member.id) in inscritos_ids:
-        return False, "Ya estás inscrito en este torneo."
+    async with aiohttp.ClientSession() as session:
+        url_get = f"https://api.challonge.com/v1/tournaments/{codigo_torneo}/participants.json"
+        async with session.get(url_get, auth=aiohttp.BasicAuth(config.CHALLONGE_USERNAME, config.CHALLONGE_API_KEY)) as resp:
+            if resp.status != 200:
+                return False, "No se pudo comprobar los inscritos actuales."
+            participantes = await resp.json()
 
-    # 4. Verificar plazas
-    total_maximo = torneo.get("total_maximo")
-    if total_maximo and len(inscritos_ids) >= total_maximo:
-        return False, "No quedan plazas disponibles para este torneo."
+        if str(member.id) in [p["participant"].get("name") for p in participantes]:
+            return False, "Ya estás inscrito en este torneo."
 
-    # 5. Añadir al usuario
-    inscritos_ids.append(str(member.id))
-    torneo["inscritos_ids"] = inscritos_ids
+        if torneo.get("total_maximo") and len(participantes) >= torneo["total_maximo"]:
+            return False, "No quedan plazas disponibles."
 
-    # 6. Guardar el estado actualizado
-    await guardar_estado(guild._state._get_client(), estado)
+        payload = {
+            "api_key": config.CHALLONGE_API_KEY,
+            "participant": {"name": str(member.id)}
+        }
+        url_post = f"https://api.challonge.com/v1/tournaments/{codigo_torneo}/participants.json"
+        async with session.post(url_post, json=payload, auth=aiohttp.BasicAuth(config.CHALLONGE_USERNAME, config.CHALLONGE_API_KEY)) as resp:
+            if resp.status not in (200, 201):
+                return False, "Error al inscribirte en Challonge."
+
+        # Actualizar estado con la nueva lista de inscritos
+        inscritos_actuales = [str(p["participant"]["name"]) for p in participantes] + [str(member.id)]
+        torneo["inscritos_ids"] = inscritos_actuales
+        await guardar_estado(bot, estado)
 
     return True, f"Te has inscrito correctamente en `{codigo_torneo}`."
 
@@ -1078,33 +1105,32 @@ def _parsear_embed_deck(embed: discord.Embed) -> dict | None:
     if not nombre_deck:
         nombre_deck = titulo
 
-    descripcion = embed.description or ""
+    # ----- BUSCAR EN TODO EL TEXTO DEL EMBED -----
+    texto_completo = titulo + "\n" + (embed.description or "") + "\n"
+    for field in embed.fields:
+        texto_completo += f"{field.name}: {field.value}\n"
 
-    # ---- DEBUG: imprimir descripción ----
     print(f"🔍 Parseando deck: {nombre_deck}")
-    print(f"📄 Descripción: {descripcion}")
+    print(f"📄 Texto completo: {texto_completo[:200]}...")
 
-    # Buscar "Código:" en la descripción (con o sin backticks)
+    # Buscar "Código:" (con o sin acento) y con o sin backticks
     codigo_deck = None
-    match_codigo = re.search(r"Código:\s*`?([^`\n]+)`?", descripcion)
+    # Acepta "Código" o "Código"
+    match_codigo = re.search(r"C[oó]digo:\s*`?([^`\n]+)`?", texto_completo)
+    if not match_codigo:
+        match_codigo = re.search(r"C[oó]digo:\s*([^\n]+)", texto_completo)
     if match_codigo:
         codigo_deck = match_codigo.group(1).strip()
-    else:
-        match_codigo = re.search(r"Código:\s*([^\n]+)", descripcion)
-        if match_codigo:
-            codigo_deck = match_codigo.group(1).strip()
 
-    # Buscar "Torneo:" en la descripción (con o sin backticks)
+    # Buscar "Torneo:" (con o sin acento) y con o sin backticks
     codigo_torneo = None
-    match_torneo = re.search(r"Torneo:\s*`?([^`\n]+)`?", descripcion)
+    match_torneo = re.search(r"Torneo:\s*`?([^`\n]+)`?", texto_completo)
+    if not match_torneo:
+        match_torneo = re.search(r"Torneo:\s*([^\n]+)", texto_completo)
     if match_torneo:
         codigo_torneo = match_torneo.group(1).strip()
-    else:
-        match_torneo = re.search(r"Torneo:\s*([^\n]+)", descripcion)
-        if match_torneo:
-            codigo_torneo = match_torneo.group(1).strip()
 
-    # Si no se encontró torneo en la descripción, extraerlo del código
+    # Si no se encontró torneo, extraerlo del código
     if not codigo_torneo and codigo_deck:
         partes = codigo_deck.split("_")
         if len(partes) >= 2:
@@ -1128,7 +1154,6 @@ def _parsear_embed_deck(embed: discord.Embed) -> dict | None:
         "sideboard": campos.get("Sideboard", ""),
         "edited": edited,
     }
-
 async def obtener_decks_por_usuario(guild, discord_id: str, limite: int = 500, include_message: bool = False):
     canal = discord.utils.get(guild.text_channels, name="submitted-decks")
     if not canal:
@@ -1199,3 +1224,72 @@ async def editar_deck_web(guild, member: discord.Member, codigo_torneo: str, nom
         return False, "No tengo permisos para editar el mensaje del deck."
 
     return True, mensaje_validacion
+
+def generar_codigo_unico(longitud=6):
+    return ''.join(random.choices(string.ascii_uppercase + string.digits, k=longitud))
+
+
+# utils/commons.py
+
+from datetime import datetime
+
+async def obtener_torneos_swiss_disponibles_canal(guild):
+    """
+    Lee el canal #torneos-activos y devuelve una lista de torneos activos
+    que aún no han comenzado (fecha >= hoy).
+    Retorna: List[Dict] con 'codigo', 'nombre', 'fecha_inicio', 'nivel'
+    """
+    canal_torneos = discord.utils.get(guild.text_channels, name="torneos-activos")
+    if not canal_torneos:
+        return []
+
+    torneos = []
+    hoy = datetime.now().date()
+
+    async for mensaje in canal_torneos.history(limit=200):
+        contenido = mensaje.content
+        if "🎮 **Torneo creado:**" not in contenido:
+            continue
+
+        # Extraer campos
+        lineas = contenido.splitlines()
+        codigo = None
+        nombre = None
+        fecha_inicio = None
+        nivel = "todos"
+
+        for linea in lineas:
+            if "🏷️ **Código:**" in linea:
+                codigo = linea.split("🏷️ **Código:**")[-1].strip().strip("`")
+            elif "🎮 **Torneo creado:**" in linea:
+                nombre = linea.split("🎮 **Torneo creado:**")[-1].strip()
+            elif "📅 **Inicio:**" in linea:
+                fecha_str = linea.split("📅 **Inicio:**")[-1].strip()
+                try:
+                    fecha_inicio = datetime.strptime(fecha_str, "%d/%m/%Y").date()
+                except:
+                    pass
+            elif "🎯 **Nivel:**" in linea:
+                nivel = linea.split("🎯 **Nivel:**")[-1].strip().lower()
+
+        if not codigo or not nombre:
+            continue
+
+        # Si no hay fecha, asumir que es hoy (para no filtrarlo)
+        if not fecha_inicio:
+            fecha_inicio = hoy
+
+        # Filtrar torneos que ya han comenzado (fecha < hoy)
+        if fecha_inicio < hoy:
+            continue
+
+        torneos.append({
+            "codigo": codigo,
+            "nombre": nombre,
+            "fecha_inicio": fecha_inicio.strftime("%d/%m/%Y"),
+            "nivel": nivel
+        })
+
+    # Ordenar por fecha (más cercano primero)
+    torneos.sort(key=lambda x: datetime.strptime(x["fecha_inicio"], "%d/%m/%Y"))
+    return torneos
