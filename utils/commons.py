@@ -1064,6 +1064,8 @@ def tiene_rol_permitido(member: discord.Member, roles_permitidos: set):
     return any(role.name in roles_permitidos for role in member.roles)
 
 
+# utils/commons.py
+
 def _parsear_embed_deck(embed: discord.Embed) -> dict | None:
     campos = {f.name: f.value for f in embed.fields}
 
@@ -1080,13 +1082,29 @@ def _parsear_embed_deck(embed: discord.Embed) -> dict | None:
         nombre_deck = titulo
 
     descripcion = embed.description or ""
-    match_codigo = re.search(r"Código:\s*`([^`]+)`", descripcion)
-    match_torneo = re.search(r"Torneo:\s*`([^`]+)`", descripcion)
 
-    codigo_deck = match_codigo.group(1) if match_codigo else None
-    codigo_torneo = match_torneo.group(1) if match_torneo else None
+    # 🔥 Buscar "Código:" con o sin backticks
+    codigo_deck = None
+    match_codigo = re.search(r"Código:\s*`?([^`\n]+)`?", descripcion)
+    if match_codigo:
+        codigo_deck = match_codigo.group(1).strip()
+    else:
+        # Intentar buscar "Código:" sin backticks y hasta el final de línea
+        match_codigo = re.search(r"Código:\s*([^\n]+)", descripcion)
+        if match_codigo:
+            codigo_deck = match_codigo.group(1).strip()
 
-    # 🔥 FIX: si no hay torneo en la descripción, extraerlo del codigo_deck
+    # 🔥 Buscar "Torneo:" con o sin backticks
+    codigo_torneo = None
+    match_torneo = re.search(r"Torneo:\s*`?([^`\n]+)`?", descripcion)
+    if match_torneo:
+        codigo_torneo = match_torneo.group(1).strip()
+    else:
+        match_torneo = re.search(r"Torneo:\s*([^\n]+)", descripcion)
+        if match_torneo:
+            codigo_torneo = match_torneo.group(1).strip()
+
+    # Si no se encontró torneo en la descripción, extraerlo del código
     if not codigo_torneo and codigo_deck:
         partes = codigo_deck.split("_")
         if len(partes) >= 2:
@@ -1111,10 +1129,6 @@ def _parsear_embed_deck(embed: discord.Embed) -> dict | None:
 # utils/commons.py
 
 async def obtener_decks_por_usuario(guild, discord_id: str, limite: int = 500, include_message: bool = False):
-    """
-    Obtiene los decks de un usuario desde el canal 'submitted-decks'.
-    Si include_message es False, no incluye el objeto _mensaje (no serializable).
-    """
     canal = discord.utils.get(guild.text_channels, name="submitted-decks")
     if not canal:
         return []
@@ -1128,12 +1142,10 @@ async def obtener_decks_por_usuario(guild, discord_id: str, limite: int = 500, i
             deck = _parsear_embed_deck(embed)
             if deck and deck["discord_id"] == discord_id:
                 if include_message:
-                    deck["_mensaje"] = mensaje  # referencia para edición posterior
-                # Si no se pide _mensaje, no lo añadimos
+                    deck["_mensaje"] = mensaje
                 decks.append(deck)
 
     return decks
-
 
 async def editar_deck_web(guild, member: discord.Member, codigo_torneo: str, nombre_deck: str, archetype: str, decklist: str, sideboard: str):
     """
