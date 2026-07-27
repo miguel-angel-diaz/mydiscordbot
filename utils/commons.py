@@ -1063,9 +1063,6 @@ async def inscribir_usuario_web(guild, member: discord.Member, codigo_torneo: st
 def tiene_rol_permitido(member: discord.Member, roles_permitidos: set):
     return any(role.name in roles_permitidos for role in member.roles)
 
-
-# utils/commons.py
-
 def _parsear_embed_deck(embed: discord.Embed) -> dict | None:
     campos = {f.name: f.value for f in embed.fields}
 
@@ -1083,18 +1080,21 @@ def _parsear_embed_deck(embed: discord.Embed) -> dict | None:
 
     descripcion = embed.description or ""
 
-    # 🔥 Buscar "Código:" con o sin backticks
+    # ---- DEBUG: imprimir descripción ----
+    print(f"🔍 Parseando deck: {nombre_deck}")
+    print(f"📄 Descripción: {descripcion}")
+
+    # Buscar "Código:" en la descripción (con o sin backticks)
     codigo_deck = None
     match_codigo = re.search(r"Código:\s*`?([^`\n]+)`?", descripcion)
     if match_codigo:
         codigo_deck = match_codigo.group(1).strip()
     else:
-        # Intentar buscar "Código:" sin backticks y hasta el final de línea
         match_codigo = re.search(r"Código:\s*([^\n]+)", descripcion)
         if match_codigo:
             codigo_deck = match_codigo.group(1).strip()
 
-    # 🔥 Buscar "Torneo:" con o sin backticks
+    # Buscar "Torneo:" en la descripción (con o sin backticks)
     codigo_torneo = None
     match_torneo = re.search(r"Torneo:\s*`?([^`\n]+)`?", descripcion)
     if match_torneo:
@@ -1109,6 +1109,9 @@ def _parsear_embed_deck(embed: discord.Embed) -> dict | None:
         partes = codigo_deck.split("_")
         if len(partes) >= 2:
             codigo_torneo = partes[0]
+
+    print(f"✅ Código deck: {codigo_deck}")
+    print(f"✅ Código torneo: {codigo_torneo}")
 
     try:
         edited = int(campos.get("Ediciones post-inicio", campos.get("edited", "0")).split("/")[0])
@@ -1125,8 +1128,6 @@ def _parsear_embed_deck(embed: discord.Embed) -> dict | None:
         "sideboard": campos.get("Sideboard", ""),
         "edited": edited,
     }
-
-# utils/commons.py
 
 async def obtener_decks_por_usuario(guild, discord_id: str, limite: int = 500, include_message: bool = False):
     canal = discord.utils.get(guild.text_channels, name="submitted-decks")
