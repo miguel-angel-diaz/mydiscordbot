@@ -279,18 +279,25 @@ async def auth_verificar_codigo(request):
         "username": pendiente["username"],
     })
 
+# utils/torneos_api.py
+
 async def auth_verificar_sesion(request):
+    """La web comprueba si una sesión sigue siendo válida."""
+
     session_token = request.query.get("session")
+
     sesion = sesiones_activas.get(session_token) if session_token else None
 
     if not sesion or time.time() > sesion["expira"]:
         return web.json_response({"autenticado": False})
 
-    return web.json_response({
+    response = web.json_response({
         "autenticado": True,
         "username": sesion["username"],
+        "discord_id": sesion["discord_id"],  # <--- AÑADIR ESTO
     })
-
+    response.headers['Access-Control-Allow-Origin'] = '*'
+    return response
 # ============================================================
 # 7. CONTENIDO — Podcast y Artículos (RSS)
 # ============================================================
