@@ -686,6 +686,62 @@ async def api_editar_deck(request):
 
     return web.json_response({"ok": True, "mensaje": mensaje})
 
+async def api_mis_enfrentamientos(request):
+    session_token = request.query.get("session")
+    torneo_codigo = request.query.get("torneo")
+    sesion = sesiones_activas.get(session_token) if session_token else None
+
+    if not sesion or time.time() > sesion["expira"]:
+        return web.json_response({"error": "Sesión no válida"}, status=401)
+
+    if not torneo_codigo:
+        return web.json_response({"error": "Falta el código del torneo"}, status=400)
+
+    if _bot_instance is None:
+        return web.json_response({"error": "Servicio no disponible"}, status=503)
+
+    guild = _bot_instance.get_guild(config.GUILD_ID_ADMISION)
+    if not guild:
+        return web.json_response({"error": "Servicio no disponible"}, status=503)
+
+    discord_id = sesion["discord_id"]
+    miembro = guild.get_member(int(discord_id))
+    if not miembro:
+        return web.json_response({"error": "No eres miembro del servidor"}, status=403)
+
+    # Intentar leer del canal de rondas (para torneos Swiss)
+    from utils.swiss_manager import SwissManager
+    manager = SwissManager(_bot_instance, guild)
+    channel = await manager._get_channel(f"torneo-{torneo_codigo}-rondas")
+    enfrentamientos = []
+    if channel:
+        async for msg in channel.history(limit=200, oldest_first=True):
+            if msg.author == _bot_instance.user and "Ronda" in msg.content:
+                lines = msg.content.splitlines()
+                ronda = lines[0].replace("**", "").strip()
+                for line in lines[1:]:
+                    if " vs " in line and "→" in line:
+                        part, resultado = line.split(" → ")
+                        jugadores = part.split(" vs ")
+                        if str(discord_id) in jugadores[0].strip() or str(discord_id) in jugadores[1].strip():
+                            oponente = jugadores[1].strip() if jugadores[0].strip() == str(discord_id) else jugadores[0].strip()
+                            # Intentar obtener el nombre del oponente
+                            try:
+                                op_member = guild.get_member(int(oponente))
+                                op_nombre = op_member.display_name if op_member else oponente
+                            except:
+                                op_nombre = oponente
+                            enfrentamientos.append({
+                                "ronda": ronda,
+                                "oponente": op_nombre,
+                                "resultado": resultado.strip()
+                            })
+    if enfrentamientos:
+        return web.json_response({"enfrentamientos": enfrentamientos})
+
+    # Si no hay enfrentamientos, devolver vacío
+    return web.json_response({"enfrentamientos": []})
+
 # ============================================================
 # 8. SERVIDOR WEB — registro de rutas
 # ============================================================
@@ -722,6 +778,7 @@ def crear_app():
 
     app.router.add_post('/api/editar-deck', api_editar_deck)
     app.router.add_route('OPTIONS', '/api/editar-deck', handle_options)
+    app.router.add_get('/api/mis-enfrentamientos', api_mis_enfrentamientos)
 
     return app
 

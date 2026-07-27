@@ -1063,8 +1063,8 @@ async def inscribir_usuario_web(guild, member: discord.Member, codigo_torneo: st
 def tiene_rol_permitido(member: discord.Member, roles_permitidos: set):
     return any(role.name in roles_permitidos for role in member.roles)
 
-def _parsear_embed_deck(embed: discord.Embed) -> dict | None:
 
+def _parsear_embed_deck(embed: discord.Embed) -> dict | None:
     campos = {f.name: f.value for f in embed.fields}
 
     jugador_raw = campos.get("Jugador", "")
@@ -1086,6 +1086,12 @@ def _parsear_embed_deck(embed: discord.Embed) -> dict | None:
     codigo_deck = match_codigo.group(1) if match_codigo else None
     codigo_torneo = match_torneo.group(1) if match_torneo else None
 
+    # 🔥 FIX: si no hay torneo en la descripción, extraerlo del codigo_deck
+    if not codigo_torneo and codigo_deck:
+        partes = codigo_deck.split("_")
+        if len(partes) >= 2:
+            codigo_torneo = partes[0]
+
     try:
         edited = int(campos.get("Ediciones post-inicio", campos.get("edited", "0")).split("/")[0])
     except (ValueError, AttributeError):
@@ -1101,7 +1107,6 @@ def _parsear_embed_deck(embed: discord.Embed) -> dict | None:
         "sideboard": campos.get("Sideboard", ""),
         "edited": edited,
     }
-
 
 # utils/commons.py
 
