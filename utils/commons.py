@@ -1109,34 +1109,36 @@ def _parsear_embed_deck(embed: discord.Embed) -> dict | None:
 
     descripcion = embed.description or ""
 
-    # 🔥 Buscar "Código:" en la descripción
+    # 🔥 BUSCAR "Código:" (con o sin backticks/negritas)
     codigo_deck = None
     match_codigo = re.search(r"Código:\s*`?([^`\n]+)`?", descripcion)
     if match_codigo:
         codigo_deck = match_codigo.group(1).strip()
     else:
-        # Fallback: buscar cualquier cosa que parezca código
         match_codigo = re.search(r"Código:\s*([^\n]+)", descripcion)
         if match_codigo:
             codigo_deck = match_codigo.group(1).strip()
 
-    # 🔥 Buscar "Torneo:" en la descripción (ignorando negritas/backticks)
+    # 🔥 BUSCAR "Torneo:" (ignorando negritas, backticks, asteriscos)
     codigo_torneo = None
-    # Buscar primero con backticks o negritas: Torneo: `codigo` o Torneo: **codigo**
-    match_torneo = re.search(r"Torneo:\s*[`\*]*([^`\*\n]+)[`\*]*", descripcion)
+    # Captura cualquier cosa después de "Torneo:" hasta el final de línea, quitando **, `` y espacios
+    match_torneo = re.search(r"Torneo:\s*[*`]*([^*`\n]+)[*`]*", descripcion, re.IGNORECASE)
     if match_torneo:
         codigo_torneo = match_torneo.group(1).strip()
     else:
-        # Fallback: buscar sin formato
-        match_torneo = re.search(r"Torneo:\s*([^\n]+)", descripcion)
+        match_torneo = re.search(r"Torneo:\s*([^\n]+)", descripcion, re.IGNORECASE)
         if match_torneo:
             codigo_torneo = match_torneo.group(1).strip()
+            codigo_torneo = re.sub(r"[*`]", "", codigo_torneo).strip()
 
     # Si no se encontró torneo, extraerlo del código
     if not codigo_torneo and codigo_deck:
         partes = codigo_deck.split("_")
         if len(partes) >= 2:
             codigo_torneo = partes[0]
+
+    # Depuración (opcional, para logs)
+    # print(f"📦 Deck: {nombre_deck} | Código: {codigo_deck} | Torneo: {codigo_torneo}")
 
     try:
         edited = int(campos.get("Ediciones post-inicio", campos.get("edited", "0")).split("/")[0])
