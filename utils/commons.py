@@ -1090,6 +1090,8 @@ async def inscribir_usuario_web(guild, member: discord.Member, codigo_torneo: st
 def tiene_rol_permitido(member: discord.Member, roles_permitidos: set):
     return any(role.name in roles_permitidos for role in member.roles)
 
+# utils/commons.py
+
 def _parsear_embed_deck(embed: discord.Embed) -> dict | None:
     campos = {f.name: f.value for f in embed.fields}
 
@@ -1105,39 +1107,36 @@ def _parsear_embed_deck(embed: discord.Embed) -> dict | None:
     if not nombre_deck:
         nombre_deck = titulo
 
-    # ----- BUSCAR EN TODO EL TEXTO DEL EMBED -----
-    texto_completo = titulo + "\n" + (embed.description or "") + "\n"
-    for field in embed.fields:
-        texto_completo += f"{field.name}: {field.value}\n"
+    descripcion = embed.description or ""
 
-    print(f"🔍 Parseando deck: {nombre_deck}")
-    print(f"📄 Texto completo: {texto_completo[:200]}...")
-
-    # Buscar "Código:" (con o sin acento) y con o sin backticks
+    # 🔥 Buscar "Código:" en la descripción
     codigo_deck = None
-    # Acepta "Código" o "Código"
-    match_codigo = re.search(r"C[oó]digo:\s*`?([^`\n]+)`?", texto_completo)
-    if not match_codigo:
-        match_codigo = re.search(r"C[oó]digo:\s*([^\n]+)", texto_completo)
+    match_codigo = re.search(r"Código:\s*`?([^`\n]+)`?", descripcion)
     if match_codigo:
         codigo_deck = match_codigo.group(1).strip()
+    else:
+        # Fallback: buscar cualquier cosa que parezca código
+        match_codigo = re.search(r"Código:\s*([^\n]+)", descripcion)
+        if match_codigo:
+            codigo_deck = match_codigo.group(1).strip()
 
-    # Buscar "Torneo:" (con o sin acento) y con o sin backticks
+    # 🔥 Buscar "Torneo:" en la descripción (ignorando negritas/backticks)
     codigo_torneo = None
-    match_torneo = re.search(r"Torneo:\s*`?([^`\n]+)`?", texto_completo)
-    if not match_torneo:
-        match_torneo = re.search(r"Torneo:\s*([^\n]+)", texto_completo)
+    # Buscar primero con backticks o negritas: Torneo: `codigo` o Torneo: **codigo**
+    match_torneo = re.search(r"Torneo:\s*[`\*]*([^`\*\n]+)[`\*]*", descripcion)
     if match_torneo:
         codigo_torneo = match_torneo.group(1).strip()
+    else:
+        # Fallback: buscar sin formato
+        match_torneo = re.search(r"Torneo:\s*([^\n]+)", descripcion)
+        if match_torneo:
+            codigo_torneo = match_torneo.group(1).strip()
 
     # Si no se encontró torneo, extraerlo del código
     if not codigo_torneo and codigo_deck:
         partes = codigo_deck.split("_")
         if len(partes) >= 2:
             codigo_torneo = partes[0]
-
-    print(f"✅ Código deck: {codigo_deck}")
-    print(f"✅ Código torneo: {codigo_torneo}")
 
     try:
         edited = int(campos.get("Ediciones post-inicio", campos.get("edited", "0")).split("/")[0])
@@ -1172,7 +1171,6 @@ async def obtener_decks_por_usuario(guild, discord_id: str, limite: int = 500, i
                 decks.append(deck)
 
     return decks
-
 async def editar_deck_web(guild, member: discord.Member, codigo_torneo: str, nombre_deck: str, archetype: str, decklist: str, sideboard: str):
     """
     Versión web (sin DMs) de editar_deck_handle: aplica exactamente las
