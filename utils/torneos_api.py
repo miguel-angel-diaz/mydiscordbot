@@ -585,9 +585,12 @@ async def api_estado_torneos(request):
     try:
         torneos = await obtener_estado_torneos_usuario(guild, miembro)
     except Exception as e:
-        return web.json_response({"error": str(e)}, status=500)
+        print(f"❌ Error en api_estado_torneos: {e}")
+        return web.json_response({"error": f"Error interno: {str(e)}"}, status=500)
 
-    return web.json_response({"torneos": torneos})
+    response = web.json_response({"torneos": torneos})
+    response.headers['Access-Control-Allow-Origin'] = '*'
+    return response
 
 async def api_inscribirse(request):
     try:

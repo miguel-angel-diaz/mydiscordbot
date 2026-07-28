@@ -14,6 +14,9 @@ import random
 import string
 
 from difflib import get_close_matches
+from utils.torneos_estado import leer_estado, guardar_estado
+from utils.commons import obtener_decks_por_usuario, tiene_rol_permitido
+from utils.swiss_core import inscribir_jugador
 
 
 
@@ -866,9 +869,7 @@ async def validar_torneo_para_edicion(codigo_torneo: str, author: discord.Member
     Usa el estado y el canal #torneos-activos, sin llamar a Challonge.
     Retorna: (ok: bool, mensaje: str)
     """
-    from utils.torneos_estado import leer_estado
-    from datetime import datetime, timezone
-    import time
+
 
     if bot is None:
         bot = author._state._get_client()
@@ -977,15 +978,7 @@ async def obtener_torneos_activos_canal(guild):
 
     return torneos
 
-# utils/commons.py
-
 async def obtener_estado_torneos_usuario(guild, member: discord.Member):
-    """
-    Versión que LEE del estado (torneos-estado) sin llamar a Challonge.
-    Devuelve torneos activos (tipo 'swiss' o 'challonge').
-    """
-    from utils.torneos_estado import leer_estado
-    from utils.commons import obtener_decks_por_usuario
 
     bot = guild._state._get_client()
     estado = await leer_estado(bot)
@@ -1031,11 +1024,6 @@ async def inscribir_usuario_web(guild, member: discord.Member, codigo_torneo: st
     """
     Inscribe al usuario en un torneo. Soporta torneos Swiss (desde el estado) y Challonge (legacy).
     """
-    from utils.torneos_estado import leer_estado, guardar_estado
-    from utils.swiss_core import inscribir_jugador
-    import aiohttp
-    import config
-
     bot = guild._state._get_client()
     estado = await leer_estado(bot)
     torneo = next((t for t in estado.get("torneos", []) if t.get("codigo") == codigo_torneo), None)
@@ -1109,7 +1097,6 @@ def _parsear_embed_deck(embed: discord.Embed) -> dict | None:
 
     descripcion = embed.description or ""
 
-    # 🔥 BUSCAR "Código:" (con o sin backticks/negritas)
     codigo_deck = None
     match_codigo = re.search(r"Código:\s*`?([^`\n]+)`?", descripcion)
     if match_codigo:
@@ -1228,10 +1215,6 @@ async def editar_deck_web(guild, member: discord.Member, codigo_torneo: str, nom
 def generar_codigo_unico(longitud=6):
     return ''.join(random.choices(string.ascii_uppercase + string.digits, k=longitud))
 
-
-# utils/commons.py
-
-from datetime import datetime
 
 async def obtener_torneos_swiss_disponibles_canal(guild):
     """
