@@ -2,11 +2,17 @@
 import discord
 import json
 import re
+import random
+import string
 from datetime import datetime, timezone
 from typing import List, Dict, Optional
 
 CANAL_ESTADO = "torneos-estado"
 MARCADOR = "📊 ESTADO TORNEOS"
+
+# ============================================================
+# FUNCIONES DE ESTADO (LECTURA/ESCRITURA)
+# ============================================================
 
 async def get_mensaje_estado(bot):
     for guild in bot.guilds:
@@ -72,14 +78,24 @@ async def obtener_torneos_activos_estado(bot):
     estado = await leer_estado(bot)
     return estado.get("torneos", [])
 
-# utils/torneos_estado.py (o donde esté)
+# ============================================================
+# UTILIDADES (independientes)
+# ============================================================
+
+def slugify_challonge(value: str) -> str:
+    value = value.lower()
+    return re.sub(r'[^a-z0-9]', '', value)
+
+def generar_codigo_unico(longitud=6):
+    return ''.join(random.choices(string.ascii_uppercase + string.digits, k=longitud))
+
+# ============================================================
+# (OPCIONAL) COMANDO DE SINCRONIZACIÓN (si se usa desde admin)
+# ============================================================
 
 async def sincronizar_estado_handle(ctx):
     await ctx.author.send("🔄 Sincronizando estado de torneos desde #torneos-activos...")
-
-    from utils.torneos_estado import guardar_estado
     from utils.commons import obtener_torneos_activos_canal
-
     guild = ctx.guild
     torneos_activos = await obtener_torneos_activos_canal(guild)
     if not torneos_activos:
@@ -93,14 +109,9 @@ async def sincronizar_estado_handle(ctx):
             "nombre": torneo.get("nombre", "Torneo sin nombre"),
             "nivel": torneo["nivel"],
             "total_maximo": torneo["total_maximo"],
-            "inscritos_ids": [],  # Vacío, se irá llenando con inscripciones (web o Discord)
-            "tipo": "challonge"   # <-- AÑADIR para diferenciar
+            "inscritos_ids": [],
+            "tipo": "challonge"
         })
 
     await guardar_estado(ctx.bot, {"torneos": torneos_estado})
     await ctx.author.send(f"✅ Estado sincronizado con {len(torneos_estado)} torneos activos (sin participantes).")
-
-async def obtener_torneos_activos_estado(bot):
-    """Devuelve la lista de torneos activos desde el estado (sin llamar a Challonge)."""
-    estado = await leer_estado(bot)
-    return estado.get("torneos", [])

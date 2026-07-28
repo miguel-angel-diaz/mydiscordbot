@@ -3,7 +3,11 @@ import discord
 import asyncio
 from datetime import datetime
 
-from utils.commons import borrar_mensaje_seguro, buscar_usuario_en_servidor
+from utils.commons import borrar_mensaje_seguro, buscar_usuario_en_servidor, obtener_deck_en_canal
+from utils.jugadores import submitted_deck_handle
+from utils.torneos_estado import actualizar_torneo_estado
+
+
 from utils.swiss_core import (
     crear_torneo,
     eliminar_torneo_swiss,
@@ -120,7 +124,8 @@ async def swiss_inscribir_asistente_handle(ctx):
         await ctx.author.send(mensaje)
 
         seleccion_msg = await ctx.bot.wait_for("message", check=dm_check, timeout=60)
-        if seleccion_msg.content.lower() == "cancelar": return
+        if seleccion_msg.content.lower() == "cancelar":
+            return
         try:
             idx = int(seleccion_msg.content.strip()) - 1
             torneo = torneos[idx]
@@ -130,7 +135,8 @@ async def swiss_inscribir_asistente_handle(ctx):
 
         await ctx.author.send("2️⃣ ¿A quién inscribes? (`yo` o nombre/mención)")
         usuario_msg = await ctx.bot.wait_for("message", check=dm_check, timeout=60)
-        if usuario_msg.content.lower() == "cancelar": return
+        if usuario_msg.content.lower() == "cancelar":
+            return
         if usuario_msg.content.lower() in ["yo", "mi", "me"]:
             usuario = ctx.author
         else:
@@ -144,13 +150,17 @@ async def swiss_inscribir_asistente_handle(ctx):
             await ctx.author.send(f"❌ {msg}")
             return
 
-        # Obtener torneo actualizado para el conteo correcto
+        # ✅ Inscripción exitosa → obtener torneo actualizado
         torneo_actualizado = await obtener_torneo(ctx.bot, torneo["codigo"])
         if torneo_actualizado:
             total = len(torneo_actualizado.get("inscritos_ids", []))
             maximo = torneo_actualizado.get("total_maximo")
             plazas = maximo - total if maximo else "∞"
+
+            # Confirmación al usuario que ejecutó el comando
             await ctx.author.send(f"✅ {usuario.mention} inscrito en `{torneo['codigo']}`.")
+
+            # Anuncio en la cartelera
             canal_anuncios = discord.utils.get(ctx.guild.text_channels, name="📰-cartelera‐torneos")
             if canal_anuncios:
                 await canal_anuncios.send(
@@ -159,28 +169,47 @@ async def swiss_inscribir_asistente_handle(ctx):
                 )
         else:
             await ctx.author.send("⚠️ No se pudo obtener el estado actualizado del torneo.")
-        if not ok:
-            await ctx.author.send(f"❌ {msg}")
             return
 
-        await ctx.author.send(f"✅ {usuario.mention} inscrito en `{torneo['codigo']}`.")
-
-        canal_anuncios = discord.utils.get(ctx.guild.text_channels, name="📰-cartelera‐torneos")
-        if canal_anuncios:
-            total = len(torneo["inscritos_ids"])
-            maximo = torneo.get("total_maximo")
-            plazas = maximo - total if maximo else "∞"
-            await canal_anuncios.send(
-                f"📥 {usuario.mention} se ha inscrito en `{torneo['codigo']}`.\n"
-                f"👥 Inscritos: {total}/{maximo or '∞'} | 🪑 Plazas libres: {plazas}"
-            )
-            
+        # ============================================================
+        # 🆕 PREGUNTAR SI QUIERE SUBIR DECK
+        # ============================================================
+        if usuario.id == ctx.author.id:
+            # El usuario es el autor, preguntar en el mismo DM
+            try:
+                await usuario.send(f"✅ Te has inscrito en el torneo `{torneo['codigo']}`.\n¿Quieres subir tu deck ahora? Responde `sí` o `no`.")
+                def dm_autor(m):
+                    return m.author == usuario and isinstance(m.channel, discord.DMChannel)
+                respuesta = await ctx.bot.wait_for("message", check=dm_autor, timeout=90.0)
+                if respuesta.content.lower() in ["sí", "si", "s", "yes", "y"]:
+                    await submitted_deck_handle(ctx, torneo["codigo"])
+                else:
+                    await usuario.send("👌 Perfecto, podrás subir tu deck más tarde usando el comando correspondiente.")
+            except asyncio.TimeoutError:
+                await usuario.send("⏰ Tiempo agotado para subir deck. Puedes hacerlo más tarde con `!subir-deck`.")
+            except discord.Forbidden:
+                await ctx.author.send("⚠️ No pude enviarte el mensaje de confirmación. Revisa tus DMs.")
+        else:
+            # El usuario es otro, intentar enviarle DM
+            try:
+                await usuario.send(f"🎮 Te han inscrito en el torneo `{torneo['codigo']}`.\n¿Quieres subir tu deck ahora? Responde `sí` o `no`.")
+                def dm_usuario(m):
+                    return m.author == usuario and isinstance(m.channel, discord.DMChannel)
+                respuesta = await ctx.bot.wait_for("message", check=dm_usuario, timeout=90.0)
+                if respuesta.content.lower() in ["sí", "si", "s", "yes", "y"]:
+                    await submitted_deck_handle(ctx, torneo["codigo"])
+                else:
+                    await usuario.send("👌 Perfecto, podrás subir tu deck más tarde usando el comando correspondiente.")
+            except asyncio.TimeoutError:
+                await usuario.send("⏰ Tiempo agotado para subir deck. Puedes hacerlo más tarde con `!subir-deck`.")
+            except discord.Forbidden:
+                # No se pudo enviar DM al usuario
+                await ctx.author.send(f"⚠️ No pude enviar mensaje a {usuario.display_name} para preguntar por el deck. Puede que tenga DMs cerrados.")
 
     except asyncio.TimeoutError:
         await ctx.author.send("⏰ Tiempo agotado.")
     except Exception as e:
         await ctx.author.send(f"❌ Error: {e}")
-
 # ============================================================
 # COMANDO: desinscribir-swiss (asistente)
 # ============================================================
@@ -206,7 +235,8 @@ async def swiss_desinscribir_asistente_handle(ctx):
         await ctx.author.send(mensaje)
 
         seleccion_msg = await ctx.bot.wait_for("message", check=dm_check, timeout=60)
-        if seleccion_msg.content.lower() == "cancelar": return
+        if seleccion_msg.content.lower() == "cancelar":
+            return
         try:
             idx = int(seleccion_msg.content.strip()) - 1
             torneo = mis_torneos[idx]
@@ -221,7 +251,11 @@ async def swiss_desinscribir_asistente_handle(ctx):
             return
 
         ok, msg = await desinscribir_jugador(ctx.bot, torneo["codigo"], ctx.author.id)
-        # Obtener torneo actualizado
+        if not ok:
+            await ctx.author.send(f"❌ {msg}")
+            return
+
+        # ✅ Desinscripción exitosa → obtener torneo actualizado y enviar mensajes
         torneo_actualizado = await obtener_torneo(ctx.bot, torneo["codigo"])
         if torneo_actualizado:
             total = len(torneo_actualizado.get("inscritos_ids", []))
@@ -235,14 +269,25 @@ async def swiss_desinscribir_asistente_handle(ctx):
                     f"👥 Inscritos: {total}/{maximo or '∞'} | 🪑 Plazas libres: {plazas}"
                 )
         else:
-          await ctx.author.send("⚠️ No se pudo obtener el estado actualizado del torneo.")
-        if not ok:
-            await ctx.author.send(f"❌ {msg}")
+            await ctx.author.send("⚠️ No se pudo obtener el estado actualizado del torneo.")
             return
 
-        await ctx.author.send(f"✅ Te has desinscrito de `{torneo['codigo']}`.")
-
-        canal_anuncios = discord.utils.get(ctx.guild.text_channels, name="📰-cartelera‐torneos")
+        # ============================================================
+        # 🗑️ ELIMINAR DECK DEL USUARIO EN submitted-decks
+        # ============================================================
+        codigo_deck = f"{torneo['codigo']}_{ctx.author.id}"
+        deck = await obtener_deck_en_canal(ctx.guild, codigo_deck)
+        if deck and deck.get("mensaje"):
+            try:
+                await deck["mensaje"].delete()
+                await ctx.author.send(f"✅ Se eliminó tu deck `{deck['nombre_deck']}` de submitted-decks.")
+            except discord.Forbidden:
+                await ctx.author.send(f"⚠️ No tengo permisos para eliminar el deck `{codigo_deck}`.")
+            except discord.HTTPException as e:
+                await ctx.author.send(f"⚠️ Error al eliminar el deck: {e}")
+        else:
+            # No hay deck subido, no hacemos nada
+            pass
 
     except asyncio.TimeoutError:
         await ctx.author.send("⏰ Tiempo agotado.")
@@ -293,9 +338,18 @@ async def swiss_iniciar_asistente_handle(ctx):
 
         await ctx.author.send(f"✅ Torneo `{torneo['codigo']}` iniciado. Ronda 1 generada.")
 
+        # ============================================================
+        # 🆕 PUBLICAR CLASIFICACIÓN INICIAL (todos a 0)
+        # ============================================================
+        torneo_actualizado = await obtener_torneo(ctx.bot, torneo["codigo"])
+        if torneo_actualizado:
+            await publicar_clasificacion_inicial(ctx, torneo_actualizado)
+
+        # ============================================================
+        # PUBLICAR EMPAREJAMIENTOS EN CANAL DE CITAS
+        # ============================================================
         canal_citas = discord.utils.get(ctx.guild.text_channels, name="🍸-citas‐a‐ciegas")
         if canal_citas:
-            torneo_actualizado = await obtener_torneo(ctx.bot, torneo["codigo"])
             if torneo_actualizado:
                 rondas = torneo_actualizado.get("rondas", [])
                 if rondas:
@@ -314,10 +368,11 @@ async def swiss_iniciar_asistente_handle(ctx):
         await ctx.author.send("⏰ Tiempo agotado.")
     except Exception as e:
         await ctx.author.send(f"❌ Error: {e}")
-
 # ============================================================
 # COMANDO: reportar-swiss (asistente)
 # ============================================================
+
+# utils/swiss_handlers.py
 
 async def swiss_reportar_asistente_handle(ctx):
     await borrar_mensaje_seguro(ctx)
@@ -348,6 +403,25 @@ async def swiss_reportar_asistente_handle(ctx):
             await ctx.author.send("❌ Número no válido.")
             return
 
+        # Obtener torneo actualizado
+        torneo_actual = await obtener_torneo(ctx.bot, torneo["codigo"])
+        if not torneo_actual:
+            await ctx.author.send("❌ No se pudo obtener el torneo.")
+            return
+
+        # Obtener rondas y emparejamientos de la ronda actual
+        rondas = torneo_actual.get("rondas", [])
+        if not rondas:
+            await ctx.author.send("❌ El torneo no tiene rondas generadas.")
+            return
+        ronda_actual = rondas[-1]
+        emparejamientos = ronda_actual.get("emparejamientos", [])
+
+        # Función para comprobar si un usuario está en un emparejamiento
+        def esta_en_emparejamiento(user_id, emp):
+            return emp.get("j1") == str(user_id) or emp.get("j2") == str(user_id)
+
+        # Pedir jugador 1
         await ctx.author.send("2️⃣ ¿Jugador 1? (nombre o mención)")
         j1_msg = await ctx.bot.wait_for("message", check=dm_check, timeout=60)
         if j1_msg.content.lower() == "cancelar": return
@@ -372,6 +446,39 @@ async def swiss_reportar_asistente_handle(ctx):
             await ctx.author.send("❌ Usuario no encontrado.")
             return
 
+        # ============================================================
+        # 🔐 VALIDACIONES DE PERMISOS Y EMPAREJAMIENTO
+        # ============================================================
+
+        # 1. Verificar que el enfrentamiento existe en la ronda actual
+        emp_encontrado = None
+        for emp in emparejamientos:
+            if (emp.get("j1") == str(jugador1.id) and emp.get("j2") == str(jugador2.id)) or \
+               (emp.get("j1") == str(jugador2.id) and emp.get("j2") == str(jugador1.id)):
+                emp_encontrado = emp
+                break
+
+        if not emp_encontrado:
+            await ctx.author.send("❌ Ese enfrentamiento no existe en la ronda actual.")
+            return
+
+        # 2. Verificar que el partido no esté ya reportado
+        if emp_encontrado.get("resultado") is not None:
+            await ctx.author.send("❌ Este partido ya tiene un resultado reportado.")
+            return
+
+        # 3. Verificar que el autor sea uno de los jugadores o administrador
+        es_admin = ctx.author.guild_permissions.administrator
+        es_jugador = ctx.author.id in (jugador1.id, jugador2.id)
+
+        if not es_admin and not es_jugador:
+            await ctx.author.send("❌ Solo los jugadores del enfrentamiento o un administrador pueden reportar este partido.")
+            return
+
+        # ============================================================
+        # CONFIRMACIÓN Y REPORTE
+        # ============================================================
+
         await ctx.author.send(f"📋 Confirmar: {jugador1.display_name} {resultado} {jugador2.display_name} en `{torneo['codigo']}`. ¿Continuar? (sí/no)")
         confirm = await ctx.bot.wait_for("message", check=dm_check, timeout=60)
         if confirm.content.lower() not in ["sí", "si", "yes", "y"]:
@@ -385,6 +492,13 @@ async def swiss_reportar_asistente_handle(ctx):
 
         await ctx.author.send(f"✅ Resultado reportado en `{torneo['codigo']}`.")
 
+        # Actualizar clasificación
+        await calcular_clasificacion(ctx.bot, torneo["codigo"])
+        torneo_actualizado = await obtener_torneo(ctx.bot, torneo["codigo"])
+        if torneo_actualizado:
+            await publicar_clasificacion_swiss(ctx, torneo_actualizado)
+
+        # Anuncio en canal de resultados
         canal_resultados = discord.utils.get(ctx.guild.text_channels, name="🍺-quién‐se‐lleva‐la‐ronda")
         if canal_resultados:
             await canal_resultados.send(
@@ -396,7 +510,6 @@ async def swiss_reportar_asistente_handle(ctx):
         await ctx.author.send("⏰ Tiempo agotado.")
     except Exception as e:
         await ctx.author.send(f"❌ Error: {e}")
-
 # ============================================================
 # COMANDO: clasificacion-swiss (asistente)
 # ============================================================
@@ -575,3 +688,238 @@ async def swiss_eliminar_asistente_handle(ctx):
         await ctx.author.send("⏰ Tiempo agotado.")
     except Exception as e:
         await ctx.author.send(f"❌ Error: {e}")
+
+async def swiss_lista_inscritos_asistente_handle(ctx):
+    """Muestra la lista de jugadores inscritos en un torneo suizo."""
+    await borrar_mensaje_seguro(ctx)
+
+    try:
+        await ctx.author.send("📋 **Lista de inscritos**\nEscribe el código del torneo o `cancelar` para salir.")
+        def dm_check(m):
+            return m.author == ctx.author and isinstance(m.channel, discord.DMChannel)
+
+        # 1. Listar torneos activos para elegir
+        torneos = await obtener_torneos_activos(ctx.bot)
+        if not torneos:
+            await ctx.author.send("❌ No hay torneos suizos activos.")
+            return
+
+        mensaje = "📋 **Torneos activos:**\n"
+        for i, t in enumerate(torneos, 1):
+            inscritos = len(t.get("inscritos_ids", []))
+            maximo = t.get("total_maximo", "∞")
+            mensaje += f"{i}. `{t['codigo']}` → {t['nombre']} ({inscritos}/{maximo} inscritos)\n"
+        mensaje += "\nEscribe el **número** del torneo:"
+        await ctx.author.send(mensaje)
+
+        seleccion_msg = await ctx.bot.wait_for("message", check=dm_check, timeout=60)
+        if seleccion_msg.content.lower() == "cancelar":
+            return
+        try:
+            idx = int(seleccion_msg.content.strip()) - 1
+            torneo = torneos[idx]
+        except:
+            await ctx.author.send("❌ Número no válido.")
+            return
+
+        # 2. Obtener inscritos
+        inscritos_ids = torneo.get("inscritos_ids", [])
+        if not inscritos_ids:
+            await ctx.author.send(f"📭 No hay jugadores inscritos en `{torneo['codigo']}`.")
+            return
+
+        # 3. Mostrar lista con menciones
+        lines = [f"📋 **Inscritos en {torneo['nombre']} ({torneo['codigo']})**: {len(inscritos_ids)} jugadores"]
+        for uid in inscritos_ids:
+            member = ctx.guild.get_member(int(uid))
+            nombre = member.display_name if member else f"Usuario {uid}"
+            lines.append(f"• {nombre} (<@{uid}>)")
+
+        # Enviar por partes si es muy largo
+        for chunk in [lines[i:i+20] for i in range(0, len(lines), 20)]:
+            await ctx.author.send("\n".join(chunk))
+
+    except asyncio.TimeoutError:
+        await ctx.author.send("⏰ Tiempo agotado.")
+    except Exception as e:
+        await ctx.author.send(f"❌ Error: {e}")
+
+# utils/swiss_handlers.py
+
+async def publicar_clasificacion_inicial(ctx, torneo: dict):
+    """Publica la clasificación inicial (todos a 0) en el canal de ranking."""
+    canal_ranking = discord.utils.get(ctx.guild.text_channels, name="🍺-el‐ranking‐de‐la‐barra")
+    if not canal_ranking:
+        return
+
+    inscritos_ids = torneo.get("inscritos_ids", [])
+    if not inscritos_ids:
+        return
+
+    # Construir tabla con todos los jugadores a 0
+    lines = [f"📊 **Clasificación del torneo `{torneo['codigo']}`:**"]
+    lines.append("```markdown")
+    lines.append("Rango | Participante           | G-P-E | Pts  | OMW%   | Buchholz | Dif")
+    lines.append("------|------------------------|-------|------|--------|----------|-----")
+
+    # Ordenar por nombre (o ID) para tener un orden consistente
+    # Podríamos ordenar por nombre, pero usamos el orden de inscripción
+    for i, uid in enumerate(inscritos_ids, 1):
+        try:
+            member = await ctx.guild.fetch_member(int(uid))
+            nombre = member.display_name
+        except:
+            nombre = f"<@{uid}>"
+        # Todos a 0
+        line = f"{i:<5} | {nombre[:22]:<22} | 0-0-0 | 0    | 0.000  | 0.00000  | 0"
+        lines.append(line)
+
+    lines.append("```")
+    mensaje = "\n".join(lines)
+
+    # Buscar mensaje existente para editarlo (como en Challonge)
+    mensaje_existente = None
+    async for msg in canal_ranking.history(limit=50):
+        if msg.author == ctx.bot.user and not msg.embeds:
+            if msg.content.startswith(f"📊 **Clasificación del torneo `{torneo['codigo']}`:**"):
+                mensaje_existente = msg
+                break
+
+    if mensaje_existente:
+        await mensaje_existente.edit(content=mensaje)
+    else:
+        await canal_ranking.send(mensaje)
+
+async def swiss_reiniciar_asistente_handle(ctx):
+    """Reinicia un torneo suizo (borra rondas y clasificación, mantiene inscritos)."""
+    await borrar_mensaje_seguro(ctx)
+    if not ctx.author.guild_permissions.administrator:
+        await ctx.author.send("❌ Necesitas ser administrador.")
+        return
+
+    try:
+        await ctx.author.send("🔄 **Reiniciar torneo suizo**\nEscribe `cancelar` para salir.")
+        def dm_check(m):
+            return m.author == ctx.author and isinstance(m.channel, discord.DMChannel)
+
+        # Listar torneos activos (Swiss)
+        torneos = await obtener_torneos_activos(ctx.bot)
+        if not torneos:
+            await ctx.author.send("❌ No hay torneos suizos activos.")
+            return
+
+        mensaje = "📋 **Torneos activos:**\n"
+        for i, t in enumerate(torneos, 1):
+            inscritos = len(t.get("inscritos_ids", []))
+            ronda = t.get("ronda_actual", 0)
+            mensaje += f"{i}. `{t['codigo']}` → {t['nombre']} (Ronda {ronda}, {inscritos} inscritos)\n"
+        mensaje += "\nEscribe el **número** del torneo que quieres reiniciar:"
+        await ctx.author.send(mensaje)
+
+        seleccion_msg = await ctx.bot.wait_for("message", check=dm_check, timeout=60)
+        if seleccion_msg.content.lower() == "cancelar": return
+        try:
+            idx = int(seleccion_msg.content.strip()) - 1
+            torneo = torneos[idx]
+        except:
+            await ctx.author.send("❌ Número no válido.")
+            return
+
+        # Confirmación
+        await ctx.author.send(f"⚠️ ¿Reiniciar `{torneo['codigo']}`? Esto borrará todas las rondas y la clasificación, pero mantendrá los inscritos. ¿Continuar? (sí/no)")
+        confirm = await ctx.bot.wait_for("message", check=dm_check, timeout=60)
+        if confirm.content.lower() not in ["sí", "si", "yes", "y"]:
+            await ctx.author.send("❌ Cancelado.")
+            return
+
+        # Resetear el torneo
+        torneo["ronda_actual"] = 0
+        torneo["rondas"] = []
+        torneo["clasificacion"] = []
+        await actualizar_torneo_estado(ctx.bot, torneo["codigo"], torneo)
+
+        # (Opcional) Eliminar mensajes de rondas y ranking anteriores
+        canal_citas = discord.utils.get(ctx.guild.text_channels, name="🍸-citas‐a‐ciegas")
+        if canal_citas:
+            async for msg in canal_citas.history(limit=100):
+                if f"Torneo {torneo['codigo']}" in msg.content and msg.author == ctx.bot.user:
+                    await msg.delete()
+
+        canal_ranking = discord.utils.get(ctx.guild.text_channels, name="🍺-el‐ranking‐de‐la‐barra")
+        if canal_ranking:
+            async for msg in canal_ranking.history(limit=100):
+                if f"Clasificación del torneo `{torneo['codigo']}`" in msg.content and msg.author == ctx.bot.user:
+                    await msg.delete()
+
+        await ctx.author.send(f"✅ Torneo `{torneo['codigo']}` reiniciado. Puedes volver a iniciarlo con `!iniciar-swiss`.")
+
+    except asyncio.TimeoutError:
+        await ctx.author.send("⏰ Tiempo agotado.")
+    except Exception as e:
+        await ctx.author.send(f"❌ Error: {e}")
+
+# utils/swiss_handlers.py
+
+async def publicar_clasificacion_swiss(ctx, torneo: dict):
+    """
+    Publica o actualiza la clasificación de un torneo suizo en el canal de ranking.
+    Si no hay clasificación calculada, la calcula.
+    """
+    canal_ranking = discord.utils.get(ctx.guild.text_channels, name="🍺-el‐ranking‐de‐la‐barra")
+    if not canal_ranking:
+        return
+
+    # Si no hay clasificación, calcularla
+    if not torneo.get("clasificacion"):
+        await calcular_clasificacion(ctx.bot, torneo["codigo"])
+        torneo = await obtener_torneo(ctx.bot, torneo["codigo"])
+
+    clasificacion = torneo.get("clasificacion", [])
+    if not clasificacion:
+        # Si aún no hay clasificación (sin rondas), mostrar todos a 0
+        inscritos = torneo.get("inscritos_ids", [])
+        clasificacion = []
+        for uid in inscritos:
+            try:
+                member = await ctx.guild.fetch_member(int(uid))
+                nombre = member.display_name
+            except:
+                nombre = f"<@{uid}>"
+            clasificacion.append({
+                "discord_id": uid,
+                "nombre": nombre,
+                "rank": len(clasificacion) + 1,
+                "mp": 0,
+                "wins": 0,
+                "losses": 0,
+                "draws": 0,
+                "omw": 0.0,
+                "buchholz": 0.0,
+                "diff": 0
+            })
+
+    # Construir tabla
+    lines = [f"📊 **Clasificación del torneo `{torneo['codigo']}`:**"]
+    lines.append("```markdown")
+    lines.append("Rango | Participante           | G-P-E | Pts  | OMW%   | Buchholz | Dif")
+    lines.append("------|------------------------|-------|------|--------|----------|-----")
+    for p in clasificacion:
+        gpe = f"{p['wins']}-{p['losses']}-{p['draws']}"
+        nombre = p.get('nombre', f"<@{p['discord_id']}>")
+        line = f"{p['rank']:<5} | {nombre[:22]:<22} | {gpe:<5} | {p['mp']:<4} | {p['omw']:.3f}  | {p['buchholz']:.5f}  | {p['diff']:+}"
+        lines.append(line)
+    lines.append("```")
+    mensaje = "\n".join(lines)
+
+    # Buscar mensaje existente para editarlo
+    mensaje_existente = None
+    async for msg in canal_ranking.history(limit=50):
+        if msg.author == ctx.bot.user and not msg.embeds:
+            if msg.content.startswith(f"📊 **Clasificación del torneo `{torneo['codigo']}`:**"):
+                mensaje_existente = msg
+                break
+
+    if mensaje_existente:
+        await mensaje_existente.edit(content=mensaje)
+    else:
+        await canal_ranking.send(mensaje)

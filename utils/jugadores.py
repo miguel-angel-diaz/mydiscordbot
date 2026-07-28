@@ -3,8 +3,6 @@ import aiohttp
 import discord
 import asyncio
 from collections import Counter
-from bs4 import BeautifulSoup
-from urllib.parse import urlparse, parse_qs
 from datetime import datetime, timedelta, timezone
 import matplotlib.pyplot as plt
 import io
@@ -12,13 +10,13 @@ import re
 import config
 import time
 
-from utils.torneos_estado import actualizar_torneo_estado
+from utils.torneos_estado import actualizar_torneo_estado, generar_codigo_unico  # <-- AÑADIR generar_codigo_unico
 from utils.torneos import (
-    actualizar_clasificacion_battle_handle, 
-    generar_codigo_unico, 
+    actualizar_clasificacion_battle_handle,
     partidos_pendientes_handle
 )
 from utils.admin import moderador_permisos_handle
+
 from utils.commons import (
     borrar_mensaje_seguro,
     validar_canal_correcto,
@@ -1332,7 +1330,7 @@ async def mis_comandos_handle(ctx):
 
 async def deck_dm_flow(ctx, author: discord.Member, codigo_torneo: str, modo: str = "subir"):
     """
-    Flujo de DM para subir o editar un deck.
+    Flujo de DM para subir o editar un deck (solo manual).
     Retorna: nombre_deck, archetype, decklist, sideboard, mensaje_deck (solo en edición)
     """
     def dm_check(m):
@@ -1341,7 +1339,6 @@ async def deck_dm_flow(ctx, author: discord.Member, codigo_torneo: str, modo: st
     await author.send(f"📝 Vamos a {'subir tu deck' if modo=='subir' else 'editar tu deck'}.")
 
     if modo == "subir":
-        # ---- Pedir todos los datos ----
         try:
             await author.send("1️⃣ Nombre de tu deck:")
             nombre_deck = (await ctx.bot.wait_for("message", check=dm_check, timeout=120.0)).content.strip()
@@ -1360,13 +1357,11 @@ async def deck_dm_flow(ctx, author: discord.Member, codigo_torneo: str, modo: st
                     )
                     continue
 
-                # Si hay coincidencia exacta
                 if any(s.lower() == archetype_raw.lower() for s in sugerencias):
                     archetype = next(s for s in sugerencias if s.lower() == archetype_raw.lower())
                     await author.send(f"✅ Arquetipo reconocido como **{archetype}**.")
                     break
 
-                # Si hay sugerencias aproximadas
                 opciones_texto = "\n".join([f"{i+1}. {s}" for i, s in enumerate(sugerencias)])
                 await author.send(
                     f"🤔 No encontré un arquetipo exacto, pero aquí tienes algunas sugerencias:\n"
@@ -1384,7 +1379,6 @@ async def deck_dm_flow(ctx, author: discord.Member, codigo_torneo: str, modo: st
                             await author.send(f"✅ Arquetipo seleccionado: **{archetype}**.")
                             break
                     else:
-                        # Si el usuario escribe otro texto, vuelve a buscar
                         archetype_raw = contenido
                         continue
                 except asyncio.TimeoutError:
@@ -1413,14 +1407,12 @@ async def deck_dm_flow(ctx, author: discord.Member, codigo_torneo: str, modo: st
             await author.send("❌ No se encontró tu deck en `submitted-decks`. Debes subirlo primero.")
             return None
 
-        # Inicializar datos del deck
         nombre_deck = deck_actual["nombre_deck"]
         archetype = deck_actual["archetype"]
         decklist = deck_actual["decklist"]
         sideboard = deck_actual["sideboard"]
         mensaje_deck = deck_actual["mensaje"]
 
-        # ---- Bucle de edición ----
         while True:
             dm_embed = discord.Embed(
                 title=f"🃏 Deck actual: {nombre_deck}",
@@ -1474,7 +1466,6 @@ async def deck_dm_flow(ctx, author: discord.Member, codigo_torneo: str, modo: st
                     archetype_raw = msg.content.strip()
                     sugerencias = obtener_sugerencias_arquetipos(archetype_raw)
 
-                    # ⚠️ Si no hay coincidencias
                     if not sugerencias:
                         await author.send(
                             f"❌ No he encontrado ningún arquetipo que coincida con **{archetype_raw}**.\n"
@@ -1483,14 +1474,12 @@ async def deck_dm_flow(ctx, author: discord.Member, codigo_torneo: str, modo: st
                         )
                         continue
 
-                    # ✅ Coincidencia exacta
                     coincidencia_exacta = next((s for s in sugerencias if s.lower() == archetype_raw.lower()), None)
                     if coincidencia_exacta:
                         archetype = coincidencia_exacta
                         await author.send(f"✅ Arquetipo reconocido como **{archetype}**.")
                         break
 
-                    # 🤔 Mostrar sugerencias aproximadas
                     opciones_texto = "\n".join([f"{i+1}. {s}" for i, s in enumerate(sugerencias)])
                     await author.send(
                         f"🤔 No encontré una coincidencia exacta, pero aquí tienes algunas opciones similares:\n"
@@ -1506,7 +1495,6 @@ async def deck_dm_flow(ctx, author: discord.Member, codigo_torneo: str, modo: st
 
                     respuesta = msg_opcion.content.strip()
 
-                    # ✅ Si elige un número válido
                     if respuesta.isdigit():
                         indice = int(respuesta) - 1
                         if 0 <= indice < len(sugerencias):
@@ -1517,7 +1505,6 @@ async def deck_dm_flow(ctx, author: discord.Member, codigo_torneo: str, modo: st
                             await author.send("❌ Número fuera de rango. Intenta de nuevo.")
                             continue
 
-                    # 🧠 Si escribe texto, interpretarlo directamente sin volver a pedir mensaje
                     nuevo_intento = respuesta
                     sugerencias_nuevas = obtener_sugerencias_arquetipos(nuevo_intento)
 
@@ -1535,7 +1522,6 @@ async def deck_dm_flow(ctx, author: discord.Member, codigo_torneo: str, modo: st
                         await author.send(f"✅ Arquetipo reconocido como **{archetype}**.")
                         break
                     else:
-                        # mostrar nuevas sugerencias, pero sin volver a pedir texto
                         opciones_texto = "\n".join([f"{i+1}. {s}" for i, s in enumerate(sugerencias_nuevas)])
                         await author.send(
                             f"❌ No hay coincidencia exacta, pero encontré estas sugerencias:\n"
@@ -1575,7 +1561,6 @@ async def deck_dm_flow(ctx, author: discord.Member, codigo_torneo: str, modo: st
 
     return nombre_deck, archetype, decklist, sideboard, mensaje_deck
 
-
 async def submitted_deck_handle(ctx, codigo_torneo: str = None):
     await borrar_mensaje_seguro(ctx)
     if not await validar_canal_correcto(ctx, "preguntale-a-el-barbas", "!subir-deck"):
@@ -1584,9 +1569,10 @@ async def submitted_deck_handle(ctx, codigo_torneo: str = None):
     if ctx.guild is None:
         await author.send("❌ Este comando debe ejecutarse desde el servidor del torneo.")
         return
+
     def dm_check(m):
         return m.author == ctx.author and isinstance(m.channel, discord.DMChannel)
-    # ✅ Pedir código del torneo si no se proporcionó
+
     if not codigo_torneo:
         codigo_torneo = await obtener_torneo_usuario(
             ctx,
@@ -1597,60 +1583,29 @@ async def submitted_deck_handle(ctx, codigo_torneo: str = None):
             await author.send("❌ No seleccionaste ningún torneo. Cancelando subida de deck.")
             return
 
-    # ✅ Comprobar si el torneo permite subir decks
     ok, error = await validar_torneo_para_edicion(codigo_torneo, author)
     if not ok:
-       await author.send(error)
-       return
+        await author.send(error)
+        return
 
-    # ✅ Comprobar si ya hay un deck subido
     codigo_deck = f"{codigo_torneo}_{author.id}"
     deck_existente = await obtener_deck_en_canal(ctx.guild, codigo_deck)
     if deck_existente:
         await author.send(f"❌ Ya tienes un deck subido para este torneo. Usa `!editar-deck {codigo_torneo}` si deseas modificarlo.")
         return
 
-    # Preguntar si quiere importar desde tcdecks
-    await author.send(
-        "📥 Elige cómo quieres subir tu deck:\n"
-        "1️⃣ tcdecks.net\n"
-        "2️⃣ Manual"
-    )
-    try:
-        respuesta = await ctx.bot.wait_for("message", check=dm_check, timeout=60.0)
-        opcion = respuesta.content.strip()
-    except asyncio.TimeoutError:
-        await author.send("⏰ Tiempo agotado. Vuelve a intentarlo.")
+    # Iniciar flujo manual directamente (sin preguntar opción)
+    datos = await deck_dm_flow(ctx, author, codigo_torneo, modo="subir")
+    if not datos:
         return
 
-    decklist = ""
-    sideboard = ""
-    nombre_deck = "Deck importado"
-    archetype = "Desconocido"
+    try:
+        nombre_deck, archetype, decklist, sideboard, extra = datos
+    except Exception as e:
+        print(f"❌ Error al desempaquetar datos: {e}")
+        return
 
-    if opcion == "1":
-        # Leer deck desde TCDecks
-        nombre_deck, archetype, decklist, sideboard = await leer_deck_tc_decks(ctx)
-        if decklist is None:
-            await author.send("❌ Error al leer el deck desde tcdecks.net. Intenta subirlo manualmente.")
-            return
-
-    elif opcion == "2":
-        datos = await deck_dm_flow(ctx, author, codigo_torneo, modo="subir")
-        if not datos:
-            return
-
-        try:
-            nombre_deck, archetype, decklist_input, sideboard_input, extra = datos
-
-        except Exception as e:
-            print(f"❌ Error al desempaquetar datos: {e}")
-            return
-
-        decklist = decklist_input
-        sideboard = sideboard_input
-
-    # ✅ Publicar embed en submitted-decks
+    # Publicar embed en submitted-decks
     canal_submitted = discord.utils.get(ctx.guild.text_channels, name="submitted-decks")
     if canal_submitted:
         embed_final = discord.Embed(
@@ -1668,7 +1623,6 @@ async def submitted_deck_handle(ctx, codigo_torneo: str = None):
         await canal_submitted.send(embed=embed_final)
         await author.send(f"✅ Tu deck ha sido enviado con éxito al torneo `{codigo_torneo}`.")
         await author.send(embed=embed_final)
-
 
 async def editar_deck_handle(ctx, codigo_torneo: str = None):
     await borrar_mensaje_seguro(ctx)
@@ -1956,92 +1910,6 @@ async def subir_deck_desde_edicion(ctx, author: discord.Member, codigo_torneo: s
             )
     except Exception as e:
         await author.send(f"❌ Error al publicar el deck: {str(e)}")
-
-
-async def leer_deck_tc_decks(ctx):
-    author = ctx.author
-
-    def dm_check(m):
-        return m.author == author and isinstance(m.channel, discord.DMChannel)
-
-    # Pedir URL del deck
-    await author.send("🔗 Por favor envíame la URL del deck (tcdecks.net):")
-    try:
-        respuesta = await ctx.bot.wait_for("message", check=dm_check, timeout=120)
-        url = respuesta.content.strip()
-    except asyncio.TimeoutError:
-        await author.send("⏰ Tiempo agotado. Vuelve a intentarlo.")
-        return None, None, None, None
-
-    # Extraer iddeck automáticamente
-    try:
-        parsed_url = urlparse(url)
-        query_params = parse_qs(parsed_url.query)
-        iddeck = query_params.get("iddeck", [None])[0]
-        if not iddeck:
-            await author.send("❌ No se pudo encontrar el parámetro `iddeck` en la URL.")
-            return None, None, None, None
-    except Exception as e:
-        await author.send(f"❌ Error al procesar la URL: {e}")
-        return None, None, None, None
-
-    # Pedir nombre del deck
-    await author.send("✏️ Por favor ingresa el **nombre de tu deck**:")
-    try:
-        respuesta = await ctx.bot.wait_for("message", check=dm_check, timeout=60.0)
-        nombre_deck = respuesta.content.strip() or "Deck importado"
-    except asyncio.TimeoutError:
-        await author.send("⏰ Tiempo agotado. Usando nombre por defecto: Deck importado")
-        nombre_deck = "Deck importado"
-
-    # Pedir arquetipo
-    await author.send("🧩 Por favor ingresa el **arquetipo de tu deck**:")
-    try:
-        respuesta = await ctx.bot.wait_for("message", check=dm_check, timeout=60.0)
-        archetype = respuesta.content.strip() or "Desconocido"
-    except asyncio.TimeoutError:
-        await author.send("⏰ Tiempo agotado. Usando arquetipo por defecto: Desconocido")
-        archetype = "Desconocido"
-
-    # Llamada a tcdecks
-    print_url = f"https://www.tcdecks.net/print.php?iddeck={iddeck}"
-    
-
-    async with aiohttp.ClientSession(headers=config.headers) as session:
-        async with session.get(print_url) as resp:
-            if resp.status != 200:
-                await author.send(f"❌ No se pudo acceder a la URL proporcionada. Código HTTP: {resp.status}")
-                return nombre_deck, archetype, None, None
-            html = await resp.text()
-
-    soup = BeautifulSoup(html, "html.parser")
-
-    def limpiar_texto(td):
-        texto = td.get_text(separator="\n", strip=True)
-        lineas = [line for line in texto.split("\n") if line and not re.search(r'Number|Card Name', line)]
-        lineas = [re.sub(r'\xa0', ' ', line) for line in lineas]
-        return "\n".join(lineas)
-
-    # Inicializar valores
-    decklist = "No se pudo obtener la decklist."
-    sideboard = "No hay sideboard."
-
-    # Buscar h3 para Main Deck y Sideboard
-    for h3 in soup.find_all("h3"):
-        if "Main Deck" in h3.text:
-            tabla = h3.find_next("table")
-            if tabla:
-                td = tabla.find("td")
-                if td:
-                    decklist = limpiar_texto(td)
-        elif "Sideboard" in h3.text:
-            tabla = h3.find_next("table")
-            if tabla:
-                td = tabla.find("td")
-                if td:
-                    sideboard = limpiar_texto(td)
-
-    return nombre_deck, archetype, decklist, sideboard
 
 
 async def cartas_mas_jugadas_handle(ctx, codigo_torneo: str = None, channel: str = None):

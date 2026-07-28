@@ -1,32 +1,27 @@
 ######## torneos.py #######
 
-
 import discord
-
 import aiohttp
 import asyncio
-
 import re
 import config
 from datetime import datetime
+import random
+import string
 
 from utils.commons import (
-    borrar_mensaje_seguro, 
-    validar_canal_correcto, 
-    obtener_torneo_usuario, 
-    cartas_mas_jugadas, 
-    best_decks_handle, 
+    borrar_mensaje_seguro,
+    validar_canal_correcto,
+    obtener_torneo_usuario,
+    cartas_mas_jugadas,
+    best_decks_handle,
     analizar_torneo_con_ia,
-    calcular_clasificacion_torneo,
-    generar_codigo_unico
+    calcular_clasificacion_torneo
 )
+from utils.admin import moderador_permisos_handle
+from utils.torneos_estado import generar_codigo_unico, slugify_challonge 
 
 from utils.admin import moderador_permisos_handle
-
-def slugify_challonge(value: str) -> str:
-    # Convierte a minúsculas y elimina cualquier carácter que no sea letra o número
-    value = value.lower()
-    return re.sub(r'[^a-z0-9]', '', value)
 
 async def new_tournament_assistance_handle(ctx, *, args=None):
     """Asistente por DM para crear un torneo paso a paso sin pedir deck URL."""

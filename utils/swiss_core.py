@@ -1,17 +1,15 @@
 # utils/swiss_core.py
 import random
-import string
-from datetime import datetime
-from typing import List, Dict, Optional, Tuple
 from collections import defaultdict
+from typing import List, Dict, Optional, Tuple
 
 from utils.torneos_estado import (
     leer_estado,
     guardar_estado,
     actualizar_torneo_estado,
-    eliminar_torneo_estado
+    slugify_challonge,
+    generar_codigo_unico
 )
-from utils.torneos import slugify_challonge, generar_codigo_unico
 
 # ============================================================
 # GESTIÓN DE TORNEOS
@@ -20,7 +18,7 @@ from utils.torneos import slugify_challonge, generar_codigo_unico
 async def crear_torneo(bot, nombre: str, max_jugadores: int, nivel: str, fecha_inicio: str) -> str:
     nivel_slug = slugify_challonge(nivel)
     codigo = f"premodern{nivel_slug}{generar_codigo_unico(6)}"
-    
+
     torneo = {
         "codigo": codigo,
         "nombre": nombre,
@@ -33,7 +31,7 @@ async def crear_torneo(bot, nombre: str, max_jugadores: int, nivel: str, fecha_i
         "rondas": [],
         "clasificacion": []
     }
-    
+
     await actualizar_torneo_estado(bot, codigo, torneo)
     return codigo
 
@@ -67,15 +65,15 @@ async def inscribir_jugador(bot, codigo: str, usuario_id: int) -> Tuple[bool, st
         return False, "El torneo no existe."
     if torneo.get("tipo") != "swiss":
         return False, "Este torneo no es suizo."
-    
+
     inscritos = torneo.get("inscritos_ids", [])
     if str(usuario_id) in inscritos:
         return False, "Ya estás inscrito."
-    
+
     maximo = torneo.get("total_maximo")
     if maximo and len(inscritos) >= maximo:
         return False, "No quedan plazas disponibles."
-    
+
     inscritos.append(str(usuario_id))
     torneo["inscritos_ids"] = inscritos
     await actualizar_torneo_estado(bot, codigo, torneo)
@@ -85,11 +83,11 @@ async def desinscribir_jugador(bot, codigo: str, usuario_id: int) -> Tuple[bool,
     torneo = await obtener_torneo(bot, codigo)
     if not torneo:
         return False, "El torneo no existe."
-    
+
     inscritos = torneo.get("inscritos_ids", [])
     if str(usuario_id) not in inscritos:
         return False, "No estás inscrito en este torneo."
-    
+
     inscritos.remove(str(usuario_id))
     torneo["inscritos_ids"] = inscritos
     await actualizar_torneo_estado(bot, codigo, torneo)
@@ -99,25 +97,39 @@ async def desinscribir_jugador(bot, codigo: str, usuario_id: int) -> Tuple[bool,
 # RONDAS Y EMPAREJAMIENTOS
 # ============================================================
 
+# utils/swiss_core.py - generar_ronda (versión corregida)
+
 async def generar_ronda(bot, codigo: str) -> Tuple[bool, str]:
     torneo = await obtener_torneo(bot, codigo)
     if not torneo:
         return False, "El torneo no existe."
     if torneo.get("tipo") != "swiss":
         return False, "Este torneo no es suizo."
-    
+
     participantes = torneo.get("inscritos_ids", [])
     if len(participantes) < 2:
         return False, "Se necesitan al menos 2 jugadores."
-    
+
     ronda_actual = torneo.get("ronda_actual", 0)
     nueva_ronda = ronda_actual + 1
-    
+
+    # Calcular puntuaciones (si no hay rondas previas, todos a 0)
     puntuaciones = _calcular_puntuaciones(torneo)
+    # Si no hay puntuaciones, asignar 0 a todos los participantes
+    if not puntuaciones:
+        for pid in participantes:
+            puntuaciones[pid] = 0.0
+
     historial = _cargar_historial_emparejamientos(torneo)
-    
+
+    # Ordenar participantes por puntuación descendente (y aleatorio para desempate)
     ordenados = sorted(puntuaciones.items(), key=lambda x: (-x[1], random.random()))
-    
+
+    # Depuración: imprimir participantes y puntuaciones
+    print(f"🔍 Participantes: {participantes}")
+    print(f"🔍 Puntuaciones: {puntuaciones}")
+    print(f"🔍 Ordenados: {ordenados}")
+
     emparejamientos = []
     usados = set()
     for jugador, pts in ordenados:
@@ -131,7 +143,11 @@ async def generar_ronda(bot, codigo: str) -> Tuple[bool, str]:
         else:
             emparejamientos.append({"j1": jugador, "j2": None, "resultado": "BYE"})
             usados.add(jugador)
-    
+
+    # Si después de todo no hay emparejamientos, es un error
+    if not emparejamientos:
+        return False, "No se pudieron generar emparejamientos. Revisa los participantes."
+
     ronda_data = {
         "numero": nueva_ronda,
         "emparejamientos": emparejamientos
@@ -139,8 +155,7 @@ async def generar_ronda(bot, codigo: str) -> Tuple[bool, str]:
     torneo.setdefault("rondas", []).append(ronda_data)
     torneo["ronda_actual"] = nueva_ronda
     await actualizar_torneo_estado(bot, codigo, torneo)
-    return True, f"Ronda {nueva_ronda} generada."
-
+    return True, f"Ronda {nueva_ronda} generada con {len(emparejamientos)} emparejamientos."
 # ============================================================
 # REPORTE DE RESULTADOS
 # ============================================================
@@ -149,15 +164,15 @@ async def reportar_resultado(bot, codigo: str, jugador1_id: int, resultado: str,
     torneo = await obtener_torneo(bot, codigo)
     if not torneo:
         return False, "El torneo no existe."
-    
+
     rondas = torneo.get("rondas", [])
     if not rondas:
         return False, "El torneo no tiene rondas generadas."
-    
+
     ronda_actual = rondas[-1]
     if ronda_actual.get("completa", False):
         return False, "La ronda actual ya está completa."
-    
+
     encontrado = False
     for emp in ronda_actual["emparejamientos"]:
         if (emp["j1"] == str(jugador1_id) and emp["j2"] == str(jugador2_id)) or \
@@ -167,11 +182,11 @@ async def reportar_resultado(bot, codigo: str, jugador1_id: int, resultado: str,
             break
     if not encontrado:
         return False, "Ese partido no existe en la ronda actual."
-    
+
     todos_reportados = all(e.get("resultado") is not None for e in ronda_actual["emparejamientos"])
     if todos_reportados:
         ronda_actual["completa"] = True
-    
+
     await actualizar_torneo_estado(bot, codigo, torneo)
     return True, "Resultado reportado."
 
@@ -183,7 +198,7 @@ async def calcular_clasificacion(bot, codigo: str) -> List[Dict]:
     torneo = await obtener_torneo(bot, codigo)
     if not torneo:
         return []
-    
+
     stats = defaultdict(lambda: {
         "mp": 0.0,
         "wins": 0,
@@ -193,7 +208,7 @@ async def calcular_clasificacion(bot, codigo: str) -> List[Dict]:
         "games_won": 0,
         "games_played": 0
     })
-    
+
     for ronda in torneo.get("rondas", []):
         for emp in ronda.get("emparejamientos", []):
             if emp.get("resultado") == "BYE":
@@ -229,7 +244,7 @@ async def calcular_clasificacion(bot, codigo: str) -> List[Dict]:
                 stats[j2]["mp"] += 1.0
                 stats[j1]["draws"] += 1
                 stats[j2]["draws"] += 1
-    
+
     for pid, data in stats.items():
         omw = 0.0
         buch = []
@@ -248,9 +263,9 @@ async def calcular_clasificacion(bot, codigo: str) -> List[Dict]:
         else:
             data["buchholz"] = 0.0
         data["diff"] = data["games_won"] - (data["games_played"] - data["games_won"])
-    
+
     ranking = sorted(stats.items(), key=lambda x: (-x[1]["mp"], -x[1]["omw"], -x[1]["diff"], -x[1]["buchholz"]))
-    
+
     clasificacion = []
     for i, (pid, data) in enumerate(ranking, 1):
         clasificacion.append({
@@ -269,7 +284,7 @@ async def calcular_clasificacion(bot, codigo: str) -> List[Dict]:
     return clasificacion
 
 # ============================================================
-# FUNCIONES AUXILIARES
+# FUNCIONES AUXILIARES (privadas)
 # ============================================================
 
 def _calcular_puntuaciones(torneo: Dict) -> Dict[str, float]:
@@ -314,7 +329,6 @@ def _buscar_oponente(jugador: str, ordenados: List[Tuple[str, float]], usados: s
         return candidatos[0]
     candidatos = [j for j, p in ordenados if j not in usados and j != jugador]
     if candidatos:
-        # Fallback: elegir el que menos se ha enfrentado y tiene menor puntuación
         return min(candidatos, key=lambda j: (historial.get(jugador, {}).get(j, 0), -_puntuacion_de(j, ordenados)))
     return None
 
