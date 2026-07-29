@@ -1018,17 +1018,12 @@ def contar_cartas(lista_raw: str) -> int:
 # ESTADO DE TORNEOS PARA USUARIO (web)
 # ============================================================
 
-# utils/commons.py - obtener_estado_torneos_usuario
+# utils/commons.py
 
 async def obtener_estado_torneos_usuario(guild, member: discord.Member):
     bot = guild._state._get_client()
     estado = await leer_estado(bot)
     torneos_estado = estado.get("torneos", [])
-
-    # LOG: Ver qué hay en el estado
-    print(f"🔍 [obtener_estado_torneos_usuario] Torneos en estado: {len(torneos_estado)}")
-    for t in torneos_estado:
-        print(f"   - {t.get('codigo')} | nivel: {t.get('nivel')} (tipo: {type(t.get('nivel'))})")
 
     decks_usuario = await obtener_decks_por_usuario(guild, str(member.id), include_message=False)
     decks_por_torneo = {d["codigo_torneo"]: d for d in decks_usuario if d.get("codigo_torneo")}
@@ -1068,6 +1063,7 @@ async def obtener_estado_torneos_usuario(guild, member: discord.Member):
         })
 
     return resultado
+
 # ============================================================
 # INSCRIPCIÓN WEB (soporta Swiss y Challonge)
 # ============================================================
@@ -1132,9 +1128,7 @@ def tiene_rol_permitido(member: discord.Member, roles_permitidos: set):
 # DECKS POR USUARIO (parseo de embeds)
 # ============================================================
 
-# utils/commons.py - _parsear_embed_deck
-
-# utils/commons.py - _parsear_embed_deck
+# utils/commons.py
 
 def _parsear_embed_deck(embed: discord.Embed) -> dict | None:
     campos = {f.name: f.value for f in embed.fields}
@@ -1157,32 +1151,35 @@ def _parsear_embed_deck(embed: discord.Embed) -> dict | None:
     print(f"🔍 [_parsear_embed_deck] Descripción del embed:")
     print(f"   {descripcion}")
 
-    # 🔥 CORRECCIÓN: Regex más flexible para "Código:"
+    # 🔥 CORRECCIÓN: Buscar explícitamente el formato con negritas y backticks
     codigo_deck = None
-    # Buscar "Código:" seguido de cualquier cosa hasta salto de línea, ignorando backticks y negritas
-    match_codigo = re.search(r"Código:\s*`?([^`\n]+)`?", descripcion, re.IGNORECASE)
+    # Buscar "**Código:** `codigo`"
+    match_codigo = re.search(r"\*\*Código:\*\*\s*`([^`]+)`", descripcion, re.IGNORECASE)
     if match_codigo:
         codigo_deck = match_codigo.group(1).strip()
         print(f"   ✅ Código deck capturado: {codigo_deck}")
     else:
-        # Fallback más amplio
-        match_codigo = re.search(r"Código:\s*([^\n]+)", descripcion, re.IGNORECASE)
+        # Fallback: buscar sin negritas
+        match_codigo = re.search(r"Código:\s*`([^`]+)`", descripcion, re.IGNORECASE)
         if match_codigo:
             codigo_deck = match_codigo.group(1).strip()
             print(f"   ✅ Código deck capturado (fallback): {codigo_deck}")
+        else:
+            print(f"   ❌ No se encontró Código en la descripción")
 
-    # 🔥 CORRECCIÓN: Regex más flexible para "Torneo:"
+    # Buscar "**Torneo:** `codigo`"
     codigo_torneo = None
-    # Buscar "Torneo:" seguido de cualquier cosa hasta salto de línea
-    match_torneo = re.search(r"Torneo:\s*`?([^`\n]+)`?", descripcion, re.IGNORECASE)
+    match_torneo = re.search(r"\*\*Torneo:\*\*\s*`([^`]+)`", descripcion, re.IGNORECASE)
     if match_torneo:
         codigo_torneo = match_torneo.group(1).strip()
         print(f"   ✅ Código torneo capturado: {codigo_torneo}")
     else:
-        match_torneo = re.search(r"Torneo:\s*([^\n]+)", descripcion, re.IGNORECASE)
+        match_torneo = re.search(r"Torneo:\s*`([^`]+)`", descripcion, re.IGNORECASE)
         if match_torneo:
             codigo_torneo = match_torneo.group(1).strip()
             print(f"   ✅ Código torneo capturado (fallback): {codigo_torneo}")
+        else:
+            print(f"   ❌ No se encontró Torneo en la descripción")
 
     # Si no se encontró torneo, extraerlo del código
     if not codigo_torneo and codigo_deck:
