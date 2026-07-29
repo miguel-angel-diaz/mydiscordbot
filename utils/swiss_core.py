@@ -1,4 +1,5 @@
 # utils/swiss_core.py
+import discord
 import random
 from collections import defaultdict
 from typing import List, Dict, Optional, Tuple
@@ -337,3 +338,129 @@ def _puntuacion_de(jugador: str, ordenados: List[Tuple[str, float]]) -> float:
         if j == jugador:
             return pts
     return 0.0
+
+# utils/swiss_core.py
+
+async def _siguiente_ronda_automatica(bot, codigo: str, guild: discord.Guild = None):
+    """Genera la siguiente ronda y publica los nuevos emparejamientos en el canal de citas."""
+    torneo = await obtener_torneo(bot, codigo)
+    if not torneo:
+        return
+    ronda_anterior = torneo.get("ronda_actual", 0)
+    nueva_ronda = ronda_anterior + 1
+
+    ok, msg = await generar_ronda(bot, codigo)
+    if not ok:
+        print(f"Error generando ronda: {msg}")
+        return
+
+    if guild:
+        # Publicar nuevos emparejamientos en el canal de citas
+        canal_citas = discord.utils.get(guild.text_channels, name="🍸-citas‐a‐ciegas")
+        if canal_citas:
+            # Obtener el torneo actualizado
+            torneo_actual = await obtener_torneo(bot, codigo)
+            if torneo_actual:
+                rondas = torneo_actual.get("rondas", [])
+                if rondas:
+                    ultima_ronda = rondas[-1]
+                    mensaje_citas = f"📢 **Emparejamientos Ronda {ultima_ronda['numero']} - Torneo {codigo}**\n"
+                    for emp in ultima_ronda.get("emparejamientos", []):
+                        j1 = emp["j1"]
+                        j2 = emp["j2"]
+                        if j2 is None:
+                            mensaje_citas += f"<@{j1}> → BYE\n"
+                        else:
+                            mensaje_citas += f"<@{j1}> vs <@{j2}>\n"
+                    await canal_citas.send(mensaje_citas)
+
+
+
+async def _siguiente_ronda_automatica(bot, codigo: str, guild: discord.Guild = None):
+    """Genera la siguiente ronda y publica los nuevos emparejamientos en el canal de citas."""
+    torneo = await obtener_torneo(bot, codigo)
+    if not torneo:
+        return
+    ronda_anterior = torneo.get("ronda_actual", 0)
+    nueva_ronda = ronda_anterior + 1
+
+    ok, msg = await generar_ronda(bot, codigo)
+    if not ok:
+        print(f"Error generando ronda: {msg}")
+        return
+
+    if guild:
+        # Publicar nuevos emparejamientos en el canal de citas
+        canal_citas = discord.utils.get(guild.text_channels, name="🍸-citas‐a‐ciegas")
+        if canal_citas:
+            # Obtener el torneo actualizado
+            torneo_actual = await obtener_torneo(bot, codigo)
+            if torneo_actual:
+                rondas = torneo_actual.get("rondas", [])
+                if rondas:
+                    ultima_ronda = rondas[-1]
+                    mensaje_citas = f"📢 **Emparejamientos Ronda {ultima_ronda['numero']} - Torneo {codigo}**\n"
+                    for emp in ultima_ronda.get("emparejamientos", []):
+                        j1 = emp["j1"]
+                        j2 = emp["j2"]
+                        if j2 is None:
+                            mensaje_citas += f"<@{j1}> → BYE\n"
+                        else:
+                            mensaje_citas += f"<@{j1}> vs <@{j2}>\n"
+                    await canal_citas.send(mensaje_citas)
+
+
+
+async def eliminar_ronda_swiss(bot, codigo: str, ronda_num: int, guild: discord.Guild = None) -> Tuple[bool, str]:
+    """
+    Elimina una ronda específica de un torneo suizo.
+    Retorna: (ok, mensaje)
+    """
+    torneo = await obtener_torneo(bot, codigo)
+    if not torneo:
+        return False, "El torneo no existe."
+
+    if torneo.get("tipo") != "swiss":
+        return False, "Este torneo no es suizo."
+
+    rondas = torneo.get("rondas", [])
+    if not rondas:
+        return False, "El torneo no tiene rondas."
+
+    # Buscar la ronda por número
+    idx = -1
+    for i, r in enumerate(rondas):
+        if r.get("numero") == ronda_num:
+            idx = i
+            break
+
+    if idx == -1:
+        return False, f"La ronda {ronda_num} no existe."
+
+    # Eliminar la ronda
+    rondas.pop(idx)
+
+    # Actualizar ronda_actual si es necesario
+    if ronda_num == torneo.get("ronda_actual", 0):
+        if rondas:
+            # Si quedan rondas, la actual es la última
+            torneo["ronda_actual"] = rondas[-1]["numero"]
+        else:
+            torneo["ronda_actual"] = 0
+
+    # Guardar el torneo sin la ronda
+    await actualizar_torneo_estado(bot, codigo, torneo)
+
+    # Recalcular clasificación desde las rondas restantes
+    await calcular_clasificacion(bot, codigo)
+
+    # Eliminar el mensaje de citas de esa ronda
+    if guild:
+        canal_citas = discord.utils.get(guild.text_channels, name="🍸-citas‐a‐ciegas")
+        if canal_citas:
+            async for msg in canal_citas.history(limit=200):
+                if msg.author == bot.user and f"Emparejamientos Ronda {ronda_num} - Torneo {codigo}" in msg.content:
+                    await msg.delete()
+                    break
+
+    return True, f"Ronda {ronda_num} eliminada correctamente."

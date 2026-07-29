@@ -17,7 +17,8 @@ from utils.swiss_core import (
     desinscribir_jugador,
     generar_ronda,
     reportar_resultado,
-    calcular_clasificacion
+    calcular_clasificacion,
+    eliminar_ronda_swiss
 )
 
 # ============================================================
@@ -374,6 +375,8 @@ async def swiss_iniciar_asistente_handle(ctx):
 
 # utils/swiss_handlers.py
 
+# utils/swiss_handlers.py
+
 async def swiss_reportar_asistente_handle(ctx):
     await borrar_mensaje_seguro(ctx)
 
@@ -382,6 +385,7 @@ async def swiss_reportar_asistente_handle(ctx):
         def dm_check(m):
             return m.author == ctx.author and isinstance(m.channel, discord.DMChannel)
 
+        # 1. Listar torneos activos con rondas generadas
         torneos = await obtener_torneos_activos(ctx.bot)
         activos = [t for t in torneos if t.get("ronda_actual", 0) > 0]
         if not activos:
@@ -395,7 +399,8 @@ async def swiss_reportar_asistente_handle(ctx):
         await ctx.author.send(mensaje)
 
         seleccion_msg = await ctx.bot.wait_for("message", check=dm_check, timeout=60)
-        if seleccion_msg.content.lower() == "cancelar": return
+        if seleccion_msg.content.lower() == "cancelar":
+            return
         try:
             idx = int(seleccion_msg.content.strip()) - 1
             torneo = activos[idx]
@@ -421,41 +426,48 @@ async def swiss_reportar_asistente_handle(ctx):
         def esta_en_emparejamiento(user_id, emp):
             return emp.get("j1") == str(user_id) or emp.get("j2") == str(user_id)
 
-        # Pedir jugador 1
+        # 2. Pedir jugador 1
         await ctx.author.send("2️⃣ ¿Jugador 1? (nombre o mención)")
         j1_msg = await ctx.bot.wait_for("message", check=dm_check, timeout=60)
-        if j1_msg.content.lower() == "cancelar": return
+        if j1_msg.content.lower() == "cancelar":
+            return
         jugador1 = buscar_usuario_en_servidor(ctx.guild, j1_msg.content)
         if not jugador1:
             await ctx.author.send("❌ Usuario no encontrado.")
             return
 
+        # 3. Pedir resultado
         await ctx.author.send("3️⃣ ¿Resultado? (formato X-Y, ej: 2-1)")
         res_msg = await ctx.bot.wait_for("message", check=dm_check, timeout=60)
-        if res_msg.content.lower() == "cancelar": return
+        if res_msg.content.lower() == "cancelar":
+            return
         resultado = res_msg.content.strip()
         if "-" not in resultado:
-            await ctx.author.send("❌ Formato inválido.")
+            await ctx.author.send("❌ Formato inválido. Usa X-Y.")
             return
 
+        # 4. Pedir jugador 2
         await ctx.author.send("4️⃣ ¿Jugador 2? (nombre o mención)")
         j2_msg = await ctx.bot.wait_for("message", check=dm_check, timeout=60)
-        if j2_msg.content.lower() == "cancelar": return
+        if j2_msg.content.lower() == "cancelar":
+            return
         jugador2 = buscar_usuario_en_servidor(ctx.guild, j2_msg.content)
         if not jugador2:
             await ctx.author.send("❌ Usuario no encontrado.")
             return
 
         # ============================================================
-        # 🔐 VALIDACIONES DE PERMISOS Y EMPAREJAMIENTO
+        # VALIDACIONES DE PERMISOS Y EMPAREJAMIENTO
         # ============================================================
 
         # 1. Verificar que el enfrentamiento existe en la ronda actual
         emp_encontrado = None
-        for emp in emparejamientos:
+        emp_idx = -1
+        for i, emp in enumerate(emparejamientos):
             if (emp.get("j1") == str(jugador1.id) and emp.get("j2") == str(jugador2.id)) or \
                (emp.get("j1") == str(jugador2.id) and emp.get("j2") == str(jugador1.id)):
                 emp_encontrado = emp
+                emp_idx = i
                 break
 
         if not emp_encontrado:
@@ -485,14 +497,47 @@ async def swiss_reportar_asistente_handle(ctx):
             await ctx.author.send("❌ Cancelado.")
             return
 
-        ok, msg = await reportar_resultado(ctx.bot, torneo["codigo"], jugador1.id, resultado, jugador2.id)
+        # Llamar a reportar_resultado (ahora devuelve más datos)
+        ok, msg, emp, emp_idx = await reportar_resultado(
+            ctx.bot, torneo["codigo"], jugador1.id, resultado, jugador2.id, ctx.guild
+        )
         if not ok:
             await ctx.author.send(f"❌ {msg}")
             return
 
-        await ctx.author.send(f"✅ Resultado reportado en `{torneo['codigo']}`.")
+        await ctx.author.send(f"✅ {msg}")
 
-        # Actualizar clasificación
+        # ============================================================
+        # 1. ELIMINAR EL ENFRENTAMIENTO DEL MENSAJE DE LA RONDA EN CITAS
+        # ============================================================
+        canal_citas = discord.utils.get(ctx.guild.text_channels, name="🍸-citas‐a‐ciegas")
+        if canal_citas and emp is not None and emp_idx >= 0:
+            # Buscar el mensaje de la ronda actual en el canal
+            torneo_actual = await obtener_torneo(ctx.bot, torneo["codigo"])
+            if torneo_actual:
+                rondas = torneo_actual.get("rondas", [])
+                if rondas:
+                    ronda_actual_data = rondas[-1]
+                    ronda_num = ronda_actual_data.get("numero", 0)
+                    # Buscar mensaje que contenga el código y la ronda
+                    async for msg in canal_citas.history(limit=200):
+                        if msg.author == ctx.bot.user and f"Emparejamientos Ronda {ronda_num} - Torneo {torneo['codigo']}" in msg.content:
+                            # Editar el mensaje: eliminar la línea correspondiente al emparejamiento reportado
+                            lines = msg.content.splitlines()
+                            nueva_lines = []
+                            for line in lines:
+                                # Si la línea contiene menciones de ambos jugadores, la omitimos
+                                if (jugador1.mention in line and jugador2.mention in line) or \
+                                   (jugador2.mention in line and jugador1.mention in line):
+                                    continue
+                                nueva_lines.append(line)
+                            if len(nueva_lines) < len(lines):
+                                await msg.edit(content="\n".join(nueva_lines))
+                            break
+
+        # ============================================================
+        # 2. ACTUALIZAR CLASIFICACIÓN (siempre)
+        # ============================================================
         await calcular_clasificacion(ctx.bot, torneo["codigo"])
         torneo_actualizado = await obtener_torneo(ctx.bot, torneo["codigo"])
         if torneo_actualizado:
@@ -505,6 +550,90 @@ async def swiss_reportar_asistente_handle(ctx):
                 f"🏆 Resultado en `{torneo['codigo']}`:\n"
                 f"**{jugador1.display_name}** {resultado} **{jugador2.display_name}**"
             )
+
+    except asyncio.TimeoutError:
+        await ctx.author.send("⏰ Tiempo agotado.")
+    except Exception as e:
+        await ctx.author.send(f"❌ Error: {e}")
+
+# utils/swiss_handlers.py
+
+async def swiss_eliminar_ronda_asistente_handle(ctx):
+    await borrar_mensaje_seguro(ctx)
+    if not ctx.author.guild_permissions.administrator:
+        await ctx.author.send("❌ Necesitas ser administrador.")
+        return
+
+    try:
+        await ctx.author.send("🗑️ **Eliminar ronda de torneo suizo**\nEscribe `cancelar` para salir.")
+        def dm_check(m):
+            return m.author == ctx.author and isinstance(m.channel, discord.DMChannel)
+
+        # 1. Listar torneos activos con rondas
+        torneos = await obtener_torneos_activos(ctx.bot)
+        con_rondas = [t for t in torneos if t.get("rondas")]
+        if not con_rondas:
+            await ctx.author.send("❌ No hay torneos suizos con rondas.")
+            return
+
+        mensaje = "📋 **Torneos con rondas:**\n"
+        for i, t in enumerate(con_rondas, 1):
+            rondas_count = len(t.get("rondas", []))
+            ronda_actual = t.get("ronda_actual", 0)
+            mensaje += f"{i}. `{t['codigo']}` → {t['nombre']} ({rondas_count} rondas, última Ronda {ronda_actual})\n"
+        mensaje += "\nEscribe el **número** del torneo:"
+        await ctx.author.send(mensaje)
+
+        seleccion_msg = await ctx.bot.wait_for("message", check=dm_check, timeout=60)
+        if seleccion_msg.content.lower() == "cancelar":
+            return
+        try:
+            idx = int(seleccion_msg.content.strip()) - 1
+            torneo = con_rondas[idx]
+        except:
+            await ctx.author.send("❌ Número no válido.")
+            return
+
+        # 2. Listar rondas del torneo
+        rondas = torneo.get("rondas", [])
+        mensaje_rondas = f"📋 **Rondas del torneo {torneo['codigo']}:**\n"
+        for i, r in enumerate(rondas, 1):
+            num = r.get("numero", 0)
+            completa = "✅" if r.get("completa", False) else "⏳"
+            mensaje_rondas += f"{i}. Ronda {num} {completa}\n"
+        mensaje_rondas += "\nEscribe el **número** de la ronda que quieres eliminar:"
+        await ctx.author.send(mensaje_rondas)
+
+        ronda_seleccion_msg = await ctx.bot.wait_for("message", check=dm_check, timeout=60)
+        if ronda_seleccion_msg.content.lower() == "cancelar":
+            return
+        try:
+            idx_ronda = int(ronda_seleccion_msg.content.strip()) - 1
+            ronda = rondas[idx_ronda]
+            ronda_num = ronda.get("numero")
+        except:
+            await ctx.author.send("❌ Número no válido.")
+            return
+
+        # Confirmación
+        await ctx.author.send(f"⚠️ ¿Estás seguro de eliminar la Ronda {ronda_num} del torneo `{torneo['codigo']}`? Esto borrará todos los resultados de esa ronda y recalculará la clasificación. (sí/no)")
+        confirm = await ctx.bot.wait_for("message", check=dm_check, timeout=60)
+        if confirm.content.lower() not in ["sí", "si", "yes", "y"]:
+            await ctx.author.send("❌ Cancelado.")
+            return
+
+        # Ejecutar eliminación
+        ok, msg = await eliminar_ronda_swiss(ctx.bot, torneo["codigo"], ronda_num, ctx.guild)
+        if not ok:
+            await ctx.author.send(f"❌ {msg}")
+            return
+
+        await ctx.author.send(f"✅ {msg}")
+
+        # Actualizar clasificación visual (ya se ha recalculado internamente)
+        torneo_actualizado = await obtener_torneo(ctx.bot, torneo["codigo"])
+        if torneo_actualizado:
+            await publicar_clasificacion_swiss(ctx, torneo_actualizado)
 
     except asyncio.TimeoutError:
         await ctx.author.send("⏰ Tiempo agotado.")

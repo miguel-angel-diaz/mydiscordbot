@@ -74,7 +74,8 @@ from utils.swiss_handle import (
     swiss_siguiente_ronda_asistente_handle,
     swiss_eliminar_asistente_handle,
     swiss_lista_inscritos_asistente_handle,
-    swiss_reiniciar_asistente_handle
+    swiss_reiniciar_asistente_handle,
+    swiss_eliminar_ronda_asistente_handle
 )
 
 from utils.watchers import cargar_tareas;
@@ -385,7 +386,6 @@ async def sincronizar_estado(ctx):
 
 
 #####################################################################################################
-# main.py (o donde tengas los comandos)
 
 # @bot.command(name="nuevo-swiss")
 # @commands.has_permissions(administrator=True)
@@ -431,6 +431,11 @@ async def sincronizar_estado(ctx):
 # @commands.has_permissions(administrator=True)
 # async def eliminar_swiss(ctx):
 #     await swiss_eliminar_asistente_handle(ctx)
+
+# @bot.command(name="eliminar-ronda-swiss")
+# @commands.has_permissions(administrator=True)
+# async def eliminar_ronda_swiss(ctx):
+#     await swiss_eliminar_ronda_asistente_handle(ctx)
 
 
 #####################################################################################################
