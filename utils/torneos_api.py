@@ -564,6 +564,8 @@ async def api_subir_deck(request):
 
     return web.json_response({"ok": True, "mensaje": mensaje_validacion})
 
+# utils/torneos_api.py - api_estado_torneos
+
 async def api_estado_torneos(request):
     session_token = request.query.get("session")
     sesion = sesiones_activas.get(session_token) if session_token else None
@@ -583,10 +585,14 @@ async def api_estado_torneos(request):
         return web.json_response({"error": "No se pudo verificar tu membresía"}, status=403)
 
     try:
+        print(f"🔍 [api_estado_torneos] Consultando torneos para usuario {miembro.display_name} (ID: {miembro.id})")
         torneos = await obtener_estado_torneos_usuario(guild, miembro)
+        print(f"   ✅ Torneos devueltos: {len(torneos)}")
+        for t in torneos:
+            print(f"      - {t.get('codigo')} | inscrito: {t.get('inscrito')} | deck: {t.get('deck_subido')}")
     except Exception as e:
-        print(f"❌ Error en api_estado_torneos: {e}")
-        return web.json_response({"error": f"Error interno: {str(e)}"}, status=500)
+        print(f"❌ [api_estado_torneos] Error: {e}")
+        return web.json_response({"error": str(e)}, status=500)
 
     response = web.json_response({"torneos": torneos})
     response.headers['Access-Control-Allow-Origin'] = '*'

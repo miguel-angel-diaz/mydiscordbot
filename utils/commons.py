@@ -1018,10 +1018,17 @@ def contar_cartas(lista_raw: str) -> int:
 # ESTADO DE TORNEOS PARA USUARIO (web)
 # ============================================================
 
+# utils/commons.py - obtener_estado_torneos_usuario
+
 async def obtener_estado_torneos_usuario(guild, member: discord.Member):
     bot = guild._state._get_client()
     estado = await leer_estado(bot)
     torneos_estado = estado.get("torneos", [])
+
+    # LOG: Ver qué hay en el estado
+    print(f"🔍 [obtener_estado_torneos_usuario] Torneos en estado: {len(torneos_estado)}")
+    for t in torneos_estado:
+        print(f"   - {t.get('codigo')} | nivel: {t.get('nivel')} (tipo: {type(t.get('nivel'))})")
 
     decks_usuario = await obtener_decks_por_usuario(guild, str(member.id), include_message=False)
     decks_por_torneo = {d["codigo_torneo"]: d for d in decks_usuario if d.get("codigo_torneo")}
@@ -1032,7 +1039,13 @@ async def obtener_estado_torneos_usuario(guild, member: discord.Member):
         if not codigo:
             continue
 
-        nivel = t.get("nivel", "todos").lower()
+        # 🔥 CORRECCIÓN: Asegurar que nivel es string antes de .lower()
+        nivel = t.get("nivel", "todos")
+        if not isinstance(nivel, str):
+            print(f"⚠️ [obtener_estado_torneos_usuario] nivel es {type(nivel)} para {codigo}, convirtiendo a string")
+            nivel = str(nivel)
+        nivel = nivel.lower()
+
         roles_permitidos = config.ROLES_SOCIOS if nivel == "socios" else config.ROLES_TODOS
         if not tiene_rol_permitido(member, roles_permitidos):
             continue
@@ -1041,7 +1054,6 @@ async def obtener_estado_torneos_usuario(guild, member: discord.Member):
         total_inscritos = len(inscritos_ids)
         total_maximo = t.get("total_maximo")
         plazas_restantes = total_maximo - total_inscritos if total_maximo else None
-
         deck = decks_por_torneo.get(codigo)
 
         resultado.append({
@@ -1056,7 +1068,6 @@ async def obtener_estado_torneos_usuario(guild, member: discord.Member):
         })
 
     return resultado
-
 # ============================================================
 # INSCRIPCIÓN WEB (soporta Swiss y Challonge)
 # ============================================================
@@ -1121,6 +1132,10 @@ def tiene_rol_permitido(member: discord.Member, roles_permitidos: set):
 # DECKS POR USUARIO (parseo de embeds)
 # ============================================================
 
+# utils/commons.py - _parsear_embed_deck
+
+# utils/commons.py - _parsear_embed_deck
+
 def _parsear_embed_deck(embed: discord.Embed) -> dict | None:
     campos = {f.name: f.value for f in embed.fields}
 
@@ -1138,30 +1153,46 @@ def _parsear_embed_deck(embed: discord.Embed) -> dict | None:
 
     descripcion = embed.description or ""
 
+    # LOG: Ver qué hay en la descripción
+    print(f"🔍 [_parsear_embed_deck] Descripción del embed:")
+    print(f"   {descripcion}")
+
+    # 🔥 CORRECCIÓN: Regex más flexible para "Código:"
     codigo_deck = None
-    match_codigo = re.search(r"Código:\s*`?([^`\n]+)`?", descripcion)
+    # Buscar "Código:" seguido de cualquier cosa hasta salto de línea, ignorando backticks y negritas
+    match_codigo = re.search(r"Código:\s*`?([^`\n]+)`?", descripcion, re.IGNORECASE)
     if match_codigo:
         codigo_deck = match_codigo.group(1).strip()
+        print(f"   ✅ Código deck capturado: {codigo_deck}")
     else:
-        match_codigo = re.search(r"Código:\s*([^\n]+)", descripcion)
+        # Fallback más amplio
+        match_codigo = re.search(r"Código:\s*([^\n]+)", descripcion, re.IGNORECASE)
         if match_codigo:
             codigo_deck = match_codigo.group(1).strip()
+            print(f"   ✅ Código deck capturado (fallback): {codigo_deck}")
 
-    # 🔥 BUSCAR "Torneo:" (ignorando negritas, backticks, asteriscos)
+    # 🔥 CORRECCIÓN: Regex más flexible para "Torneo:"
     codigo_torneo = None
-    match_torneo = re.search(r"Torneo:\s*[*`]*([^*`\n]+)[*`]*", descripcion, re.IGNORECASE)
+    # Buscar "Torneo:" seguido de cualquier cosa hasta salto de línea
+    match_torneo = re.search(r"Torneo:\s*`?([^`\n]+)`?", descripcion, re.IGNORECASE)
     if match_torneo:
         codigo_torneo = match_torneo.group(1).strip()
+        print(f"   ✅ Código torneo capturado: {codigo_torneo}")
     else:
         match_torneo = re.search(r"Torneo:\s*([^\n]+)", descripcion, re.IGNORECASE)
         if match_torneo:
             codigo_torneo = match_torneo.group(1).strip()
-            codigo_torneo = re.sub(r"[*`]", "", codigo_torneo).strip()
+            print(f"   ✅ Código torneo capturado (fallback): {codigo_torneo}")
 
+    # Si no se encontró torneo, extraerlo del código
     if not codigo_torneo and codigo_deck:
         partes = codigo_deck.split("_")
         if len(partes) >= 2:
             codigo_torneo = partes[0]
+            print(f"   ✅ Código torneo extraído del código deck: {codigo_torneo}")
+
+    # LOG: Resultado final
+    print(f"   📦 Resultado: codigo_deck='{codigo_deck}', codigo_torneo='{codigo_torneo}'")
 
     try:
         edited = int(campos.get("Ediciones post-inicio", campos.get("edited", "0")).split("/")[0])
