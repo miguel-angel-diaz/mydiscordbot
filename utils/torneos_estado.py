@@ -90,12 +90,14 @@ def generar_codigo_unico(longitud=6):
     return ''.join(random.choices(string.ascii_uppercase + string.digits, k=longitud))
 
 # ============================================================
-# (OPCIONAL) COMANDO DE SINCRONIZACIÓN (si se usa desde admin)
+# COMANDO DE SINCRONIZACIÓN (desde admin)
 # ============================================================
 
 async def sincronizar_estado_handle(ctx):
     await ctx.author.send("🔄 Sincronizando estado de torneos desde #torneos-activos...")
+
     from utils.commons import obtener_torneos_activos_canal
+
     guild = ctx.guild
     torneos_activos = await obtener_torneos_activos_canal(guild)
     if not torneos_activos:
@@ -104,11 +106,18 @@ async def sincronizar_estado_handle(ctx):
 
     torneos_estado = []
     for torneo in torneos_activos:
+        total_maximo = torneo.get("total_maximo")
+        if total_maximo is not None:
+            try:
+                total_maximo = int(total_maximo)
+            except (ValueError, TypeError):
+                total_maximo = None
+
         torneos_estado.append({
             "codigo": torneo["codigo"],
             "nombre": torneo.get("nombre", "Torneo sin nombre"),
             "nivel": torneo["nivel"],
-            "total_maximo": torneo["total_maximo"],
+            "total_maximo": total_maximo,
             "inscritos_ids": [],
             "tipo": "challonge"
         })

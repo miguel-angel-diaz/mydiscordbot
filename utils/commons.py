@@ -1018,8 +1018,6 @@ def contar_cartas(lista_raw: str) -> int:
 # ESTADO DE TORNEOS PARA USUARIO (web)
 # ============================================================
 
-# utils/commons.py
-
 async def obtener_estado_torneos_usuario(guild, member: discord.Member):
     bot = guild._state._get_client()
     estado = await leer_estado(bot)
@@ -1034,10 +1032,8 @@ async def obtener_estado_torneos_usuario(guild, member: discord.Member):
         if not codigo:
             continue
 
-        # 🔥 CORRECCIÓN: Asegurar que nivel es string antes de .lower()
         nivel = t.get("nivel", "todos")
         if not isinstance(nivel, str):
-            print(f"⚠️ [obtener_estado_torneos_usuario] nivel es {type(nivel)} para {codigo}, convirtiendo a string")
             nivel = str(nivel)
         nivel = nivel.lower()
 
@@ -1047,8 +1043,18 @@ async def obtener_estado_torneos_usuario(guild, member: discord.Member):
 
         inscritos_ids = t.get("inscritos_ids", [])
         total_inscritos = len(inscritos_ids)
+
+        # 🔥 CONVERTIR total_maximo A ENTERO
         total_maximo = t.get("total_maximo")
-        plazas_restantes = total_maximo - total_inscritos if total_maximo else None
+        if total_maximo is not None:
+            try:
+                total_maximo = int(total_maximo)
+            except (ValueError, TypeError):
+                print(f"⚠️ total_maximo no es un número válido para {codigo}: {t.get('total_maximo')}")
+                total_maximo = None
+
+        plazas_restantes = total_maximo - total_inscritos if total_maximo is not None else None
+
         deck = decks_por_torneo.get(codigo)
 
         resultado.append({
