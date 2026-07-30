@@ -1019,19 +1019,44 @@ def contar_cartas(lista_raw: str) -> int:
 # ============================================================
 
 async def obtener_estado_torneos_usuario(guild, member: discord.Member):
+    """
+    Devuelve torneos ACTIVOS (estado = 'abierto' y fecha_inicio >= hoy).
+    Incluye campos: codigo, nivel, inscrito, total_inscritos, total_maximo,
+    plazas_restantes, deck_subido, deck_nombre, estado, fecha_inicio.
+    """
     bot = guild._state._get_client()
     estado = await leer_estado(bot)
     torneos_estado = estado.get("torneos", [])
 
+    hoy = datetime.now().date()
+    resultado = []
+
     decks_usuario = await obtener_decks_por_usuario(guild, str(member.id), include_message=False)
     decks_por_torneo = {d["codigo_torneo"]: d for d in decks_usuario if d.get("codigo_torneo")}
 
-    resultado = []
     for t in torneos_estado:
         codigo = t.get("codigo")
         if not codigo:
             continue
 
+        # --- FILTROS ---
+        # 1. Estado: solo 'abierto'
+        estado_torneo = t.get("estado", "abierto")
+        if estado_torneo != "abierto":
+            continue
+
+        # 2. Fecha: si tiene fecha, debe ser >= hoy
+        fecha_str = t.get("fecha_inicio")
+        if fecha_str:
+            try:
+                fecha_inicio = datetime.strptime(fecha_str, "%d/%m/%Y").date()
+                if fecha_inicio < hoy:
+                    continue  # Si la fecha ya pasó, no se muestra
+            except:
+                # Si no se puede parsear, asumimos que es hoy (no filtrar)
+                pass
+
+        # --- Obtener datos ---
         nivel = t.get("nivel", "todos")
         if not isinstance(nivel, str):
             nivel = str(nivel)
@@ -1044,13 +1069,11 @@ async def obtener_estado_torneos_usuario(guild, member: discord.Member):
         inscritos_ids = t.get("inscritos_ids", [])
         total_inscritos = len(inscritos_ids)
 
-        # 🔥 CONVERTIR total_maximo A ENTERO
         total_maximo = t.get("total_maximo")
         if total_maximo is not None:
             try:
                 total_maximo = int(total_maximo)
             except (ValueError, TypeError):
-                print(f"⚠️ total_maximo no es un número válido para {codigo}: {t.get('total_maximo')}")
                 total_maximo = None
 
         plazas_restantes = total_maximo - total_inscritos if total_maximo is not None else None
@@ -1066,10 +1089,11 @@ async def obtener_estado_torneos_usuario(guild, member: discord.Member):
             "plazas_restantes": plazas_restantes,
             "deck_subido": bool(deck),
             "deck_nombre": deck["nombre_deck"] if deck else None,
+            "estado": estado_torneo,
+            "fecha_inicio": fecha_str if fecha_str else "Sin fecha"
         })
 
     return resultado
-
 # ============================================================
 # INSCRIPCIÓN WEB (soporta Swiss y Challonge)
 # ============================================================

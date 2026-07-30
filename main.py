@@ -75,7 +75,8 @@ from utils.swiss_handle import (
     swiss_eliminar_asistente_handle,
     swiss_lista_inscritos_asistente_handle,
     swiss_reiniciar_asistente_handle,
-    swiss_eliminar_ronda_asistente_handle
+    swiss_eliminar_ronda_asistente_handle,
+    swiss_finalizar_asistente_handle
 )
 
 from utils.watchers import cargar_tareas;
@@ -436,6 +437,11 @@ async def eliminar_swiss(ctx):
 @commands.has_permissions(administrator=True)
 async def eliminar_ronda_swiss(ctx):
     await swiss_eliminar_ronda_asistente_handle(ctx)
+
+@bot.command(name="finalizar-swiss")
+@commands.has_permissions(administrator=True)
+async def finalizar_swiss(ctx):
+    await swiss_finalizar_asistente_handle(ctx)
 
 
 #####################################################################################################

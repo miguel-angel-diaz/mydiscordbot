@@ -19,7 +19,7 @@ from utils.commons import (
     calcular_clasificacion_torneo
 )
 from utils.admin import moderador_permisos_handle
-from utils.torneos_estado import generar_codigo_unico, slugify_challonge 
+from utils.torneos_estado import generar_codigo_unico, slugify_challonge, actualizar_torneo_estado
 
 from utils.admin import moderador_permisos_handle
 
@@ -169,12 +169,15 @@ async def nuevo_torneo(ctx, *, args: str):
 
         # --- AÑADIR AL ESTADO (BATTLE ROYALE) ---
         try:
-            from utils.torneos_estado import actualizar_torneo_estado
+           
             await actualizar_torneo_estado(ctx.bot, url_challonge, {
-                "nombre": nombre,          # <-- AÑADIR ESTO
+                "nombre": nombre,
                 "nivel": nivel,
                 "total_maximo": jugadores,
-                "inscritos_ids": []
+                "inscritos_ids": [],
+                "tipo": "challonge",
+                "estado": "abierto",          # <--- NUEVO
+                "fecha_inicio": fecha         # <--- NUEVO
             })
         except Exception as e:
             print(f"⚠️ Error al añadir battle royale al estado: {e}")
@@ -233,11 +236,14 @@ async def nuevo_torneo(ctx, *, args: str):
 
                 # --- AÑADIR AL ESTADO (CHALLONGE) ---
                 try:
-                    from utils.torneos_estado import actualizar_torneo_estado
                     await actualizar_torneo_estado(ctx.bot, url_challonge, {
+                        "nombre": nombre,
                         "nivel": nivel,
                         "total_maximo": jugadores,
-                        "inscritos_ids": []
+                        "inscritos_ids": [],
+                        "tipo": "challonge",
+                        "estado": "abierto",          # <--- NUEVO
+                        "fecha_inicio": fecha         # <--- NUEVO
                     })
                 except Exception as e:
                     print(f"⚠️ Error al añadir torneo al estado: {e}")
