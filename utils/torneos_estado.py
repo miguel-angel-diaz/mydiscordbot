@@ -154,11 +154,11 @@ async def _eliminar_mensaje_torneo(bot, tipo: str, codigo: str):
 # FUNCIONES ESPECÍFICAS PARA CADA TIPO
 # ============================================================
 
-# --- ESTADO ---
+# utils/torneos_estado.py
 async def leer_estado(bot):
     channel = await _get_channel(bot, "estado")
     if not channel:
-        return []
+        return {"torneos": []}  
     torneos = []
     async for msg in channel.history(limit=200):
         if msg.author != bot.user:
@@ -169,7 +169,7 @@ async def leer_estado(bot):
         data = await _leer_dato_torneo(bot, "estado", codigo)
         if data:
             torneos.append(data)
-    return torneos
+    return {"torneos": torneos}  
 
 async def guardar_estado(bot, torneos: list):
     channel = await _get_channel(bot, "estado")
