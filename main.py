@@ -388,60 +388,60 @@ async def sincronizar_estado(ctx):
 
 #####################################################################################################
 
-# @bot.command(name="nuevo-swiss")
-# @commands.has_permissions(administrator=True)
-# async def nuevo_swiss(ctx):
-#     await swiss_nuevo_asistente_handle(ctx)
+@bot.command(name="nuevo-swiss")
+@commands.has_permissions(administrator=True)
+async def nuevo_swiss(ctx):
+    await swiss_nuevo_asistente_handle(ctx)
 
-# @bot.command(name="inscribir-swiss")
-# async def inscribir_swiss(ctx):
-#     await swiss_inscribir_asistente_handle(ctx)
+@bot.command(name="inscribir-swiss")
+async def inscribir_swiss(ctx):
+    await swiss_inscribir_asistente_handle(ctx)
 
-# @bot.command(name="desinscribir-swiss")
-# async def desinscribir_swiss(ctx):
-#     await swiss_desinscribir_asistente_handle(ctx)
+@bot.command(name="desinscribir-swiss")
+async def desinscribir_swiss(ctx):
+    await swiss_desinscribir_asistente_handle(ctx)
 
-# @bot.command(name="lista-inscritos-swiss")
-# async def lista_inscritos_swiss(ctx, codigo: str = None):
-#     await swiss_lista_inscritos_asistente_handle(ctx)
+@bot.command(name="lista-inscritos-swiss")
+async def lista_inscritos_swiss(ctx, codigo: str = None):
+    await swiss_lista_inscritos_asistente_handle(ctx)
 
-# @bot.command(name="iniciar-swiss")
-# @commands.has_permissions(administrator=True)
-# async def iniciar_swiss(ctx):
-#     await swiss_iniciar_asistente_handle(ctx)
+@bot.command(name="iniciar-swiss")
+@commands.has_permissions(administrator=True)
+async def iniciar_swiss(ctx):
+    await swiss_iniciar_asistente_handle(ctx)
 
-# @bot.command(name="reiniciar-swiss")
-# @commands.has_permissions(administrator=True)
-# async def reiniciar_swiss(ctx):
-#     await swiss_reiniciar_asistente_handle(ctx)
+@bot.command(name="reiniciar-swiss")
+@commands.has_permissions(administrator=True)
+async def reiniciar_swiss(ctx):
+    await swiss_reiniciar_asistente_handle(ctx)
 
-# @bot.command(name="reportar-swiss")
-# async def reportar_swiss(ctx):
-#     await swiss_reportar_asistente_handle(ctx)
+@bot.command(name="reportar-swiss")
+async def reportar_swiss(ctx):
+    await swiss_reportar_asistente_handle(ctx)
 
-# @bot.command(name="clasificacion-swiss")
-# async def clasificacion_swiss(ctx):
-#     await swiss_clasificacion_asistente_handle(ctx)
+@bot.command(name="clasificacion-swiss")
+async def clasificacion_swiss(ctx):
+    await swiss_clasificacion_asistente_handle(ctx)
 
-# @bot.command(name="siguiente-ronda-swiss")
-# @commands.has_permissions(administrator=True)
-# async def siguiente_ronda_swiss(ctx):
-#     await swiss_siguiente_ronda_asistente_handle(ctx)
+@bot.command(name="siguiente-ronda-swiss")
+@commands.has_permissions(administrator=True)
+async def siguiente_ronda_swiss(ctx):
+    await swiss_siguiente_ronda_asistente_handle(ctx)
 
-# @bot.command(name="eliminar-swiss")
-# @commands.has_permissions(administrator=True)
-# async def eliminar_swiss(ctx):
-#     await swiss_eliminar_asistente_handle(ctx)
+@bot.command(name="eliminar-swiss")
+@commands.has_permissions(administrator=True)
+async def eliminar_swiss(ctx):
+    await swiss_eliminar_asistente_handle(ctx)
 
-# @bot.command(name="eliminar-ronda-swiss")
-# @commands.has_permissions(administrator=True)
-# async def eliminar_ronda_swiss(ctx):
-#     await swiss_eliminar_ronda_asistente_handle(ctx)
+@bot.command(name="eliminar-ronda-swiss")
+@commands.has_permissions(administrator=True)
+async def eliminar_ronda_swiss(ctx):
+    await swiss_eliminar_ronda_asistente_handle(ctx)
 
-# @bot.command(name="finalizar-swiss")
-# @commands.has_permissions(administrator=True)
-# async def finalizar_swiss(ctx):
-#     await swiss_finalizar_asistente_handle(ctx)
+@bot.command(name="finalizar-swiss")
+@commands.has_permissions(administrator=True)
+async def finalizar_swiss(ctx):
+    await swiss_finalizar_asistente_handle(ctx)
 
 
 #####################################################################################################

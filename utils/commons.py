@@ -1017,16 +1017,10 @@ def contar_cartas(lista_raw: str) -> int:
 # ============================================================
 # ESTADO DE TORNEOS PARA USUARIO (web)
 # ============================================================
-
 async def obtener_estado_torneos_usuario(guild, member: discord.Member):
-    """
-    Devuelve torneos ACTIVOS (estado = 'abierto' y fecha_inicio >= hoy).
-    Incluye campos: codigo, nivel, inscrito, total_inscritos, total_maximo,
-    plazas_restantes, deck_subido, deck_nombre, estado, fecha_inicio.
-    """
     bot = guild._state._get_client()
-    estado = await leer_estado(bot)
-    torneos_estado = estado.get("torneos", [])
+    estado = await leer_estado(bot) 
+    torneos_estado = estado.get("torneos", []) 
 
     hoy = datetime.now().date()
     resultado = []
@@ -1094,6 +1088,7 @@ async def obtener_estado_torneos_usuario(guild, member: discord.Member):
         })
 
     return resultado
+
 # ============================================================
 # INSCRIPCIÓN WEB (soporta Swiss y Challonge)
 # ============================================================

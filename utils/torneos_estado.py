@@ -154,22 +154,28 @@ async def _eliminar_mensaje_torneo(bot, tipo: str, codigo: str):
 # FUNCIONES ESPECÍFICAS PARA CADA TIPO
 # ============================================================
 
-# utils/torneos_estado.py
 async def leer_estado(bot):
+    """
+    Lee el estado de todos los torneos desde el canal #torneos-estado.
+    Devuelve un diccionario con la clave 'torneos' que contiene una lista de torneos.
+    """
     channel = await _get_channel(bot, "estado")
     if not channel:
-        return {"torneos": []}  
+        return {"torneos": []}
+    
     torneos = []
     async for msg in channel.history(limit=200):
         if msg.author != bot.user:
             continue
         if not msg.content.startswith(PREFIX):
             continue
+        # Extraer el código del torneo del mensaje
         codigo = msg.content.replace(PREFIX, "").split()[0]
         data = await _leer_dato_torneo(bot, "estado", codigo)
         if data:
             torneos.append(data)
-    return {"torneos": torneos}  
+    
+    return {"torneos": torneos}
 
 async def guardar_estado(bot, torneos: list):
     channel = await _get_channel(bot, "estado")
@@ -243,7 +249,7 @@ def generar_codigo_unico(longitud=6):
 # ============================================================
 # SINCRONIZACIÓN (para migrar)
 # ============================================================
-
+   
 async def sincronizar_estado_handle(ctx):
     await ctx.author.send("🔄 Sincronizando estado de torneos desde #torneos-activos...")
 
@@ -255,6 +261,7 @@ async def sincronizar_estado_handle(ctx):
         await ctx.author.send("❌ No hay torneos activos en el canal #torneos-activos.")
         return
 
+    # Limpiar todos los mensajes de estado, rondas y clasificación
     for tipo in ["estado", "rondas", "clasificacion"]:
         channel = await _get_channel(ctx.bot, tipo)
         if channel:
@@ -281,3 +288,4 @@ async def sincronizar_estado_handle(ctx):
         await _guardar_dato_torneo(ctx.bot, "clasificacion", codigo, {"codigo": codigo, "clasificacion": []})
 
     await ctx.author.send(f"✅ Estado sincronizado con {len(torneos_activos)} torneos activos.")
+

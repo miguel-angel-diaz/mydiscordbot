@@ -25,6 +25,8 @@ from utils.commons import (
     inscribir_usuario_web,
     editar_deck_web)
 
+from utils.torneos_estado import leer_estado
+
 calcular_clasificacion = calcular_clasificacion_torneo
 
 CANAL_ADMIN_NOMBRE = "solicitudes-admision"
@@ -445,7 +447,7 @@ async def api_torneos_disponibles(request):
     if not miembro:
         return web.json_response({"error": "No se pudo verificar tu membresía"}, status=403)
 
-    from utils.torneos_estado import leer_estado
+   
     estado = await leer_estado(_bot_instance)
     torneos_estado = estado.get("torneos", [])
 
@@ -585,18 +587,20 @@ async def api_estado_torneos(request):
         return web.json_response({"error": "No se pudo verificar tu membresía"}, status=403)
 
     try:
-        print(f"🔍 [api_estado_torneos] Consultando torneos para usuario {miembro.display_name} (ID: {miembro.id})")
-        torneos = await obtener_estado_torneos_usuario(guild, miembro)
-        print(f"   ✅ Torneos devueltos: {len(torneos)}")
-        for t in torneos:
-            print(f"      - {t.get('codigo')} | inscrito: {t.get('inscrito')} | deck: {t.get('deck_subido')}")
+        estado = await leer_estado(_bot_instance)  # <--- Diccionario
+        torneos_estado = estado.get("torneos", [])  # <--- Lista de torneos
+        torneos_usuario = []
+        for t in torneos_estado:
+            if str(miembro.id) in t.get("inscritos_ids", []):
+                torneos_usuario.append({
+                    "codigo": t.get("codigo"),
+                    "nombre": t.get("nombre", "Torneo sin nombre"),
+                    "estado": t.get("estado", "activo"),
+                    "nivel": t.get("nivel", "todos")
+                })
+        return web.json_response({"torneos": torneos_usuario})
     except Exception as e:
-        print(f"❌ [api_estado_torneos] Error: {e}")
         return web.json_response({"error": str(e)}, status=500)
-
-    response = web.json_response({"torneos": torneos})
-    response.headers['Access-Control-Allow-Origin'] = '*'
-    return response
 
 async def api_inscribirse(request):
     try:
