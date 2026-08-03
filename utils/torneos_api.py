@@ -753,34 +753,100 @@ async def api_editar_deck(request):
 
     return web.json_response({"ok": True, "mensaje": mensaje})
 
-async def api_mis_partidas(request):
+async def api_todas_partidas(request):
+    """
+    Devuelve TODAS las partidas agendadas en #partidos-agendados (sin filtrar por usuario).
+    """
+    print("🔹 [api_todas_partidas] INICIO")
+
+    # Verificar sesión (opcional, puedes quitarlo si quieres que sea público)
     session_token = request.query.get("session")
     sesion = sesiones_activas.get(session_token) if session_token else None
 
     if not sesion or time.time() > sesion["expira"]:
+        print("❌ Sesión no válida o expirada")
         return web.json_response({"error": "Sesión no válida"}, status=401)
 
     if _bot_instance is None:
+        print("❌ Bot no disponible")
         return web.json_response({"error": "Servicio no disponible"}, status=503)
 
     guild = _bot_instance.get_guild(config.GUILD_ID_ADMISION)
     if not guild:
+        print("❌ Guild no encontrado")
         return web.json_response({"error": "Servicio no disponible"}, status=503)
 
-    discord_id = int(sesion["discord_id"])
+    print(f"✅ Guild encontrado: {guild.name}")
 
-    try:
-        partidas = await obtener_partidas_agendadas_usuario(guild, discord_id)
-    except Exception as e:
-        return web.json_response({"error": str(e)}, status=500)
+    # Obtener todas las partidas sin filtrar
+    canal = discord.utils.get(guild.text_channels, name="partidos-agendados")
+    if not canal:
+        print("❌ Canal #partidos-agendados no encontrado")
+        return web.json_response({"partidas": []})
 
-    response = web.json_response({
-        "username": sesion["username"],
-        "partidas": partidas
-    })
+    print(f"✅ Canal encontrado: #{canal.name}")
+
+    partidas = []
+    patron = re.compile(
+        r"📅 \[EVENTO\] (\d{2}/\d{2}/\d{4}) (\d{2}:\d{2}) \| (.+?) vs (.+?) \| Agendado por (.+)"
+    )
+
+    contador = 0
+    async for mensaje in canal.history(limit=500):
+        contador += 1
+        match = patron.search(mensaje.content)
+        if not match:
+            continue
+
+        fecha, hora, jugador1_raw, jugador2_raw, agendado_por = match.groups()
+        print(f"   Partida encontrada: {fecha} {hora} - {jugador1_raw} vs {jugador2_raw}")
+
+        # Extraer menciones reales
+        jugador1_match = re.search(r"<@!?(\d+)>", jugador1_raw)
+        jugador2_match = re.search(r"<@!?(\d+)>", jugador2_raw)
+
+        jugador1_id = int(jugador1_match.group(1)) if jugador1_match else None
+        jugador2_id = int(jugador2_match.group(1)) if jugador2_match else None
+
+        # Obtener nombres para mostrar
+        try:
+            j1_member = await guild.fetch_member(jugador1_id) if jugador1_id else None
+            j1_nombre = j1_member.display_name if j1_member else jugador1_raw.strip()
+        except:
+            j1_nombre = jugador1_raw.strip()
+
+        try:
+            j2_member = await guild.fetch_member(jugador2_id) if jugador2_id else None
+            j2_nombre = j2_member.display_name if j2_member else jugador2_raw.strip()
+        except:
+            j2_nombre = jugador2_raw.strip()
+
+        # Quien agendó
+        agendado_match = re.search(r"<@!?(\d+)>", agendado_por)
+        if agendado_match:
+            agendado_id = int(agendado_match.group(1))
+            try:
+                ag_member = await guild.fetch_member(agendado_id)
+                ag_nombre = ag_member.display_name
+            except:
+                ag_nombre = agendado_por.strip()
+        else:
+            ag_nombre = agendado_por.strip()
+
+        partidas.append({
+            "fecha": fecha,
+            "hora": hora,
+            "jugador1": j1_nombre,
+            "jugador1_id": jugador1_id,
+            "jugador2": j2_nombre,
+            "jugador2_id": jugador2_id,
+            "agendado_por": ag_nombre
+        })
+
+    print(f"✅ Total partidas encontradas: {len(partidas)}")
+    response = web.json_response({"partidas": partidas})
     response.headers['Access-Control-Allow-Origin'] = '*'
     return response
-
 
 # ============================================================
 # 8. SERVIDOR WEB — registro de rutas
@@ -818,7 +884,7 @@ def crear_app():
 
     app.router.add_post('/api/editar-deck', api_editar_deck)
     app.router.add_route('OPTIONS', '/api/editar-deck', handle_options)
-    app.router.add_get('/api/mis-partidas', api_mis_partidas)
+    app.router.add_get('/api/todas-partidas', api_todas_partidas)
 
     return app
 
