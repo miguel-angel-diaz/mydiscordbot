@@ -11,6 +11,7 @@ import matplotlib.pyplot as plt
 import re
 import time
 from datetime import datetime, timezone
+from typing import List, Dict
 
 from difflib import get_close_matches
 
@@ -1300,3 +1301,76 @@ async def editar_deck_web(guild, member: discord.Member, codigo_torneo: str, nom
         return False, "No tengo permisos para editar el mensaje del deck."
 
     return True, mensaje_validacion
+
+async def obtener_partidas_agendadas_usuario(guild, user_id: int) -> List[Dict]:
+    """
+    Obtiene todas las partidas agendadas en #partidos-agendados donde el usuario esté involucrado.
+    """
+    canal = discord.utils.get(guild.text_channels, name="partidos-agendados")
+    if not canal:
+        return []
+
+    partidas = []
+    patron = re.compile(
+        r"📅 \[EVENTO\] (\d{2}/\d{2}/\d{4}) (\d{2}:\d{2}) \| (.+?) vs (.+?) \| Agendado por (.+)"
+    )
+    mencion_usuario = f"<@{user_id}>"
+
+    async for mensaje in canal.history(limit=500):
+        match = patron.search(mensaje.content)
+        if not match:
+            continue
+
+        fecha, hora, jugador1_raw, jugador2_raw, agendado_por = match.groups()
+
+        # Extraer menciones reales
+        jugador1_match = re.search(r"<@!?(\d+)>", jugador1_raw)
+        jugador2_match = re.search(r"<@!?(\d+)>", jugador2_raw)
+
+        jugador1_id = int(jugador1_match.group(1)) if jugador1_match else None
+        jugador2_id = int(jugador2_match.group(1)) if jugador2_match else None
+
+        # Verificar si el usuario está involucrado
+        if user_id not in (jugador1_id, jugador2_id):
+            continue
+
+        # Obtener nombres para mostrar
+        try:
+            j1_member = await guild.fetch_member(jugador1_id) if jugador1_id else None
+            j1_nombre = j1_member.display_name if j1_member else jugador1_raw.strip()
+        except:
+            j1_nombre = jugador1_raw.strip()
+
+        try:
+            j2_member = await guild.fetch_member(jugador2_id) if jugador2_id else None
+            j2_nombre = j2_member.display_name if j2_member else jugador2_raw.strip()
+        except:
+            j2_nombre = jugador2_raw.strip()
+
+        # Quien agendó
+        agendado_match = re.search(r"<@!?(\d+)>", agendado_por)
+        if agendado_match:
+            agendado_id = int(agendado_match.group(1))
+            try:
+                ag_member = await guild.fetch_member(agendado_id)
+                ag_nombre = ag_member.display_name
+            except:
+                ag_nombre = agendado_por.strip()
+        else:
+            ag_nombre = agendado_por.strip()
+
+        partidas.append({
+            "fecha": fecha,
+            "hora": hora,
+            "jugador1": j1_nombre,
+            "jugador1_id": jugador1_id,
+            "jugador2": j2_nombre,
+            "jugador2_id": jugador2_id,
+            "agendado_por": ag_nombre,
+            "mi_rol": "jugador1" if user_id == jugador1_id else "jugador2"
+        })
+
+    return partidas
+
+def tiene_rol_permitido(member: discord.Member, roles_permitidos: set):
+    return any(role.name in roles_permitidos for role in member.roles)

@@ -21,8 +21,9 @@ from utils.commons import (
     contar_cartas,
     obtener_lista_arquetipos,
     obtener_sugerencias_arquetipos,
-    obtener_estado_torneos_usuario,
+    obtener_partidas_agendadas_usuario,
     inscribir_usuario_web,
+    tiene_rol_permitido,
     editar_deck_web)
 
 from utils.torneos_estado import leer_estado
@@ -587,20 +588,65 @@ async def api_estado_torneos(request):
         return web.json_response({"error": "No se pudo verificar tu membresía"}, status=403)
 
     try:
-        estado = await leer_estado(_bot_instance)  # <--- Diccionario
-        torneos_estado = estado.get("torneos", [])  # <--- Lista de torneos
-        torneos_usuario = []
+        # Obtener todos los torneos del estado
+        estado = await leer_estado(_bot_instance)
+        torneos_estado = estado.get("torneos", [])
+
+        # Obtener todos los decks subidos del usuario para saber qué torneos tiene deck
+        decks_usuario = await obtener_decks_por_usuario(guild, str(miembro.id), include_message=False)
+        decks_por_torneo = {d["codigo_torneo"]: d for d in decks_usuario if d.get("codigo_torneo")}
+
+        torneos_respuesta = []
         for t in torneos_estado:
-            if str(miembro.id) in t.get("inscritos_ids", []):
-                torneos_usuario.append({
-                    "codigo": t.get("codigo"),
-                    "nombre": t.get("nombre", "Torneo sin nombre"),
-                    "estado": t.get("estado", "activo"),
-                    "nivel": t.get("nivel", "todos")
-                })
-        return web.json_response({"torneos": torneos_usuario})
+            codigo = t.get("codigo")
+            if not codigo:
+                continue
+
+            # Solo torneos en estado "abierto" (disponibles para inscribirse)
+            if t.get("estado") != "abierto":
+                continue
+
+            # Verificar roles permitidos
+            nivel = t.get("nivel", "todos").lower()
+            roles_permitidos = config.ROLES_SOCIOS if nivel == "socios" else config.ROLES_TODOS
+            if not tiene_rol_permitido(miembro, roles_permitidos):
+                continue
+
+            inscritos_ids = t.get("inscritos_ids", [])
+            total_inscritos = len(inscritos_ids)
+            total_maximo = t.get("total_maximo")
+            if total_maximo is not None:
+                try:
+                    total_maximo = int(total_maximo)
+                except (ValueError, TypeError):
+                    total_maximo = None
+
+            inscrito = str(miembro.id) in inscritos_ids
+            deck = decks_por_torneo.get(codigo)
+
+            torneos_respuesta.append({
+                "codigo": codigo,
+                "nombre": t.get("nombre", "Torneo sin nombre"),
+                "nivel": nivel.capitalize(),
+                "fecha_inicio": t.get("fecha_inicio", "Sin fecha"),
+                "total_inscritos": total_inscritos,
+                "total_maximo": total_maximo,
+                "plazas_restantes": total_maximo - total_inscritos if total_maximo else None,
+                "inscrito": inscrito,
+                "deck_subido": bool(deck),
+                "estado": t.get("estado", "abierto"),
+                # Para que la web sepa si debe mostrar botón "Inscribirse" o "Subir deck"
+                "puede_inscribirse": not inscrito,
+                "tiene_deck": bool(deck)
+            })
+
     except Exception as e:
+        print(f"❌ [api_estado_torneos] Error: {e}")
         return web.json_response({"error": str(e)}, status=500)
+
+    response = web.json_response({"torneos": torneos_respuesta})
+    response.headers['Access-Control-Allow-Origin'] = '*'
+    return response
 
 async def api_inscribirse(request):
     try:
@@ -643,6 +689,7 @@ async def api_inscribirse(request):
     response = web.json_response({"ok": True, "mensaje": mensaje})
     response.headers['Access-Control-Allow-Origin'] = '*'
     return response
+
 async def api_editar_deck(request):
     try:
         body = await request.json()
@@ -706,6 +753,34 @@ async def api_editar_deck(request):
 
     return web.json_response({"ok": True, "mensaje": mensaje})
 
+async def api_mis_partidas(request):
+    session_token = request.query.get("session")
+    sesion = sesiones_activas.get(session_token) if session_token else None
+
+    if not sesion or time.time() > sesion["expira"]:
+        return web.json_response({"error": "Sesión no válida"}, status=401)
+
+    if _bot_instance is None:
+        return web.json_response({"error": "Servicio no disponible"}, status=503)
+
+    guild = _bot_instance.get_guild(config.GUILD_ID_ADMISION)
+    if not guild:
+        return web.json_response({"error": "Servicio no disponible"}, status=503)
+
+    discord_id = int(sesion["discord_id"])
+
+    try:
+        partidas = await obtener_partidas_agendadas_usuario(guild, discord_id)
+    except Exception as e:
+        return web.json_response({"error": str(e)}, status=500)
+
+    response = web.json_response({
+        "username": sesion["username"],
+        "partidas": partidas
+    })
+    response.headers['Access-Control-Allow-Origin'] = '*'
+    return response
+
 
 # ============================================================
 # 8. SERVIDOR WEB — registro de rutas
@@ -743,6 +818,7 @@ def crear_app():
 
     app.router.add_post('/api/editar-deck', api_editar_deck)
     app.router.add_route('OPTIONS', '/api/editar-deck', handle_options)
+    app.router.add_get('/api/mis-partidas', api_mis_partidas)
 
     return app
 
