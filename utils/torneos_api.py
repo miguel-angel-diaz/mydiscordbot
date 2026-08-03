@@ -569,8 +569,6 @@ async def api_subir_deck(request):
 
     return web.json_response({"ok": True, "mensaje": mensaje_validacion})
 
-# utils/torneos_api.py - api_estado_torneos
-
 async def api_estado_torneos(request):
     session_token = request.query.get("session")
     sesion = sesiones_activas.get(session_token) if session_token else None
@@ -594,7 +592,7 @@ async def api_estado_torneos(request):
         estado = await leer_estado(_bot_instance)
         torneos_estado = estado.get("torneos", [])
 
-        # Obtener todos los decks subidos del usuario para saber qué torneos tiene deck
+        # Obtener todos los decks del usuario para saber qué torneos tiene deck y cuántas ediciones
         decks_usuario = await obtener_decks_por_usuario(guild, str(miembro.id), include_message=False)
         decks_por_torneo = {d["codigo_torneo"]: d for d in decks_usuario if d.get("codigo_torneo")}
 
@@ -604,8 +602,8 @@ async def api_estado_torneos(request):
             if not codigo:
                 continue
 
-            # Solo torneos en estado "abierto" (disponibles para inscribirse)
-            if t.get("estado") != "abierto":
+            # Solo torneos en estado "abierto" o "en desarrollo"
+            if t.get("estado") not in ("abierto", "en desarrollo"):
                 continue
 
             # Verificar roles permitidos
@@ -624,7 +622,11 @@ async def api_estado_torneos(request):
                     total_maximo = None
 
             inscrito = str(miembro.id) in inscritos_ids
-            deck = decks_por_torneo.get(codigo)
+
+            # Información del deck
+            deck_info = decks_por_torneo.get(codigo)
+            deck_subido = bool(deck_info)
+            deck_edited = deck_info.get("edited", 0) if deck_info else 0
 
             torneos_respuesta.append({
                 "codigo": codigo,
@@ -635,11 +637,20 @@ async def api_estado_torneos(request):
                 "total_maximo": total_maximo,
                 "plazas_restantes": total_maximo - total_inscritos if total_maximo else None,
                 "inscrito": inscrito,
-                "deck_subido": bool(deck),
                 "estado": t.get("estado", "abierto"),
-                # Para que la web sepa si debe mostrar botón "Inscribirse" o "Subir deck"
-                "puede_inscribirse": not inscrito,
-                "tiene_deck": bool(deck)
+                # Nuevos campos para control de deck
+                "deck_subido": deck_subido,
+                "deck_edited": deck_edited,        # Número de ediciones post-inicio (0 = ninguna, 1 = ya usada)
+                "tiene_deck": deck_subido,
+                # Indicadores para el frontend
+                "puede_editar": (
+                    # Si el torneo está abierto, se puede editar siempre
+                    t.get("estado") == "abierto" or
+                    # Si está en desarrollo, solo si no ha usado la edición única
+                    (t.get("estado") == "en desarrollo" and deck_edited < 1)
+                ) if deck_subido else False,
+                "puede_inscribirse": not inscrito and t.get("estado") == "abierto",
+                "puede_desinscribirse": inscrito and t.get("estado") == "abierto"
             })
 
     except Exception as e:
