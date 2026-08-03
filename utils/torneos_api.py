@@ -1,4 +1,3 @@
-# utils/torneos_api.py
 import aiohttp
 import discord
 import json
@@ -10,7 +9,6 @@ from datetime import datetime, timezone
 from aiohttp import web
 
 import feedparser
-from flask import app
 
 import config
 from utils.commons import (
@@ -284,8 +282,6 @@ async def auth_verificar_codigo(request):
         "username": pendiente["username"],
     })
 
-# utils/torneos_api.py
-
 async def auth_verificar_sesion(request):
     """La web comprueba si una sesión sigue siendo válida."""
 
@@ -299,7 +295,7 @@ async def auth_verificar_sesion(request):
     response = web.json_response({
         "autenticado": True,
         "username": sesion["username"],
-        "discord_id": sesion["discord_id"],  # <--- AÑADIR ESTO
+        "discord_id": sesion["discord_id"],
     })
     response.headers['Access-Control-Allow-Origin'] = '*'
     return response
@@ -402,6 +398,33 @@ async def api_mis_torneos(request):
         "torneos": mis_resultados,
     })
 
+async def api_mis_partidas(request):
+    session_token = request.query.get("session")
+    sesion = sesiones_activas.get(session_token) if session_token else None
+
+    if not sesion or time.time() > sesion["expira"]:
+        return web.json_response({"error": "Sesión no válida"}, status=401)
+
+    if _bot_instance is None:
+        return web.json_response({"error": "Servicio no disponible"}, status=503)
+
+    guild = _bot_instance.get_guild(config.GUILD_ID_ADMISION)
+    if not guild:
+        return web.json_response({"error": "Servicio no disponible"}, status=503)
+
+    discord_id = int(sesion["discord_id"])
+
+    try:
+        partidas = await obtener_partidas_agendadas_usuario(guild, discord_id)
+    except Exception as e:
+        return web.json_response({"error": str(e)}, status=500)
+
+    response = web.json_response({
+        "username": sesion["username"],
+        "partidas": partidas
+    })
+    response.headers['Access-Control-Allow-Origin'] = '*'
+    return response
 
 async def api_mis_decks(request):
     """Devuelve los decks del usuario logueado."""
@@ -411,7 +434,7 @@ async def api_mis_decks(request):
     if not sesion or time.time() > sesion["expira"]:
         return web.json_response({"error": "Sesión no válida"}, status=401)
 
-    discord_id = sesion["discord_id"]  # ya es un string
+    discord_id = sesion["discord_id"]
 
     if _bot_instance is None:
         return web.json_response({"error": "Servicio no disponible"}, status=503)
@@ -421,7 +444,6 @@ async def api_mis_decks(request):
         return web.json_response({"error": "Servicio no disponible"}, status=503)
 
     try:
-        # Llamamos sin include_message para que no devuelva objetos no serializables
         decks = await obtener_decks_por_usuario(guild, discord_id, include_message=False)
     except Exception as e:
         return web.json_response({"error": str(e)}, status=500)
@@ -432,6 +454,7 @@ async def api_mis_decks(request):
     })
     response.headers['Access-Control-Allow-Origin'] = '*'
     return response
+
 async def api_torneos_disponibles(request):
     session_token = request.query.get("session")
     sesion = sesiones_activas.get(session_token) if session_token else None
@@ -450,7 +473,6 @@ async def api_torneos_disponibles(request):
     if not miembro:
         return web.json_response({"error": "No se pudo verificar tu membresía"}, status=403)
 
-   
     estado = await leer_estado(_bot_instance)
     torneos_estado = estado.get("torneos", [])
 
@@ -516,7 +538,6 @@ async def api_subir_deck(request):
 
     archetype = coincidencia_exacta
 
-    # Validar que el torneo aún permite subir decks (pasando el bot)
     ok, mensaje_validacion = await validar_torneo_para_edicion(codigo_torneo, miembro, _bot_instance)
     if not ok:
         return web.json_response({"error": mensaje_validacion}, status=400)
@@ -588,11 +609,9 @@ async def api_estado_torneos(request):
         return web.json_response({"error": "No se pudo verificar tu membresía"}, status=403)
 
     try:
-        # Obtener todos los torneos del estado
         estado = await leer_estado(_bot_instance)
         torneos_estado = estado.get("torneos", [])
 
-        # Obtener todos los decks del usuario para saber qué torneos tiene deck y cuántas ediciones
         decks_usuario = await obtener_decks_por_usuario(guild, str(miembro.id), include_message=False)
         decks_por_torneo = {d["codigo_torneo"]: d for d in decks_usuario if d.get("codigo_torneo")}
 
@@ -602,11 +621,9 @@ async def api_estado_torneos(request):
             if not codigo:
                 continue
 
-            # Solo torneos en estado "abierto" o "en desarrollo"
             if t.get("estado") not in ("abierto", "en desarrollo"):
                 continue
 
-            # Verificar roles permitidos
             nivel = t.get("nivel", "todos").lower()
             roles_permitidos = config.ROLES_SOCIOS if nivel == "socios" else config.ROLES_TODOS
             if not tiene_rol_permitido(miembro, roles_permitidos):
@@ -623,7 +640,6 @@ async def api_estado_torneos(request):
 
             inscrito = str(miembro.id) in inscritos_ids
 
-            # Información del deck
             deck_info = decks_por_torneo.get(codigo)
             deck_subido = bool(deck_info)
             deck_edited = deck_info.get("edited", 0) if deck_info else 0
@@ -638,15 +654,11 @@ async def api_estado_torneos(request):
                 "plazas_restantes": total_maximo - total_inscritos if total_maximo else None,
                 "inscrito": inscrito,
                 "estado": t.get("estado", "abierto"),
-                # Nuevos campos para control de deck
                 "deck_subido": deck_subido,
-                "deck_edited": deck_edited,        # Número de ediciones post-inicio (0 = ninguna, 1 = ya usada)
+                "deck_edited": deck_edited,
                 "tiene_deck": deck_subido,
-                # Indicadores para el frontend
                 "puede_editar": (
-                    # Si el torneo está abierto, se puede editar siempre
                     t.get("estado") == "abierto" or
-                    # Si está en desarrollo, solo si no ha usado la edición única
                     (t.get("estado") == "en desarrollo" and deck_edited < 1)
                 ) if deck_subido else False,
                 "puede_inscribirse": not inscrito and t.get("estado") == "abierto",
@@ -688,13 +700,11 @@ async def api_inscribirse(request):
     if not miembro:
         return web.json_response({"error": "No se pudo verificar tu membresía"}, status=403)
 
-    # Usar la nueva función (sin Challonge)
     ok, mensaje = await inscribir_usuario_web(guild, miembro, codigo_torneo)
 
     if not ok:
         return web.json_response({"error": mensaje}, status=400)
 
-    # Anunciar en el canal público
     canal_anuncios = discord.utils.get(guild.text_channels, name="📰-cartelera‐torneos")
     if canal_anuncios:
         await canal_anuncios.send(f"📥 {miembro.mention} se ha inscrito en el torneo `{codigo_torneo}` (vía web).")
@@ -767,12 +777,8 @@ async def api_editar_deck(request):
     return web.json_response({"ok": True, "mensaje": mensaje})
 
 async def api_todas_partidas(request):
-    """
-    Devuelve TODAS las partidas agendadas en #partidos-agendados (sin filtrar por usuario).
-    """
     print("🔹 [api_todas_partidas] INICIO")
 
-    # Verificar sesión (opcional, puedes quitarlo si quieres que sea público)
     session_token = request.query.get("session")
     sesion = sesiones_activas.get(session_token) if session_token else None
 
@@ -791,7 +797,6 @@ async def api_todas_partidas(request):
 
     print(f"✅ Guild encontrado: {guild.name}")
 
-    # Obtener todas las partidas sin filtrar
     canal = discord.utils.get(guild.text_channels, name="partidos-agendados")
     if not canal:
         print("❌ Canal #partidos-agendados no encontrado")
@@ -804,24 +809,19 @@ async def api_todas_partidas(request):
         r"📅 \[EVENTO\] (\d{2}/\d{2}/\d{4}) (\d{2}:\d{2}) \| (.+?) vs (.+?) \| Agendado por (.+)"
     )
 
-    contador = 0
     async for mensaje in canal.history(limit=500):
-        contador += 1
         match = patron.search(mensaje.content)
         if not match:
             continue
 
         fecha, hora, jugador1_raw, jugador2_raw, agendado_por = match.groups()
-        print(f"   Partida encontrada: {fecha} {hora} - {jugador1_raw} vs {jugador2_raw}")
 
-        # Extraer menciones reales
         jugador1_match = re.search(r"<@!?(\d+)>", jugador1_raw)
         jugador2_match = re.search(r"<@!?(\d+)>", jugador2_raw)
 
         jugador1_id = int(jugador1_match.group(1)) if jugador1_match else None
         jugador2_id = int(jugador2_match.group(1)) if jugador2_match else None
 
-        # Obtener nombres para mostrar
         try:
             j1_member = await guild.fetch_member(jugador1_id) if jugador1_id else None
             j1_nombre = j1_member.display_name if j1_member else jugador1_raw.strip()
@@ -834,7 +834,6 @@ async def api_todas_partidas(request):
         except:
             j2_nombre = jugador2_raw.strip()
 
-        # Quien agendó
         agendado_match = re.search(r"<@!?(\d+)>", agendado_por)
         if agendado_match:
             agendado_id = int(agendado_match.group(1))
@@ -888,14 +887,12 @@ async def api_desinscribirse(request):
     if not miembro:
         return web.json_response({"error": "No se pudo verificar tu membresía"}, status=403)
 
-    # Usar la función de desinscripción (debes tenerla en swiss_core o commons)
-    from utils.swiss_core import desinscribir_jugador  # o la que tengas
+    from utils.swiss_core import desinscribir_jugador
     ok, mensaje = await desinscribir_jugador(_bot_instance, codigo_torneo, miembro.id)
 
     if not ok:
         return web.json_response({"error": mensaje}, status=400)
 
-    # Anunciar en el canal público
     canal_anuncios = discord.utils.get(guild.text_channels, name="📰-cartelera‐torneos")
     if canal_anuncios:
         await canal_anuncios.send(f"📤 {miembro.mention} se ha desinscrito del torneo `{codigo_torneo}` (vía web).")
@@ -905,10 +902,6 @@ async def api_desinscribirse(request):
     return response
 
 async def api_mis_torneos_pendientes(request):
-    """
-    Devuelve las partidas pendientes (sin resultado) de todos los torneos
-    en los que el usuario está inscrito.
-    """
     session_token = request.query.get("session")
     sesion = sesiones_activas.get(session_token) if session_token else None
 
@@ -928,7 +921,6 @@ async def api_mis_torneos_pendientes(request):
         return web.json_response({"error": "No se pudo verificar tu membresía"}, status=403)
 
     try:
-        # Obtener todos los torneos del estado
         estado = await leer_estado(_bot_instance)
         torneos_estado = estado.get("torneos", [])
 
@@ -939,13 +931,11 @@ async def api_mis_torneos_pendientes(request):
             if not codigo:
                 continue
 
-            # Solo torneos donde el usuario está inscrito y no están finalizados
             if t.get("estado") == "finalizado":
                 continue
             if str(discord_id) not in t.get("inscritos_ids", []):
                 continue
 
-            # Leer rondas del torneo
             rondas_data = await leer_rondas(_bot_instance, codigo)
             if not rondas_data:
                 continue
@@ -953,14 +943,12 @@ async def api_mis_torneos_pendientes(request):
             if not rondas:
                 continue
 
-            # Buscar la última ronda que no esté completa (o la última en general)
             ronda_actual = None
             for r in reversed(rondas):
                 if not r.get("completa", False):
                     ronda_actual = r
                     break
             if not ronda_actual:
-                # Si todas están completas, no hay pendientes
                 continue
 
             emparejamientos = ronda_actual.get("emparejamientos", [])
@@ -968,21 +956,17 @@ async def api_mis_torneos_pendientes(request):
 
             for emp in emparejamientos:
                 if emp.get("resultado") is not None:
-                    continue  # ya reportado
+                    continue
                 j1 = emp.get("j1")
                 j2 = emp.get("j2")
 
-                # Obtener menciones y nombres
                 try:
                     member1 = await guild.fetch_member(int(j1))
                     nombre1 = member1.display_name
-                    mencion1 = member1.mention
                 except:
                     nombre1 = f"Usuario {j1}"
-                    mencion1 = f"<@{j1}>"
 
                 if j2 is None:
-                    # BYE
                     pendientes.append({
                         "jugador1": nombre1,
                         "jugador1_id": j1,
@@ -994,10 +978,8 @@ async def api_mis_torneos_pendientes(request):
                     try:
                         member2 = await guild.fetch_member(int(j2))
                         nombre2 = member2.display_name
-                        mencion2 = member2.mention
                     except:
                         nombre2 = f"Usuario {j2}"
-                        mencion2 = f"<@{j2}>"
 
                     pendientes.append({
                         "jugador1": nombre1,
@@ -1054,13 +1036,11 @@ async def api_reportar_resultado(request):
     if not miembro:
         return web.json_response({"error": "No se pudo verificar tu membresía"}, status=403)
 
-    # Verificar permisos: admin o uno de los jugadores
     es_admin = miembro.guild_permissions.administrator
     es_jugador = miembro.id in (jugador1_id, jugador2_id)
     if not es_admin and not es_jugador:
         return web.json_response({"error": "No tienes permiso para reportar este resultado"}, status=403)
 
-    # Llamar a la función de reporte de swiss_core
     from utils.swiss_core import reportar_resultado
     ok, mensaje, emp, emp_idx = await reportar_resultado(
         _bot_instance, codigo_torneo, jugador1_id, resultado, jugador2_id, guild
@@ -1074,9 +1054,97 @@ async def api_reportar_resultado(request):
     return response
 
 async def api_mis_enfrentamientos(request):
+    session_token = request.query.get("session")
+    torneo_codigo = request.query.get("torneo")
+
+    if not torneo_codigo:
+        return web.json_response({"error": "Falta el código del torneo"}, status=400)
+
+    sesion = sesiones_activas.get(session_token) if session_token else None
+
+    if not sesion or time.time() > sesion["expira"]:
+        return web.json_response({"error": "Sesión no válida"}, status=401)
+
+    if _bot_instance is None:
+        return web.json_response({"error": "Servicio no disponible"}, status=503)
+
+    guild = _bot_instance.get_guild(config.GUILD_ID_ADMISION)
+    if not guild:
+        return web.json_response({"error": "Servicio no disponible"}, status=503)
+
+    discord_id = sesion["discord_id"]
+    miembro = guild.get_member(int(discord_id))
+    if not miembro:
+        return web.json_response({"error": "No se pudo verificar tu membresía"}, status=403)
+
+    try:
+        estado = await leer_estado(_bot_instance)
+        torneo = next((t for t in estado.get("torneos", []) if t.get("codigo") == torneo_codigo), None)
+        if not torneo:
+            return web.json_response({"error": "Torneo no encontrado"}, status=404)
+        if str(discord_id) not in torneo.get("inscritos_ids", []):
+            return web.json_response({"error": "No estás inscrito en este torneo"}, status=403)
+
+        rondas_data = await leer_rondas(_bot_instance, torneo_codigo)
+        if not rondas_data:
+            return web.json_response({"enfrentamientos": []})
+
+        rondas = rondas_data.get("rondas", [])
+        enfrentamientos = []
+
+        for ronda in rondas:
+            ronda_num = ronda.get("numero")
+            for emp in ronda.get("emparejamientos", []):
+                j1 = emp.get("j1")
+                j2 = emp.get("j2")
+                resultado = emp.get("resultado")
+
+                if str(discord_id) not in (j1, j2):
+                    continue
+
+                es_j1 = str(discord_id) == j1
+                rival_id = j2 if es_j1 else j1
+
+                try:
+                    rival_member = await guild.fetch_member(int(rival_id))
+                    rival_nombre = rival_member.display_name
+                except:
+                    rival_nombre = f"Usuario {rival_id}"
+
+                deck_rival = None
+                if resultado is not None and rival_id is not None:
+                    codigo_deck_rival = f"{torneo_codigo}_{rival_id}"
+                    deck = await obtener_deck_en_canal(guild, codigo_deck_rival)
+                    if deck:
+                        deck_rival = {
+                            "nombre": deck.get("nombre_deck"),
+                            "archetype": deck.get("archetype"),
+                            "decklist": deck.get("decklist"),
+                            "sideboard": deck.get("sideboard")
+                        }
+
+                enfrentamientos.append({
+                    "ronda": ronda_num,
+                    "oponente": rival_nombre,
+                    "oponente_id": rival_id,
+                    "resultado": resultado,
+                    "tiene_deck_rival": deck_rival is not None,
+                    "deck_rival": deck_rival
+                })
+
+        enfrentamientos.sort(key=lambda x: x["ronda"])
+
+        response = web.json_response({"enfrentamientos": enfrentamientos})
+        response.headers['Access-Control-Allow-Origin'] = '*'
+        return response
+
+    except Exception as e:
+        print(f"❌ Error en api_mis_enfrentamientos: {e}")
+        return web.json_response({"error": str(e)}, status=500)
+
+async def api_torneo_enfrentamientos(request):
     """
-    Devuelve todos los enfrentamientos del usuario en un torneo,
-    incluyendo el deck del rival cuando el resultado ya está reportado.
+    Devuelve TODOS los enfrentamientos de un torneo, organizados por ronda.
     """
     session_token = request.query.get("session")
     torneo_codigo = request.query.get("torneo")
@@ -1102,7 +1170,6 @@ async def api_mis_enfrentamientos(request):
         return web.json_response({"error": "No se pudo verificar tu membresía"}, status=403)
 
     try:
-        # Verificar que el usuario está inscrito en el torneo
         estado = await leer_estado(_bot_instance)
         torneo = next((t for t in estado.get("torneos", []) if t.get("codigo") == torneo_codigo), None)
         if not torneo:
@@ -1110,67 +1177,65 @@ async def api_mis_enfrentamientos(request):
         if str(discord_id) not in torneo.get("inscritos_ids", []):
             return web.json_response({"error": "No estás inscrito en este torneo"}, status=403)
 
-        # Leer rondas del torneo
         rondas_data = await leer_rondas(_bot_instance, torneo_codigo)
         if not rondas_data:
-            return web.json_response({"enfrentamientos": []})
+            return web.json_response({"rondas": []})
 
         rondas = rondas_data.get("rondas", [])
-        enfrentamientos = []
+        resultado = []
 
         for ronda in rondas:
             ronda_num = ronda.get("numero")
-            for emp in ronda.get("emparejamientos", []):
+            emparejamientos = ronda.get("emparejamientos", [])
+            ronda_data = {
+                "ronda": ronda_num,
+                "completa": ronda.get("completa", False),
+                "partidos": []
+            }
+
+            for emp in emparejamientos:
                 j1 = emp.get("j1")
                 j2 = emp.get("j2")
-                resultado = emp.get("resultado")
+                resultado_emp = emp.get("resultado")
 
-                # Verificar si el usuario está en este emparejamiento
-                if str(discord_id) not in (j1, j2):
-                    continue
-
-                # Determinar oponente
-                es_j1 = str(discord_id) == j1
-                rival_id = j2 if es_j1 else j1
-
-                # Obtener nombre del rival
                 try:
-                    rival_member = await guild.fetch_member(int(rival_id))
-                    rival_nombre = rival_member.display_name
+                    member1 = await guild.fetch_member(int(j1))
+                    nombre1 = member1.display_name
                 except:
-                    rival_nombre = f"Usuario {rival_id}"
+                    nombre1 = f"Usuario {j1}"
 
-                # Si el resultado es null, no mostrar deck
-                deck_rival = None
-                if resultado is not None and rival_id is not None:
-                    codigo_deck_rival = f"{torneo_codigo}_{rival_id}"
-                    deck = await obtener_deck_en_canal(guild, codigo_deck_rival)
-                    if deck:
-                        deck_rival = {
-                            "nombre": deck.get("nombre_deck"),
-                            "archetype": deck.get("archetype"),
-                            "decklist": deck.get("decklist"),
-                            "sideboard": deck.get("sideboard")
-                        }
+                if j2 is None:
+                    partido = {
+                        "jugador1": nombre1,
+                        "jugador1_id": j1,
+                        "jugador2": None,
+                        "jugador2_id": None,
+                        "resultado": resultado_emp if resultado_emp else "BYE"
+                    }
+                else:
+                    try:
+                        member2 = await guild.fetch_member(int(j2))
+                        nombre2 = member2.display_name
+                    except:
+                        nombre2 = f"Usuario {j2}"
+                    partido = {
+                        "jugador1": nombre1,
+                        "jugador1_id": j1,
+                        "jugador2": nombre2,
+                        "jugador2_id": j2,
+                        "resultado": resultado_emp
+                    }
 
-                enfrentamientos.append({
-                    "ronda": ronda_num,
-                    "oponente": rival_nombre,
-                    "oponente_id": rival_id,
-                    "resultado": resultado,
-                    "tiene_deck_rival": deck_rival is not None,
-                    "deck_rival": deck_rival
-                })
+                ronda_data["partidos"].append(partido)
 
-        # Ordenar por ronda
-        enfrentamientos.sort(key=lambda x: x["ronda"])
+            resultado.append(ronda_data)
 
-        response = web.json_response({"enfrentamientos": enfrentamientos})
+        response = web.json_response({"rondas": resultado})
         response.headers['Access-Control-Allow-Origin'] = '*'
         return response
 
     except Exception as e:
-        print(f"❌ Error en api_mis_enfrentamientos: {e}")
+        print(f"❌ Error en api_torneo_enfrentamientos: {e}")
         return web.json_response({"error": str(e)}, status=500)
 
 async def api_deck_rival(request):
@@ -1181,7 +1246,6 @@ async def api_deck_rival(request):
     if not torneo_codigo or not rival_id:
         return web.json_response({"error": "Faltan parámetros"}, status=400)
 
-    # Validar sesión
     sesion = sesiones_activas.get(session_token) if session_token else None
     if not sesion or time.time() > sesion["expira"]:
         return web.json_response({"error": "Sesión no válida"}, status=401)
@@ -1193,14 +1257,12 @@ async def api_deck_rival(request):
     if not guild:
         return web.json_response({"error": "Servicio no disponible"}, status=503)
 
-    # Verificar que el usuario está en el torneo (para no permitir acceso a decks de otros torneos)
     discord_id = sesion["discord_id"]
     estado = await leer_estado(_bot_instance)
     torneo = next((t for t in estado.get("torneos", []) if t.get("codigo") == torneo_codigo), None)
     if not torneo or str(discord_id) not in torneo.get("inscritos_ids", []):
         return web.json_response({"error": "No tienes acceso a este torneo"}, status=403)
 
-    # Obtener el deck del rival
     codigo_deck = f"{torneo_codigo}_{rival_id}"
     deck = await obtener_deck_en_canal(guild, codigo_deck)
 
@@ -1218,9 +1280,8 @@ async def api_deck_rival(request):
     response.headers['Access-Control-Allow-Origin'] = '*'
     return response
 
-
 # ============================================================
-# 8. SERVIDOR WEB — registro de rutas
+# 9. SERVIDOR WEB — registro de rutas
 # ============================================================
 def crear_app():
     app = web.Application(middlewares=[cors_middleware])
@@ -1241,6 +1302,7 @@ def crear_app():
     app.router.add_get('/auth/verificar-sesion', auth_verificar_sesion)
 
     app.router.add_get('/api/mis-torneos', api_mis_torneos)
+    app.router.add_get('/api/mis-partidas', api_mis_partidas)
     app.router.add_get('/api/mis-decks', api_mis_decks)
     app.router.add_get('/api/torneos-disponibles', api_torneos_disponibles)
     app.router.add_get('/api/arquetipos', api_arquetipos)
@@ -1255,13 +1317,17 @@ def crear_app():
 
     app.router.add_post('/api/editar-deck', api_editar_deck)
     app.router.add_route('OPTIONS', '/api/editar-deck', handle_options)
+
     app.router.add_get('/api/todas-partidas', api_todas_partidas)
     app.router.add_post('/api/desinscribirse', api_desinscribirse)
     app.router.add_route('OPTIONS', '/api/desinscribirse', handle_options)
+
     app.router.add_get('/api/mis-torneos-pendientes', api_mis_torneos_pendientes)
     app.router.add_post('/api/reportar-resultado', api_reportar_resultado)
     app.router.add_route('OPTIONS', '/api/reportar-resultado', handle_options)
+
     app.router.add_get('/api/mis-enfrentamientos', api_mis_enfrentamientos)
+    app.router.add_get('/api/torneo-enfrentamientos', api_torneo_enfrentamientos)
     app.router.add_get('/api/deck-rival', api_deck_rival)
 
     return app
