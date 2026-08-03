@@ -16,6 +16,7 @@ import config
 from utils.commons import (
     buscar_usuario_en_servidor,
     calcular_clasificacion_torneo,
+    obtener_deck_en_canal,
     obtener_decks_por_usuario,
     validar_torneo_para_edicion,
     limpiar_deck_raw,
@@ -27,7 +28,7 @@ from utils.commons import (
     tiene_rol_permitido,
     editar_deck_web)
 
-from utils.torneos_estado import leer_estado
+from utils.torneos_estado import leer_estado, leer_rondas
 
 calcular_clasificacion = calcular_clasificacion_torneo
 
@@ -1161,6 +1162,51 @@ async def api_mis_enfrentamientos(request):
         print(f"❌ Error en api_mis_enfrentamientos: {e}")
         return web.json_response({"error": str(e)}, status=500)
 
+async def api_deck_rival(request):
+    session_token = request.query.get("session")
+    torneo_codigo = request.query.get("torneo")
+    rival_id = request.query.get("rival")
+
+    if not torneo_codigo or not rival_id:
+        return web.json_response({"error": "Faltan parámetros"}, status=400)
+
+    # Validar sesión
+    sesion = sesiones_activas.get(session_token) if session_token else None
+    if not sesion or time.time() > sesion["expira"]:
+        return web.json_response({"error": "Sesión no válida"}, status=401)
+
+    if _bot_instance is None:
+        return web.json_response({"error": "Servicio no disponible"}, status=503)
+
+    guild = _bot_instance.get_guild(config.GUILD_ID_ADMISION)
+    if not guild:
+        return web.json_response({"error": "Servicio no disponible"}, status=503)
+
+    # Verificar que el usuario está en el torneo (para no permitir acceso a decks de otros torneos)
+    discord_id = sesion["discord_id"]
+    estado = await leer_estado(_bot_instance)
+    torneo = next((t for t in estado.get("torneos", []) if t.get("codigo") == torneo_codigo), None)
+    if not torneo or str(discord_id) not in torneo.get("inscritos_ids", []):
+        return web.json_response({"error": "No tienes acceso a este torneo"}, status=403)
+
+    # Obtener el deck del rival
+    codigo_deck = f"{torneo_codigo}_{rival_id}"
+    deck = await obtener_deck_en_canal(guild, codigo_deck)
+
+    if deck:
+        response_data = {
+            "nombre": deck.get("nombre_deck"),
+            "archetype": deck.get("archetype"),
+            "decklist": deck.get("decklist"),
+            "sideboard": deck.get("sideboard")
+        }
+    else:
+        response_data = None
+
+    response = web.json_response({"deck": response_data})
+    response.headers['Access-Control-Allow-Origin'] = '*'
+    return response
+
 
 # ============================================================
 # 8. SERVIDOR WEB — registro de rutas
@@ -1205,6 +1251,7 @@ def crear_app():
     app.router.add_post('/api/reportar-resultado', api_reportar_resultado)
     app.router.add_route('OPTIONS', '/api/reportar-resultado', handle_options)
     app.router.add_get('/api/mis-enfrentamientos', api_mis_enfrentamientos)
+    app.router.add_get('/api/deck-rival', api_deck_rival)
 
     return app
 
