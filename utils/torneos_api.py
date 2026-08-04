@@ -1170,6 +1170,7 @@ async def api_torneo_enfrentamientos(request):
         return web.json_response({"error": "No se pudo verificar tu membresía"}, status=403)
 
     try:
+        # Verificar que el usuario está inscrito en el torneo
         estado = await leer_estado(_bot_instance)
         torneo = next((t for t in estado.get("torneos", []) if t.get("codigo") == torneo_codigo), None)
         if not torneo:
@@ -1177,6 +1178,7 @@ async def api_torneo_enfrentamientos(request):
         if str(discord_id) not in torneo.get("inscritos_ids", []):
             return web.json_response({"error": "No estás inscrito en este torneo"}, status=403)
 
+        # Leer rondas
         rondas_data = await leer_rondas(_bot_instance, torneo_codigo)
         if not rondas_data:
             return web.json_response({"rondas": []})
@@ -1198,6 +1200,7 @@ async def api_torneo_enfrentamientos(request):
                 j2 = emp.get("j2")
                 resultado_emp = emp.get("resultado")
 
+                # Obtener nombres
                 try:
                     member1 = await guild.fetch_member(int(j1))
                     nombre1 = member1.display_name
@@ -1205,12 +1208,13 @@ async def api_torneo_enfrentamientos(request):
                     nombre1 = f"Usuario {j1}"
 
                 if j2 is None:
+                    # BYE
                     partido = {
                         "jugador1": nombre1,
                         "jugador1_id": j1,
                         "jugador2": None,
                         "jugador2_id": None,
-                        "resultado": resultado_emp if resultado_emp else "BYE"
+                        "resultado": "BYE"
                     }
                 else:
                     try:
@@ -1223,7 +1227,7 @@ async def api_torneo_enfrentamientos(request):
                         "jugador1_id": j1,
                         "jugador2": nombre2,
                         "jugador2_id": j2,
-                        "resultado": resultado_emp
+                        "resultado": resultado_emp if resultado_emp else None
                     }
 
                 ronda_data["partidos"].append(partido)
