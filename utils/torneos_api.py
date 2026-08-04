@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from aiohttp import web
 
 import feedparser
+from flask import app
 
 import config
 from utils.commons import (
@@ -1284,6 +1285,81 @@ async def api_deck_rival(request):
     response.headers['Access-Control-Allow-Origin'] = '*'
     return response
 
+async def api_agendar_partida(request):
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "JSON inválido"}, status=400)
+
+    session_token = body.get("session")
+    sesion = sesiones_activas.get(session_token) if session_token else None
+
+    if not sesion or time.time() > sesion["expira"]:
+        return web.json_response({"error": "Sesión no válida"}, status=401)
+
+    codigo_torneo = str(body.get("codigo_torneo", "")).strip()
+    jugador1_id = body.get("jugador1_id")
+    jugador2_id = body.get("jugador2_id")
+    fecha = str(body.get("fecha", "")).strip()
+    hora = str(body.get("hora", "")).strip()
+
+    if not codigo_torneo or not jugador1_id or not jugador2_id or not fecha or not hora:
+        return web.json_response({"error": "Faltan datos"}, status=400)
+
+    if _bot_instance is None:
+        return web.json_response({"error": "Servicio no disponible"}, status=503)
+
+    guild = _bot_instance.get_guild(config.GUILD_ID_ADMISION)
+    if not guild:
+        return web.json_response({"error": "Servicio no disponible"}, status=503)
+
+    miembro = guild.get_member(int(sesion["discord_id"]))
+    if not miembro:
+        return web.json_response({"error": "No se pudo verificar tu membresía"}, status=403)
+
+    # Verificar que el usuario es uno de los jugadores
+    if miembro.id not in (jugador1_id, jugador2_id):
+        return web.json_response({"error": "No tienes permiso para agendar esta partida"}, status=403)
+
+    try:
+        # Obtener miembros de Discord para menciones
+        jugador1 = await guild.fetch_member(jugador1_id) if jugador1_id else None
+        jugador2 = await guild.fetch_member(jugador2_id) if jugador2_id else None
+
+        if not jugador1 or not jugador2:
+            return web.json_response({"error": "No se encontraron los jugadores"}, status=404)
+
+        # Canal de partidos agendados
+        canal_destino = discord.utils.get(guild.text_channels, name="partidos-agendados")
+        if not canal_destino:
+            return web.json_response({"error": "Canal #partidos-agendados no encontrado"}, status=404)
+
+        # Construir mensaje
+        mensaje_agendado = (
+            f"📅 [EVENTO] {fecha} {hora} | {jugador1.mention} vs {jugador2.mention} | "
+            f"Agendado por {miembro.mention}"
+        )
+        await canal_destino.send(mensaje_agendado)
+
+        # Enviar mensaje privado a los jugadores
+        mensaje_privado = (
+            f"✅ Se ha agendado una partida para el `{fecha}` a las `{hora}` entre "
+            f"{jugador1.mention} y {jugador2.mention}."
+        )
+        for jugador in (jugador1, jugador2):
+            try:
+                await jugador.send(mensaje_privado)
+            except discord.Forbidden:
+                pass  # Ignorar si tiene DMs cerrados
+
+        response = web.json_response({"ok": True, "mensaje": "Partida agendada correctamente"})
+        response.headers['Access-Control-Allow-Origin'] = '*'
+        return response
+
+    except Exception as e:
+        print(f"❌ Error en api_agendar_partida: {e}")
+        return web.json_response({"error": str(e)}, status=500)
+
 # ============================================================
 # 9. SERVIDOR WEB — registro de rutas
 # ============================================================
@@ -1333,6 +1409,8 @@ def crear_app():
     app.router.add_get('/api/mis-enfrentamientos', api_mis_enfrentamientos)
     app.router.add_get('/api/torneo-enfrentamientos', api_torneo_enfrentamientos)
     app.router.add_get('/api/deck-rival', api_deck_rival)
+    app.router.add_post('/api/agendar-partida', api_agendar_partida)
+    app.router.add_route('OPTIONS', '/api/agendar-partida', handle_options)
 
     return app
 
