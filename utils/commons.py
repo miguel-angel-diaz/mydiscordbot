@@ -1173,23 +1173,17 @@ def _parsear_embed_deck(embed: discord.Embed) -> dict | None:
 
     descripcion = embed.description or ""
 
-    # LOG: Ver qué hay en la descripción
-    print(f"🔍 [_parsear_embed_deck] Descripción del embed:")
-    print(f"   {descripcion}")
-
     # 🔥 CORRECCIÓN: Buscar explícitamente el formato con negritas y backticks
     codigo_deck = None
     # Buscar "**Código:** `codigo`"
     match_codigo = re.search(r"\*\*Código:\*\*\s*`([^`]+)`", descripcion, re.IGNORECASE)
     if match_codigo:
         codigo_deck = match_codigo.group(1).strip()
-        print(f"   ✅ Código deck capturado: {codigo_deck}")
     else:
         # Fallback: buscar sin negritas
         match_codigo = re.search(r"Código:\s*`([^`]+)`", descripcion, re.IGNORECASE)
         if match_codigo:
             codigo_deck = match_codigo.group(1).strip()
-            print(f"   ✅ Código deck capturado (fallback): {codigo_deck}")
         else:
             print(f"   ❌ No se encontró Código en la descripción")
 
@@ -1198,12 +1192,10 @@ def _parsear_embed_deck(embed: discord.Embed) -> dict | None:
     match_torneo = re.search(r"\*\*Torneo:\*\*\s*`([^`]+)`", descripcion, re.IGNORECASE)
     if match_torneo:
         codigo_torneo = match_torneo.group(1).strip()
-        print(f"   ✅ Código torneo capturado: {codigo_torneo}")
     else:
         match_torneo = re.search(r"Torneo:\s*`([^`]+)`", descripcion, re.IGNORECASE)
         if match_torneo:
             codigo_torneo = match_torneo.group(1).strip()
-            print(f"   ✅ Código torneo capturado (fallback): {codigo_torneo}")
         else:
             print(f"   ❌ No se encontró Torneo en la descripción")
 
@@ -1212,11 +1204,6 @@ def _parsear_embed_deck(embed: discord.Embed) -> dict | None:
         partes = codigo_deck.split("_")
         if len(partes) >= 2:
             codigo_torneo = partes[0]
-            print(f"   ✅ Código torneo extraído del código deck: {codigo_torneo}")
-
-    # LOG: Resultado final
-    print(f"   📦 Resultado: codigo_deck='{codigo_deck}', codigo_torneo='{codigo_torneo}'")
-
     try:
         edited = int(campos.get("Ediciones post-inicio", campos.get("edited", "0")).split("/")[0])
     except (ValueError, AttributeError):

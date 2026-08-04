@@ -28,6 +28,8 @@ from utils.commons import (
     editar_deck_web)
 
 from utils.torneos_estado import leer_estado, leer_rondas
+from utils.jugadores import actualizar_proximas_partidas
+from utils.swiss_core import reportar_resultado, calcular_clasificacion, desinscribir_jugador
 
 calcular_clasificacion = calcular_clasificacion_torneo
 
@@ -149,7 +151,6 @@ async def api_torneos(request):
         if t.get("estado") == "finalizado" and t.get("tipo") == "swiss":
             # Calcular clasificación para torneos Swiss finalizados
             try:
-                from utils.swiss_core import calcular_clasificacion
                 clasificacion = await calcular_clasificacion(_bot_instance, t["codigo"])
                 # Formatear igual que Challonge
                 clasificacion_formateada = []
@@ -947,7 +948,7 @@ async def api_desinscribirse(request):
     if not miembro:
         return web.json_response({"error": "No se pudo verificar tu membresía"}, status=403)
 
-    from utils.swiss_core import desinscribir_jugador
+  
     ok, mensaje = await desinscribir_jugador(_bot_instance, codigo_torneo, miembro.id)
 
     if not ok:
@@ -1101,13 +1102,88 @@ async def api_reportar_resultado(request):
     if not es_admin and not es_jugador:
         return web.json_response({"error": "No tienes permiso para reportar este resultado"}, status=403)
 
-    from utils.swiss_core import reportar_resultado
+    # Importar funciones necesarias
+    from utils.swiss_core import reportar_resultado, publicar_clasificacion_swiss
+    from utils.torneos_estado import leer_rondas
+
+    # 1️⃣ Reportar el resultado
     ok, mensaje, emp, emp_idx = await reportar_resultado(
         _bot_instance, codigo_torneo, jugador1_id, resultado, jugador2_id, guild
     )
 
     if not ok:
         return web.json_response({"error": mensaje}, status=400)
+
+    # 2️⃣ Obtener la ronda actual para actualizar el mensaje de citas
+    try:
+        rondas_data = await leer_rondas(_bot_instance, codigo_torneo)
+        if rondas_data:
+            rondas = rondas_data.get("rondas", [])
+            if rondas:
+                ronda_actual = rondas[-1]
+                ronda_num = ronda_actual.get("numero", 0)
+
+                # Obtener nombres de los jugadores para el mensaje
+                try:
+                    j1_member = await guild.fetch_member(int(jugador1_id))
+                    nombre1 = j1_member.display_name
+                except:
+                    nombre1 = f"Usuario {jugador1_id}"
+                try:
+                    j2_member = await guild.fetch_member(int(jugador2_id))
+                    nombre2 = j2_member.display_name
+                except:
+                    nombre2 = f"Usuario {jugador2_id}"
+
+                # 3️⃣ Actualizar mensaje de citas a ciegas (eliminar la línea del partido)
+                canal_citas = discord.utils.get(guild.text_channels, name="🍸-citas‐a‐ciegas")
+                if canal_citas and emp is not None:
+                    async for msg in canal_citas.history(limit=200):
+                        if msg.author == _bot_instance.user and f"Emparejamientos Ronda {ronda_num} - Torneo {codigo_torneo}" in msg.content:
+                            lines = msg.content.splitlines()
+                            nuevas_lines = []
+                            # Mantener el título
+                            if lines:
+                                nuevas_lines.append(lines[0])
+                            # Reconstruir las líneas de partidos, omitiendo el que se reportó
+                            for line in lines[1:]:
+                                # Si la línea contiene ambos jugadores, la saltamos
+                                if (f"<@{jugador1_id}>" in line and f"<@{jugador2_id}>" in line) or \
+                                   (f"<@{jugador2_id}>" in line and f"<@{jugador1_id}>" in line):
+                                    continue
+                                nuevas_lines.append(line)
+                            if len(nuevas_lines) <= 1:
+                                await msg.delete()
+                            else:
+                                await msg.edit(content="\n".join(nuevas_lines))
+                            break
+
+                # 4️⃣ Enviar anuncio al canal de resultados
+                canal_resultados = discord.utils.get(guild.text_channels, name="🍺-quién‐se‐lleva‐la‐ronda")
+                if canal_resultados:
+                    # Determinar ganador
+                    try:
+                        s1, s2 = map(int, resultado.split("-"))
+                    except:
+                        s1 = s2 = 0
+                    if s1 > s2:
+                        ganador = nombre1
+                    elif s2 > s1:
+                        ganador = nombre2
+                    else:
+                        ganador = "Empate"
+                    await canal_resultados.send(
+                        f"🏆 Resultado reportado en `{codigo_torneo}`:\n"
+                        f"**{nombre1}** {resultado} **{nombre2}**\n"
+                        f"🏅 Ganador: {ganador}"
+                    )
+
+                # 5️⃣ Actualizar clasificación siempre
+                await publicar_clasificacion_swiss(_bot_instance, guild, codigo_torneo)
+
+    except Exception as e:
+        print(f"⚠️ Error al actualizar canales: {e}")
+        # No devolvemos error al frontend, solo log
 
     response = web.json_response({"ok": True, "mensaje": mensaje})
     response.headers['Access-Control-Allow-Origin'] = '*'
@@ -1372,52 +1448,50 @@ async def api_agendar_partida(request):
     if not guild:
         return web.json_response({"error": "Servicio no disponible"}, status=503)
 
-    miembro = guild.get_member(int(sesion["discord_id"]))
-    if not miembro:
-        return web.json_response({"error": "No se pudo verificar tu membresía"}, status=403)
+    # 🔑 Validar permisos: el usuario debe ser uno de los jugadores
+    discord_id = int(sesion["discord_id"])
+    # Convertir a int por si vienen como string
+    try:
+        j1 = int(jugador1_id)
+        j2 = int(jugador2_id)
+    except ValueError:
+        return web.json_response({"error": "IDs de jugador inválidos"}, status=400)
 
-    # Verificar que el usuario es uno de los jugadores
-    if miembro.id not in (jugador1_id, jugador2_id):
+    if discord_id not in (j1, j2):
         return web.json_response({"error": "No tienes permiso para agendar esta partida"}, status=403)
 
+    # Obtener miembros
     try:
-        # Obtener miembros de Discord para menciones
-        jugador1 = await guild.fetch_member(jugador1_id) if jugador1_id else None
-        jugador2 = await guild.fetch_member(jugador2_id) if jugador2_id else None
+        jugador1 = await guild.fetch_member(j1)
+    except:
+        return web.json_response({"error": "Jugador 1 no encontrado en el servidor"}, status=404)
+    try:
+        jugador2 = await guild.fetch_member(j2)
+    except:
+        return web.json_response({"error": "Jugador 2 no encontrado en el servidor"}, status=404)
 
-        if not jugador1 or not jugador2:
-            return web.json_response({"error": "No se encontraron los jugadores"}, status=404)
+    canal = discord.utils.get(guild.text_channels, name="partidos-agendados")
+    if not canal:
+        return web.json_response({"error": "Canal #partidos-agendados no encontrado"}, status=404)
 
-        # Canal de partidos agendados
-        canal_destino = discord.utils.get(guild.text_channels, name="partidos-agendados")
-        if not canal_destino:
-            return web.json_response({"error": "Canal #partidos-agendados no encontrado"}, status=404)
+    mensaje = f"📅 [EVENTO] {fecha} {hora} | {jugador1.mention} vs {jugador2.mention} | Agendado por {sesion['username']} (vía web)"
+    await canal.send(mensaje)
 
-        # Construir mensaje
-        mensaje_agendado = (
-            f"📅 [EVENTO] {fecha} {hora} | {jugador1.mention} vs {jugador2.mention} | "
-            f"Agendado por {miembro.mention}"
-        )
-        await canal_destino.send(mensaje_agendado)
+    # Mensajes privados
+    for j in (jugador1, jugador2):
+        try:
+            await j.send(f"✅ Se ha agendado una partida para el {fecha} a las {hora} entre {jugador1.mention} y {jugador2.mention}.")
+        except:
+            pass
+    class FakeCtx:
+        def __init__(self, guild, bot):
+            self.guild = guild
+            self.bot = bot
 
-        # Enviar mensaje privado a los jugadores
-        mensaje_privado = (
-            f"✅ Se ha agendado una partida para el `{fecha}` a las `{hora}` entre "
-            f"{jugador1.mention} y {jugador2.mention}."
-        )
-        for jugador in (jugador1, jugador2):
-            try:
-                await jugador.send(mensaje_privado)
-            except discord.Forbidden:
-                pass  # Ignorar si tiene DMs cerrados
+    fake_ctx = FakeCtx(guild, _bot_instance)
+    await actualizar_proximas_partidas(fake_ctx)
+    return web.json_response({"ok": True, "mensaje": "Partida agendada correctamente"})
 
-        response = web.json_response({"ok": True, "mensaje": "Partida agendada correctamente"})
-        response.headers['Access-Control-Allow-Origin'] = '*'
-        return response
-
-    except Exception as e:
-        print(f"❌ Error en api_agendar_partida: {e}")
-        return web.json_response({"error": str(e)}, status=500)
 
 async def api_clasificacion_torneo(request):
     """
@@ -1449,7 +1523,7 @@ async def api_clasificacion_torneo(request):
 
     # 2️⃣ Intentar obtener clasificación de Swiss (desde el estado)
     try:
-        from utils.swiss_core import calcular_clasificacion
+       
         estado = await leer_estado(_bot_instance)
         torneo = next((t for t in estado.get("torneos", []) if t.get("codigo") == torneo_codigo), None)
         if torneo and torneo.get("tipo") == "swiss":

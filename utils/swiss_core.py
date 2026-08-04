@@ -306,6 +306,7 @@ async def reportar_resultado(bot, codigo: str, jugador1_id: int, resultado: str,
         return True, "Resultado reportado y ronda completada. Siguiente ronda generada o torneo finalizado.", emp_encontrado, emp_index
     else:
         return True, "Resultado reportado.", emp_encontrado, emp_index
+
 # ============================================================
 # SIGUIENTE RONDA AUTOMÁTICA (CON CÁLCULO DE RONDAS NECESARIAS)
 # ============================================================
