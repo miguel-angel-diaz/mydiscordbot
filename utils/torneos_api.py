@@ -1360,6 +1360,72 @@ async def api_agendar_partida(request):
         print(f"❌ Error en api_agendar_partida: {e}")
         return web.json_response({"error": str(e)}, status=500)
 
+async def api_clasificacion_torneo(request):
+    """
+    Devuelve la clasificación de un torneo, ya sea de Challonge (caché) o Swiss (estado).
+    """
+    torneo_codigo = request.query.get("codigo")
+    if not torneo_codigo:
+        return web.json_response({"error": "Falta el código del torneo"}, status=400)
+
+    # Verificar sesión (opcional, pero para saber quién pide)
+    session_token = request.query.get("session")
+    sesion = sesiones_activas.get(session_token) if session_token else None
+    if not sesion or time.time() > sesion["expira"]:
+        return web.json_response({"error": "Sesión no válida"}, status=401)
+
+    if _bot_instance is None:
+        return web.json_response({"error": "Servicio no disponible"}, status=503)
+
+    guild = _bot_instance.get_guild(config.GUILD_ID_ADMISION)
+    if not guild:
+        return web.json_response({"error": "Servicio no disponible"}, status=503)
+
+    # 1️⃣ Intentar obtener clasificación de Challonge (caché)
+    cache = leer_cache()
+    if cache:
+        for torneo in cache.get("torneos", []):
+            if torneo.get("codigo") == torneo_codigo:
+                return web.json_response({"clasificacion": torneo.get("clasificacion", [])})
+
+    # 2️⃣ Intentar obtener clasificación de Swiss (desde el estado)
+    try:
+        from utils.swiss_core import calcular_clasificacion
+        estado = await leer_estado(_bot_instance)
+        torneo = next((t for t in estado.get("torneos", []) if t.get("codigo") == torneo_codigo), None)
+        if torneo and torneo.get("tipo") == "swiss":
+            # Calcular clasificación (esto puede ser pesado, pero es bajo demanda)
+            clasificacion = await calcular_clasificacion(_bot_instance, torneo_codigo)
+            # Formatear al mismo estilo que Challonge para el frontend
+            clasificacion_formateada = []
+            for item in clasificacion:
+                # item tiene: id, rk, mp, w, l, dw, omw, bch, dif
+                try:
+                    member = await guild.fetch_member(int(item["id"]))
+                    nombre = member.display_name
+                    discord_id = item["id"]
+                except:
+                    nombre = f"Usuario {item['id']}"
+                    discord_id = item["id"]
+                clasificacion_formateada.append({
+                    "nombre": nombre,
+                    "discord_id": discord_id,
+                    "rank": item["rk"],
+                    "mp": item["mp"],
+                    "wins": item["w"],
+                    "losses": item["l"],
+                    "draws": item["dw"],
+                    "omw": item.get("omw", 0),
+                    "buchholz": item.get("bch", 0),
+                    "diff": item.get("dif", 0)
+                })
+            return web.json_response({"clasificacion": clasificacion_formateada})
+    except Exception as e:
+        print(f"❌ Error al obtener clasificación Swiss: {e}")
+        return web.json_response({"error": str(e)}, status=500)
+
+    return web.json_response({"error": "Torneo no encontrado"}, status=404)
+
 # ============================================================
 # 9. SERVIDOR WEB — registro de rutas
 # ============================================================
@@ -1411,6 +1477,7 @@ def crear_app():
     app.router.add_get('/api/deck-rival', api_deck_rival)
     app.router.add_post('/api/agendar-partida', api_agendar_partida)
     app.router.add_route('OPTIONS', '/api/agendar-partida', handle_options)
+    app.router.add_get('/api/clasificacion-torneo', api_clasificacion_torneo)
 
     return app
 
