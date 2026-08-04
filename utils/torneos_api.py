@@ -129,10 +129,69 @@ def leer_cache():
 # 4. ENDPOINTS HTTP — Torneos
 # ============================================================
 async def api_torneos(request):
+    # 1️⃣ Obtener torneos finalizados de Challonge (caché)
     data = leer_cache()
-    if data is None:
-        return web.json_response({"error": "Caché no disponible todavía"}, status=503)
-    return web.json_response(data)
+    torneos_challonge = data.get("torneos", []) if data else []
+
+    # 2️⃣ Obtener torneos Swiss finalizados del estado
+    if _bot_instance is None:
+        return web.json_response({"error": "Servicio no disponible"}, status=503)
+
+    guild = _bot_instance.get_guild(config.GUILD_ID_ADMISION)
+    if not guild:
+        return web.json_response({"error": "Servicio no disponible"}, status=503)
+
+    estado = await leer_estado(_bot_instance)
+    torneos_swiss = estado.get("torneos", [])
+    torneos_swiss_finalizados = []
+
+    for t in torneos_swiss:
+        if t.get("estado") == "finalizado" and t.get("tipo") == "swiss":
+            # Calcular clasificación para torneos Swiss finalizados
+            try:
+                from utils.swiss_core import calcular_clasificacion
+                clasificacion = await calcular_clasificacion(_bot_instance, t["codigo"])
+                # Formatear igual que Challonge
+                clasificacion_formateada = []
+                for p in clasificacion:
+                    try:
+                        member = await guild.fetch_member(int(p["id"]))
+                        nombre = member.display_name
+                        avatar = str(member.display_avatar.url)
+                    except:
+                        nombre = f"Usuario {p['id']}"
+                        avatar = None
+                    clasificacion_formateada.append({
+                        "rank": p["rk"],
+                        "nombre": nombre,
+                        "wins": p["w"],
+                        "losses": p["l"],
+                        "draws": p["dw"],
+                        "mp": p["mp"],
+                        "omw": p["omw"],
+                        "buchholz": p["bch"],
+                        "diff": p["dif"],
+                        "discord_id": p["id"],
+                        "avatar": avatar
+                    })
+                torneos_swiss_finalizados.append({
+                    "codigo": t["codigo"],
+                    "nombre": t["nombre"],
+                    "fecha_fin": t.get("fecha_fin") or t.get("fecha_inicio"),
+                    "participantes_count": len(t.get("inscritos_ids", [])),
+                    "clasificacion": clasificacion_formateada
+                })
+            except Exception as e:
+                print(f"Error al procesar Swiss {t['codigo']}: {e}")
+
+    # 3️⃣ Combinar ambas listas
+    todos_los_torneos = torneos_challonge + torneos_swiss_finalizados
+    # Ordenar por fecha (más reciente primero)
+    todos_los_torneos.sort(key=lambda x: x.get("fecha_fin") or "", reverse=True)
+
+    response = web.json_response({"torneos": todos_los_torneos})
+    response.headers['Access-Control-Allow-Origin'] = '*'
+    return response
 
 # ============================================================
 # 5. ENDPOINTS HTTP — Admisión
