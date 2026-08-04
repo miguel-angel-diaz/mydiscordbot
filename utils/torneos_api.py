@@ -22,7 +22,6 @@ from utils.commons import (
     contar_cartas,
     obtener_lista_arquetipos,
     obtener_sugerencias_arquetipos,
-    obtener_partidas_agendadas_usuario,
     inscribir_usuario_web,
     tiene_rol_permitido,
     editar_deck_web)
@@ -458,34 +457,6 @@ async def api_mis_torneos(request):
         "username": sesion["username"],
         "torneos": mis_resultados,
     })
-
-async def api_mis_partidas(request):
-    session_token = request.query.get("session")
-    sesion = sesiones_activas.get(session_token) if session_token else None
-
-    if not sesion or time.time() > sesion["expira"]:
-        return web.json_response({"error": "Sesión no válida"}, status=401)
-
-    if _bot_instance is None:
-        return web.json_response({"error": "Servicio no disponible"}, status=503)
-
-    guild = _bot_instance.get_guild(config.GUILD_ID_ADMISION)
-    if not guild:
-        return web.json_response({"error": "Servicio no disponible"}, status=503)
-
-    discord_id = int(sesion["discord_id"])
-
-    try:
-        partidas = await obtener_partidas_agendadas_usuario(guild, discord_id)
-    except Exception as e:
-        return web.json_response({"error": str(e)}, status=500)
-
-    response = web.json_response({
-        "username": sesion["username"],
-        "partidas": partidas
-    })
-    response.headers['Access-Control-Allow-Origin'] = '*'
-    return response
 
 async def api_mis_decks(request):
     """Devuelve los decks del usuario logueado."""
@@ -948,12 +919,13 @@ async def api_desinscribirse(request):
     if not miembro:
         return web.json_response({"error": "No se pudo verificar tu membresía"}, status=403)
 
-  
-    ok, mensaje = await desinscribir_jugador(_bot_instance, codigo_torneo, miembro.id)
+    from utils.swiss_core import desinscribir_jugador
+    ok, mensaje = await desinscribir_jugador(_bot_instance, codigo_torneo, miembro.id, guild)
 
     if not ok:
         return web.json_response({"error": mensaje}, status=400)
 
+    # Anunciar en el canal público
     canal_anuncios = discord.utils.get(guild.text_channels, name="📰-cartelera‐torneos")
     if canal_anuncios:
         await canal_anuncios.send(f"📤 {miembro.mention} se ha desinscrito del torneo `{codigo_torneo}` (vía web).")
@@ -1581,7 +1553,6 @@ def crear_app():
     app.router.add_get('/auth/verificar-sesion', auth_verificar_sesion)
 
     app.router.add_get('/api/mis-torneos', api_mis_torneos)
-    app.router.add_get('/api/mis-partidas', api_mis_partidas)
     app.router.add_get('/api/mis-decks', api_mis_decks)
     app.router.add_get('/api/torneos-disponibles', api_torneos_disponibles)
     app.router.add_get('/api/arquetipos', api_arquetipos)

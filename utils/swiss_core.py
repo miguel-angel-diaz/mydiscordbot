@@ -3,6 +3,7 @@ import asyncio
 import math
 from typing import List, Dict, Optional, Tuple
 from collections import defaultdict
+import config
 
 from utils.torneos_estado import (
     actualizar_torneo_estado,
@@ -76,7 +77,7 @@ async def inscribir_jugador(bot, codigo: str, usuario_id: int) -> Tuple[bool, st
     await actualizar_torneo_estado(bot, codigo, {"inscritos_ids": inscritos})
     return True, "Inscripción completada."
 
-async def desinscribir_jugador(bot, codigo: str, usuario_id: int) -> Tuple[bool, str]:
+async def desinscribir_jugador(bot, codigo: str, usuario_id: int, guild: discord.Guild = None) -> Tuple[bool, str]:
     torneo = await obtener_torneo(bot, codigo)
     if not torneo:
         return False, "El torneo no existe."
@@ -87,6 +88,50 @@ async def desinscribir_jugador(bot, codigo: str, usuario_id: int) -> Tuple[bool,
 
     inscritos.remove(str(usuario_id))
     await actualizar_torneo_estado(bot, codigo, {"inscritos_ids": inscritos})
+
+    # 🔹 Eliminar deck del usuario en submitted-decks
+    if guild is None:
+        # Intentar obtener el guild a partir del bot y el GUILD_ID_ADMISION
+        guild = bot.get_guild(config.GUILD_ID_ADMISION)
+        if not guild:
+            return True, "Desinscripción completada, pero no se pudo eliminar el deck (guild no encontrado)."
+
+    canal_submitted = discord.utils.get(guild.text_channels, name="submitted-decks")
+    if canal_submitted:
+        codigo_deck = f"{codigo}_{usuario_id}"
+        async for mensaje in canal_submitted.history(limit=200):
+            if not mensaje.embeds:
+                continue
+            eliminado = False
+            for embed in mensaje.embeds:
+                # Buscar en título, descripción y campos
+                titulo = embed.title or ""
+                descripcion = embed.description or ""
+                if codigo_deck in titulo or codigo_deck in descripcion:
+                    try:
+                        await mensaje.delete()
+                        eliminado = True
+                        break
+                    except discord.Forbidden:
+                        print(f"⚠️ No tengo permisos para eliminar el deck `{codigo_deck}`.")
+                    except discord.HTTPException as e:
+                        print(f"⚠️ Error al eliminar el deck `{codigo_deck}`: {e}")
+                # Buscar en campos
+                for field in embed.fields:
+                    if codigo_deck in field.value or codigo_deck in field.name:
+                        try:
+                            await mensaje.delete()
+                            eliminado = True
+                            break
+                        except discord.Forbidden:
+                            print(f"⚠️ No tengo permisos para eliminar el deck `{codigo_deck}`.")
+                        except discord.HTTPException as e:
+                            print(f"⚠️ Error al eliminar el deck `{codigo_deck}`: {e}")
+                if eliminado:
+                    break
+            if eliminado:
+                break
+
     return True, "Desinscripción completada."
 
 # ============================================================
