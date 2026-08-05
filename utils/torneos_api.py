@@ -881,12 +881,11 @@ async def api_todas_partidas(request):
             "fecha": fecha,
             "hora": hora,
             "jugador1": j1_nombre,
-            "jugador1_id": jugador1_id,
+            "jugador1_id": str(jugador1_id) if jugador1_id else None,   # ✅ ESTO
             "jugador2": j2_nombre,
-            "jugador2_id": jugador2_id,
+            "jugador2_id": str(jugador2_id) if jugador2_id else None,   # ✅ Y ESTO
             "agendado_por": ag_nombre
         })
-
     print(f"✅ Total partidas encontradas: {len(partidas)}")
     response = web.json_response({"partidas": partidas})
     response.headers['Access-Control-Allow-Origin'] = '*'
@@ -1817,6 +1816,7 @@ async def api_eliminar_partida(request):
 
     print("✅ [api_eliminar_partida] FIN OK")
     return web.json_response({"ok": True, "mensaje": "Partida eliminada correctamente"})
+
 # ============================================================
 # 9. SERVIDOR WEB — registro de rutas
 # ============================================================
