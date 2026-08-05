@@ -2,6 +2,29 @@
 
 import os
 
+import secrets
+
+def get_jwt_secret():
+    # 1. Intentar desde variable de entorno (prioridad máxima)
+    secret = os.environ.get("JWT_SECRET")
+    if secret:
+        return secret
+
+    # 2. Intentar leer de archivo local
+    try:
+        with open(".jwt_secret", "r") as f:
+            return f.read().strip()
+    except FileNotFoundError:
+        pass
+
+    # 3. Generar nueva y guardar en archivo
+    secret = secrets.token_urlsafe(32)
+    with open(".jwt_secret", "w") as f:
+        f.write(secret)
+    print(f"⚠️ JWT_SECRET generada y guardada en .jwt_secret: {secret}")
+    print("📌 Cópiala y añádela como variable de entorno para mantenerla entre despliegues.")
+    return secret
+
 # Leer variables de entorno
 CHALLONGE_USERNAME = os.environ.get("CHALLONGE_USERNAME")
 CHALLONGE_API_KEY = os.environ.get("CHALLONGE_API_KEY")
@@ -9,7 +32,7 @@ DISCORD_TOKEN = os.environ.get("DISCORD_TOKEN")
 OPENROUTER_API_KEY =  os.environ.get("OPENROUTER_API_KEY")
 GUILD_ID_ADMISION = os.environ.get("GUILD_ID_ADMISION")
 CACHE_PATH = os.environ.get("CACHE_PATH")
-JWT_SECRET = os.environ.get("JWT_SECRET")
+JWT_SECRET = JWT_SECRET = get_jwt_secret()
 
 if not CHALLONGE_USERNAME or not CHALLONGE_API_KEY or not DISCORD_TOKEN or not OPENROUTER_API_KEY or not JWT_SECRET:
     try:
