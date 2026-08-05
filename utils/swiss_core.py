@@ -433,6 +433,9 @@ async def calcular_clasificacion(bot, codigo: str) -> List[Dict]:
     torneo = await obtener_torneo(bot, codigo)
     if not torneo:
         return []
+    inscritos_ids = torneo.get("inscritos_ids", [])
+    if not inscritos_ids:
+        return []
 
     inscritos_ids = torneo.get("inscritos_ids", [])
     stats = defaultdict(lambda: {

@@ -9,21 +9,24 @@ DISCORD_TOKEN = os.environ.get("DISCORD_TOKEN")
 OPENROUTER_API_KEY =  os.environ.get("OPENROUTER_API_KEY")
 GUILD_ID_ADMISION = os.environ.get("GUILD_ID_ADMISION")
 CACHE_PATH = os.environ.get("CACHE_PATH")
+JWT_SECRET = os.environ.get("JWT_SECRET")
 
-if not CHALLONGE_USERNAME or not CHALLONGE_API_KEY or not DISCORD_TOKEN or not OPENROUTER_API_KEY:
+if not CHALLONGE_USERNAME or not CHALLONGE_API_KEY or not DISCORD_TOKEN or not OPENROUTER_API_KEY or not JWT_SECRET:
     try:
         from config_token import (
             CHALLONGE_USERNAME as LOCAL_USER,
             CHALLONGE_API_KEY as LOCAL_KEY,
             DISCORD_TOKEN as LOCAL_TOKEN,
             OPENROUTER_API_KEY as LOCAL_OPENROUTER,
-            GUILD_ID_ADMISION as LOCAL_GUILD_ID
+            GUILD_ID_ADMISION as LOCAL_GUILD_ID,
+            JWT_SECRET as LOCAL_JWT_SECRET  # <--- Añadir esta línea
         )
         CHALLONGE_USERNAME = CHALLONGE_USERNAME or LOCAL_USER
         CHALLONGE_API_KEY = CHALLONGE_API_KEY or LOCAL_KEY
         DISCORD_TOKEN = DISCORD_TOKEN or LOCAL_TOKEN
         OPENROUTER_API_KEY = OPENROUTER_API_KEY or LOCAL_OPENROUTER
         GUILD_ID_ADMISION = GUILD_ID_ADMISION or LOCAL_GUILD_ID
+        JWT_SECRET = JWT_SECRET or LOCAL_JWT_SECRET  # <--- Añadir esta línea
     except ImportError:
         pass
 
@@ -57,6 +60,12 @@ else:
 if not CACHE_PATH:
     CACHE_PATH = "cache/torneos.json"
 
+if not JWT_SECRET:
+    raise ValueError(
+        "❌ No se encontró JWT_SECRET. "
+        "Define JWT_SECRET en las variables de entorno o en config_token.py."
+    )
+SESSION_EXPIRATION_SECONDS = 7 * 24 * 3600  
 CHALLONGE_API_URL = "https://api.challonge.com/v1/tournaments.json"
 ROLES_TODOS = {"miembro", "socio", "second-chance-socio", "second-chance-miembro", "admin"}
 ROLES_BORRADOS = {"miembro", "socio", "second-chance-socio", "second-chance-miembro"}
