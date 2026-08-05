@@ -1629,7 +1629,6 @@ async def api_modificar_partida(request):
     except Exception as e:
         return web.json_response({"error": f"Error al modificar: {str(e)}"}, status=500)
 
-    from utils.jugadores import actualizar_proximas_partidas
     class FakeCtx:
         def __init__(self, guild, bot):
             self.guild = guild
@@ -1647,6 +1646,105 @@ async def api_modificar_partida(request):
             pass
 
     return web.json_response({"ok": True, "mensaje": "Partida modificada correctamente"})
+
+async def api_eliminar_partida(request):
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "JSON inválido"}, status=400)
+
+    session_token = body.get("session")
+    sesion = sesiones_activas.get(session_token) if session_token else None
+
+    if not sesion or time.time() > sesion["expira"]:
+        return web.json_response({"error": "Sesión no válida"}, status=401)
+
+    jugador1_id = body.get("jugador1_id")
+    jugador2_id = body.get("jugador2_id")
+    fecha = str(body.get("fecha", "")).strip()
+    hora = str(body.get("hora", "")).strip()
+
+    if not jugador1_id or not jugador2_id or not fecha or not hora:
+        return web.json_response({"error": "Faltan datos para identificar la partida"}, status=400)
+
+    if _bot_instance is None:
+        return web.json_response({"error": "Servicio no disponible"}, status=503)
+
+    guild = _bot_instance.get_guild(config.GUILD_ID_ADMISION)
+    if not guild:
+        return web.json_response({"error": "Servicio no disponible"}, status=503)
+
+    discord_id = int(sesion["discord_id"])
+    miembro = guild.get_member(discord_id)
+    if not miembro:
+        return web.json_response({"error": "No se pudo verificar tu membresía"}, status=403)
+
+    es_admin = miembro.guild_permissions.administrator
+    es_jugador = discord_id in (jugador1_id, jugador2_id)
+    if not es_admin and not es_jugador:
+        return web.json_response({"error": "No tienes permiso para eliminar esta partida"}, status=403)
+
+    try:
+        jugador1 = await guild.fetch_member(int(jugador1_id))
+    except:
+        return web.json_response({"error": "Jugador 1 no encontrado"}, status=404)
+    try:
+        jugador2 = await guild.fetch_member(int(jugador2_id))
+    except:
+        return web.json_response({"error": "Jugador 2 no encontrado"}, status=404)
+
+    canal = discord.utils.get(guild.text_channels, name="partidos-agendados")
+    if not canal:
+        return web.json_response({"error": "Canal #partidos-agendados no encontrado"}, status=404)
+
+    patron = re.compile(
+        r"📅 \[EVENTO\] (\d{2}/\d{2}/\d{4}) (\d{2}:\d{2}) \| (.+?) vs (.+?) \| Agendado por (.+)"
+    )
+
+    mensaje_encontrado = None
+    async for msg in canal.history(limit=500):
+        match = patron.search(msg.content)
+        if not match:
+            continue
+        fecha_match, hora_match, j1_str, j2_str, agendado_por = match.groups()
+
+        if fecha_match == fecha and hora_match == hora:
+            j1_mention = f"<@{jugador1_id}>"
+            j1_mention2 = f"<@!{jugador1_id}>"
+            j2_mention = f"<@{jugador2_id}>"
+            j2_mention2 = f"<@!{jugador2_id}>"
+
+            j1_encontrado = j1_mention in j1_str or j1_mention2 in j1_str or j1_mention in j2_str or j1_mention2 in j2_str
+            j2_encontrado = j2_mention in j1_str or j2_mention2 in j1_str or j2_mention in j2_str or j2_mention2 in j2_str
+
+            if j1_encontrado and j2_encontrado:
+                mensaje_encontrado = msg
+                break
+
+    if not mensaje_encontrado:
+        return web.json_response({"error": "No se encontró la partida agendada"}, status=404)
+
+    try:
+        await mensaje_encontrado.delete()
+    except Exception as e:
+        return web.json_response({"error": f"Error al eliminar: {str(e)}"}, status=500)
+
+    # Notificar a los jugadores
+    for jugador in (jugador1, jugador2):
+        try:
+            await jugador.send(
+                f"🗑️ La partida del {fecha} a las {hora} entre {jugador1.display_name} y {jugador2.display_name} ha sido eliminada."
+            )
+        except:
+            pass
+    class FakeCtx:
+        def __init__(self, guild, bot):
+            self.guild = guild
+            self.bot = bot
+    fake_ctx = FakeCtx(guild, _bot_instance)
+    await actualizar_proximas_partidas(fake_ctx)
+
+    return web.json_response({"ok": True, "mensaje": "Partida eliminada correctamente"})
 
 # ============================================================
 # 9. SERVIDOR WEB — registro de rutas
@@ -1701,6 +1799,8 @@ def crear_app():
     app.router.add_get('/api/clasificacion-torneo', api_clasificacion_torneo)
     app.router.add_post('/api/modificar-partida', api_modificar_partida)
     app.router.add_route('OPTIONS', '/api/modificar-partida', handle_options)
+    app.router.add_post('/api/eliminar-partida', api_eliminar_partida)
+    app.router.add_route('OPTIONS', '/api/eliminar-partida', handle_options)
 
     return app
 
