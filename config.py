@@ -10,8 +10,8 @@ OPENROUTER_API_KEY =  os.environ.get("OPENROUTER_API_KEY")
 GUILD_ID_ADMISION = os.environ.get("GUILD_ID_ADMISION")
 CACHE_PATH = os.environ.get("CACHE_PATH")
 JWT_SECRET = os.environ.get("JWT_SECRET") 
-JWT = os.environ.get("JWT") 
-print(f"CHALLONGE_USERNAME: {JWT}")
+
+print(f"CHALLONGE_USERNAME: {JWT_SECRET}")
 
 if not CHALLONGE_USERNAME or not CHALLONGE_API_KEY or not DISCORD_TOKEN or not OPENROUTER_API_KEY or not JWT_SECRET:
     try:
