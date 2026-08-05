@@ -7,7 +7,6 @@ import random
 import config
 
 from utils.commons import borrar_mensaje_seguro, validar_canal_correcto, buscar_usuario_en_servidor, obtener_torneo_usuario
-from utils.torneos_api import regenerar_cache
 
 async def aplicar_strike(ctx, miembro: discord.Member):
      # Intentar eliminar el mensaje del canal público
@@ -853,14 +852,17 @@ async def eliminar_decks_handle(ctx, codigo_torneo: str = None):
 
     await ctx.author.send(f"✅ Eliminados {eliminados} decks del torneo `{codigo_torneo}`.")
 
+
 async def listar_torneos_handle(ctx):
     await ctx.author.send("🔄 Actualizando datos de la web...")
     guild = ctx.guild
+    from utils.torneos_api import regenerar_cache  # Importación local aquí
     payload = await regenerar_cache(guild)
     await ctx.author.send(f"✅ Web actualizada con {len(payload['torneos'])} torneo(s).")
 
 async def actualizar_web_handle(ctx):
     await ctx.author.send("🔄 Actualizando cache de torneos...")
     guild = ctx.guild
+    from utils.torneos_api import regenerar_cache  # Importación local aquí
     payload = await regenerar_cache(guild)
     await ctx.author.send(f"✅ Cache actualizada con {len(payload['torneos'])} torneo(s).")

@@ -1531,6 +1531,123 @@ async def api_clasificacion_torneo(request):
 
     return web.json_response({"error": "Torneo no encontrado"}, status=404)
 
+async def api_modificar_partida(request):
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "JSON inválido"}, status=400)
+
+    session_token = body.get("session")
+    sesion = sesiones_activas.get(session_token) if session_token else None
+
+    if not sesion or time.time() > sesion["expira"]:
+        return web.json_response({"error": "Sesión no válida"}, status=401)
+
+    jugador1_id = body.get("jugador1_id")
+    jugador2_id = body.get("jugador2_id")
+    fecha_actual = str(body.get("fecha_actual", "")).strip()
+    hora_actual = str(body.get("hora_actual", "")).strip()
+    nueva_fecha = str(body.get("nueva_fecha", "")).strip()
+    nueva_hora = str(body.get("nueva_hora", "")).strip()
+
+    if not jugador1_id or not jugador2_id or not fecha_actual or not hora_actual:
+        return web.json_response({"error": "Faltan datos para identificar la partida"}, status=400)
+
+    if not nueva_fecha and not nueva_hora:
+        return web.json_response({"error": "Debes proporcionar al menos una fecha u hora nueva"}, status=400)
+
+    if _bot_instance is None:
+        return web.json_response({"error": "Servicio no disponible"}, status=503)
+
+    guild = _bot_instance.get_guild(config.GUILD_ID_ADMISION)
+    if not guild:
+        return web.json_response({"error": "Servicio no disponible"}, status=503)
+
+    discord_id = int(sesion["discord_id"])
+    miembro = guild.get_member(discord_id)
+    if not miembro:
+        return web.json_response({"error": "No se pudo verificar tu membresía"}, status=403)
+
+    es_admin = miembro.guild_permissions.administrator
+    es_jugador = discord_id in (jugador1_id, jugador2_id)
+    if not es_admin and not es_jugador:
+        return web.json_response({"error": "No tienes permiso para modificar esta partida"}, status=403)
+
+    try:
+        jugador1 = await guild.fetch_member(int(jugador1_id))
+    except:
+        return web.json_response({"error": "Jugador 1 no encontrado"}, status=404)
+    try:
+        jugador2 = await guild.fetch_member(int(jugador2_id))
+    except:
+        return web.json_response({"error": "Jugador 2 no encontrado"}, status=404)
+
+    canal = discord.utils.get(guild.text_channels, name="partidos-agendados")
+    if not canal:
+        return web.json_response({"error": "Canal #partidos-agendados no encontrado"}, status=404)
+
+    patron = re.compile(
+        r"📅 \[EVENTO\] (\d{2}/\d{2}/\d{4}) (\d{2}:\d{2}) \| (.+?) vs (.+?) \| Agendado por (.+)"
+    )
+
+    mensaje_encontrado = None
+    async for msg in canal.history(limit=500):
+        match = patron.search(msg.content)
+        if not match:
+            continue
+        fecha_match, hora_match, j1_str, j2_str, agendado_por = match.groups()
+
+        if fecha_match == fecha_actual and hora_match == hora_actual:
+            j1_mention = f"<@{jugador1_id}>"
+            j1_mention2 = f"<@!{jugador1_id}>"
+            j2_mention = f"<@{jugador2_id}>"
+            j2_mention2 = f"<@!{jugador2_id}>"
+
+            j1_encontrado = j1_mention in j1_str or j1_mention2 in j1_str or j1_mention in j2_str or j1_mention2 in j2_str
+            j2_encontrado = j2_mention in j1_str or j2_mention2 in j1_str or j2_mention in j2_str or j2_mention2 in j2_str
+
+            if j1_encontrado and j2_encontrado:
+                mensaje_encontrado = msg
+                break
+
+    if not mensaje_encontrado:
+        return web.json_response({"error": "No se encontró la partida agendada"}, status=404)
+
+    nueva_fecha_str = nueva_fecha if nueva_fecha else fecha_actual
+    nueva_hora_str = nueva_hora if nueva_hora else hora_actual
+
+    agendado_match = re.search(r"Agendado por (.+)$", mensaje_encontrado.content)
+    agendado_por = agendado_match.group(1) if agendado_match else "un usuario"
+
+    nuevo_mensaje = (
+        f"📅 [EVENTO] {nueva_fecha_str} {nueva_hora_str} | {jugador1.mention} vs {jugador2.mention} | "
+        f"Agendado por {agendado_por}"
+    )
+
+    try:
+        await mensaje_encontrado.edit(content=nuevo_mensaje)
+    except Exception as e:
+        return web.json_response({"error": f"Error al modificar: {str(e)}"}, status=500)
+
+    from utils.jugadores import actualizar_proximas_partidas
+    class FakeCtx:
+        def __init__(self, guild, bot):
+            self.guild = guild
+            self.bot = bot
+    fake_ctx = FakeCtx(guild, _bot_instance)
+    await actualizar_proximas_partidas(fake_ctx)
+
+    for jugador in (jugador1, jugador2):
+        try:
+            await jugador.send(
+                f"🔄 Partida modificada: {fecha_actual} {hora_actual} → {nueva_fecha_str} {nueva_hora_str}\n"
+                f"🆚 {jugador1.display_name} vs {jugador2.display_name}"
+            )
+        except:
+            pass
+
+    return web.json_response({"ok": True, "mensaje": "Partida modificada correctamente"})
+
 # ============================================================
 # 9. SERVIDOR WEB — registro de rutas
 # ============================================================
@@ -1582,6 +1699,8 @@ def crear_app():
     app.router.add_post('/api/agendar-partida', api_agendar_partida)
     app.router.add_route('OPTIONS', '/api/agendar-partida', handle_options)
     app.router.add_get('/api/clasificacion-torneo', api_clasificacion_torneo)
+    app.router.add_post('/api/modificar-partida', api_modificar_partida)
+    app.router.add_route('OPTIONS', '/api/modificar-partida', handle_options)
 
     return app
 
