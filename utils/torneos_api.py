@@ -1392,79 +1392,6 @@ async def api_deck_rival(request):
     response.headers['Access-Control-Allow-Origin'] = '*'
     return response
 
-async def api_agendar_partida(request):
-    try:
-        body = await request.json()
-    except Exception:
-        return web.json_response({"error": "JSON inválido"}, status=400)
-
-    session_token = body.get("session")
-    sesion = sesiones_activas.get(session_token) if session_token else None
-
-    if not sesion or time.time() > sesion["expira"]:
-        return web.json_response({"error": "Sesión no válida"}, status=401)
-
-    codigo_torneo = str(body.get("codigo_torneo", "")).strip()
-    jugador1_id = body.get("jugador1_id")
-    jugador2_id = body.get("jugador2_id")
-    fecha = str(body.get("fecha", "")).strip()
-    hora = str(body.get("hora", "")).strip()
-
-    if not codigo_torneo or not jugador1_id or not jugador2_id or not fecha or not hora:
-        return web.json_response({"error": "Faltan datos"}, status=400)
-
-    if _bot_instance is None:
-        return web.json_response({"error": "Servicio no disponible"}, status=503)
-
-    guild = _bot_instance.get_guild(config.GUILD_ID_ADMISION)
-    if not guild:
-        return web.json_response({"error": "Servicio no disponible"}, status=503)
-
-    # 🔑 Validar permisos: el usuario debe ser uno de los jugadores
-    discord_id = int(sesion["discord_id"])
-    # Convertir a int por si vienen como string
-    try:
-        j1 = int(jugador1_id)
-        j2 = int(jugador2_id)
-    except ValueError:
-        return web.json_response({"error": "IDs de jugador inválidos"}, status=400)
-
-    if discord_id not in (j1, j2):
-        return web.json_response({"error": "No tienes permiso para agendar esta partida"}, status=403)
-
-    # Obtener miembros
-    try:
-        jugador1 = await guild.fetch_member(j1)
-    except:
-        return web.json_response({"error": "Jugador 1 no encontrado en el servidor"}, status=404)
-    try:
-        jugador2 = await guild.fetch_member(j2)
-    except:
-        return web.json_response({"error": "Jugador 2 no encontrado en el servidor"}, status=404)
-
-    canal = discord.utils.get(guild.text_channels, name="partidos-agendados")
-    if not canal:
-        return web.json_response({"error": "Canal #partidos-agendados no encontrado"}, status=404)
-
-    mensaje = f"📅 [EVENTO] {fecha} {hora} | {jugador1.mention} vs {jugador2.mention} | Agendado por {sesion['username']} (vía web)"
-    await canal.send(mensaje)
-
-    # Mensajes privados
-    for j in (jugador1, jugador2):
-        try:
-            await j.send(f"✅ Se ha agendado una partida para el {fecha} a las {hora} entre {jugador1.mention} y {jugador2.mention}.")
-        except:
-            pass
-    class FakeCtx:
-        def __init__(self, guild, bot):
-            self.guild = guild
-            self.bot = bot
-
-    fake_ctx = FakeCtx(guild, _bot_instance)
-    await actualizar_proximas_partidas(fake_ctx)
-    return web.json_response({"ok": True, "mensaje": "Partida agendada correctamente"})
-
-
 async def api_clasificacion_torneo(request):
     """
     Devuelve la clasificación de un torneo, ya sea de Challonge (caché) o Swiss (estado).
@@ -1531,16 +1458,114 @@ async def api_clasificacion_torneo(request):
 
     return web.json_response({"error": "Torneo no encontrado"}, status=404)
 
-async def api_modificar_partida(request):
+async def api_agendar_partida(request):
+    print("🔹 [api_agendar_partida] INICIO")
     try:
         body = await request.json()
-    except Exception:
+        print(f"   Body recibido: {body}")
+    except Exception as e:
+        print(f"❌ Error al leer JSON: {e}")
         return web.json_response({"error": "JSON inválido"}, status=400)
 
     session_token = body.get("session")
     sesion = sesiones_activas.get(session_token) if session_token else None
 
     if not sesion or time.time() > sesion["expira"]:
+        print("❌ Sesión no válida o expirada")
+        return web.json_response({"error": "Sesión no válida"}, status=401)
+
+    codigo_torneo = str(body.get("codigo_torneo", "")).strip()
+    jugador1_id = body.get("jugador1_id")
+    jugador2_id = body.get("jugador2_id")
+    fecha = str(body.get("fecha", "")).strip()
+    hora = str(body.get("hora", "")).strip()
+
+    print(f"   Datos: codigo={codigo_torneo}, j1={jugador1_id} (tipo {type(jugador1_id)}), j2={jugador2_id} (tipo {type(jugador2_id)}), fecha={fecha}, hora={hora}")
+
+    if not codigo_torneo or not jugador1_id or not jugador2_id or not fecha or not hora:
+        print("❌ Faltan datos")
+        return web.json_response({"error": "Faltan datos"}, status=400)
+
+    if _bot_instance is None:
+        print("❌ Bot no disponible")
+        return web.json_response({"error": "Servicio no disponible"}, status=503)
+
+    guild = _bot_instance.get_guild(config.GUILD_ID_ADMISION)
+    if not guild:
+        print("❌ Guild no encontrado")
+        return web.json_response({"error": "Servicio no disponible"}, status=503)
+
+    # 🔑 Validar permisos: el usuario debe ser uno de los jugadores
+    discord_id = int(sesion["discord_id"])
+    print(f"   Discord ID de la sesión: {discord_id}")
+
+    # Convertir a int por si vienen como string
+    try:
+        j1 = int(jugador1_id)
+        j2 = int(jugador2_id)
+        print(f"   IDs convertidos: j1={j1}, j2={j2}")
+    except ValueError as e:
+        print(f"❌ Error al convertir IDs: {e}")
+        return web.json_response({"error": "IDs de jugador inválidos"}, status=400)
+
+    if discord_id not in (j1, j2):
+        print(f"❌ Permiso denegado: {discord_id} no está en ({j1}, {j2})")
+        return web.json_response({"error": "No tienes permiso para agendar esta partida"}, status=403)
+
+    # Obtener miembros
+    try:
+        jugador1 = await guild.fetch_member(j1)
+        print(f"   Jugador1 encontrado: {jugador1}")
+    except Exception as e:
+        print(f"❌ Jugador 1 no encontrado: {e}")
+        return web.json_response({"error": "Jugador 1 no encontrado en el servidor"}, status=404)
+    try:
+        jugador2 = await guild.fetch_member(j2)
+        print(f"   Jugador2 encontrado: {jugador2}")
+    except Exception as e:
+        print(f"❌ Jugador 2 no encontrado: {e}")
+        return web.json_response({"error": "Jugador 2 no encontrado en el servidor"}, status=404)
+
+    canal = discord.utils.get(guild.text_channels, name="partidos-agendados")
+    if not canal:
+        print("❌ Canal #partidos-agendados no encontrado")
+        return web.json_response({"error": "Canal #partidos-agendados no encontrado"}, status=404)
+
+    mensaje = f"📅 [EVENTO] {fecha} {hora} | {jugador1.mention} vs {jugador2.mention} | Agendado por {sesion['username']} (vía web)"
+    print(f"   Enviando mensaje: {mensaje}")
+    await canal.send(mensaje)
+
+    # Mensajes privados
+    for j in (jugador1, jugador2):
+        try:
+            await j.send(f"✅ Se ha agendado una partida para el {fecha} a las {hora} entre {jugador1.mention} y {jugador2.mention}.")
+        except Exception as e:
+            print(f"⚠️ No se pudo enviar DM a {j}: {e}")
+
+    class FakeCtx:
+        def __init__(self, guild, bot):
+            self.guild = guild
+            self.bot = bot
+
+    fake_ctx = FakeCtx(guild, _bot_instance)
+    await actualizar_proximas_partidas(fake_ctx)
+    print("✅ [api_agendar_partida] FIN OK")
+    return web.json_response({"ok": True, "mensaje": "Partida agendada correctamente"})
+
+async def api_modificar_partida(request):
+    print("🔹 [api_modificar_partida] INICIO")
+    try:
+        body = await request.json()
+        print(f"   Body recibido: {body}")
+    except Exception as e:
+        print(f"❌ Error al leer JSON: {e}")
+        return web.json_response({"error": "JSON inválido"}, status=400)
+
+    session_token = body.get("session")
+    sesion = sesiones_activas.get(session_token) if session_token else None
+
+    if not sesion or time.time() > sesion["expira"]:
+        print("❌ Sesión no válida o expirada")
         return web.json_response({"error": "Sesión no válida"}, status=401)
 
     jugador1_id = body.get("jugador1_id")
@@ -1550,40 +1575,55 @@ async def api_modificar_partida(request):
     nueva_fecha = str(body.get("nueva_fecha", "")).strip()
     nueva_hora = str(body.get("nueva_hora", "")).strip()
 
+    print(f"   Datos: j1={jugador1_id} (tipo {type(jugador1_id)}), j2={jugador2_id} (tipo {type(jugador2_id)}), fecha_actual={fecha_actual}, hora_actual={hora_actual}, nueva_fecha={nueva_fecha}, nueva_hora={nueva_hora}")
+
     if not jugador1_id or not jugador2_id or not fecha_actual or not hora_actual:
+        print("❌ Faltan datos para identificar la partida")
         return web.json_response({"error": "Faltan datos para identificar la partida"}, status=400)
 
     if not nueva_fecha and not nueva_hora:
+        print("❌ No se proporcionó ni nueva fecha ni nueva hora")
         return web.json_response({"error": "Debes proporcionar al menos una fecha u hora nueva"}, status=400)
 
     if _bot_instance is None:
+        print("❌ Bot no disponible")
         return web.json_response({"error": "Servicio no disponible"}, status=503)
 
     guild = _bot_instance.get_guild(config.GUILD_ID_ADMISION)
     if not guild:
+        print("❌ Guild no encontrado")
         return web.json_response({"error": "Servicio no disponible"}, status=503)
 
     discord_id = int(sesion["discord_id"])
+    print(f"   Discord ID de la sesión: {discord_id}")
     miembro = guild.get_member(discord_id)
     if not miembro:
+        print("❌ Miembro no encontrado")
         return web.json_response({"error": "No se pudo verificar tu membresía"}, status=403)
 
     es_admin = miembro.guild_permissions.administrator
     es_jugador = discord_id in (jugador1_id, jugador2_id)
+    print(f"   Admin: {es_admin}, Jugador: {es_jugador}")
     if not es_admin and not es_jugador:
+        print("❌ Permiso denegado")
         return web.json_response({"error": "No tienes permiso para modificar esta partida"}, status=403)
 
     try:
         jugador1 = await guild.fetch_member(int(jugador1_id))
-    except:
+        print(f"   Jugador1 encontrado: {jugador1}")
+    except Exception as e:
+        print(f"❌ Jugador 1 no encontrado: {e}")
         return web.json_response({"error": "Jugador 1 no encontrado"}, status=404)
     try:
         jugador2 = await guild.fetch_member(int(jugador2_id))
-    except:
+        print(f"   Jugador2 encontrado: {jugador2}")
+    except Exception as e:
+        print(f"❌ Jugador 2 no encontrado: {e}")
         return web.json_response({"error": "Jugador 2 no encontrado"}, status=404)
 
     canal = discord.utils.get(guild.text_channels, name="partidos-agendados")
     if not canal:
+        print("❌ Canal #partidos-agendados no encontrado")
         return web.json_response({"error": "Canal #partidos-agendados no encontrado"}, status=404)
 
     patron = re.compile(
@@ -1608,9 +1648,11 @@ async def api_modificar_partida(request):
 
             if j1_encontrado and j2_encontrado:
                 mensaje_encontrado = msg
+                print(f"   Mensaje encontrado: {msg.content}")
                 break
 
     if not mensaje_encontrado:
+        print("❌ No se encontró la partida agendada")
         return web.json_response({"error": "No se encontró la partida agendada"}, status=404)
 
     nueva_fecha_str = nueva_fecha if nueva_fecha else fecha_actual
@@ -1623,10 +1665,13 @@ async def api_modificar_partida(request):
         f"📅 [EVENTO] {nueva_fecha_str} {nueva_hora_str} | {jugador1.mention} vs {jugador2.mention} | "
         f"Agendado por {agendado_por}"
     )
+    print(f"   Nuevo mensaje: {nuevo_mensaje}")
 
     try:
         await mensaje_encontrado.edit(content=nuevo_mensaje)
+        print("   Mensaje editado correctamente")
     except Exception as e:
+        print(f"❌ Error al modificar: {e}")
         return web.json_response({"error": f"Error al modificar: {str(e)}"}, status=500)
 
     class FakeCtx:
@@ -1635,6 +1680,7 @@ async def api_modificar_partida(request):
             self.bot = bot
     fake_ctx = FakeCtx(guild, _bot_instance)
     await actualizar_proximas_partidas(fake_ctx)
+    print("   Cartelera actualizada")
 
     for jugador in (jugador1, jugador2):
         try:
@@ -1642,21 +1688,26 @@ async def api_modificar_partida(request):
                 f"🔄 Partida modificada: {fecha_actual} {hora_actual} → {nueva_fecha_str} {nueva_hora_str}\n"
                 f"🆚 {jugador1.display_name} vs {jugador2.display_name}"
             )
-        except:
-            pass
+        except Exception as e:
+            print(f"⚠️ No se pudo enviar DM a {jugador}: {e}")
 
+    print("✅ [api_modificar_partida] FIN OK")
     return web.json_response({"ok": True, "mensaje": "Partida modificada correctamente"})
 
 async def api_eliminar_partida(request):
+    print("🔹 [api_eliminar_partida] INICIO")
     try:
         body = await request.json()
-    except Exception:
+        print(f"   Body recibido: {body}")
+    except Exception as e:
+        print(f"❌ Error al leer JSON: {e}")
         return web.json_response({"error": "JSON inválido"}, status=400)
 
     session_token = body.get("session")
     sesion = sesiones_activas.get(session_token) if session_token else None
 
     if not sesion or time.time() > sesion["expira"]:
+        print("❌ Sesión no válida o expirada")
         return web.json_response({"error": "Sesión no válida"}, status=401)
 
     jugador1_id = body.get("jugador1_id")
@@ -1664,37 +1715,51 @@ async def api_eliminar_partida(request):
     fecha = str(body.get("fecha", "")).strip()
     hora = str(body.get("hora", "")).strip()
 
+    print(f"   Datos: j1={jugador1_id} (tipo {type(jugador1_id)}), j2={jugador2_id} (tipo {type(jugador2_id)}), fecha={fecha}, hora={hora}")
+
     if not jugador1_id or not jugador2_id or not fecha or not hora:
+        print("❌ Faltan datos para identificar la partida")
         return web.json_response({"error": "Faltan datos para identificar la partida"}, status=400)
 
     if _bot_instance is None:
+        print("❌ Bot no disponible")
         return web.json_response({"error": "Servicio no disponible"}, status=503)
 
     guild = _bot_instance.get_guild(config.GUILD_ID_ADMISION)
     if not guild:
+        print("❌ Guild no encontrado")
         return web.json_response({"error": "Servicio no disponible"}, status=503)
 
     discord_id = int(sesion["discord_id"])
+    print(f"   Discord ID de la sesión: {discord_id}")
     miembro = guild.get_member(discord_id)
     if not miembro:
+        print("❌ Miembro no encontrado")
         return web.json_response({"error": "No se pudo verificar tu membresía"}, status=403)
 
     es_admin = miembro.guild_permissions.administrator
     es_jugador = discord_id in (jugador1_id, jugador2_id)
+    print(f"   Admin: {es_admin}, Jugador: {es_jugador}")
     if not es_admin and not es_jugador:
+        print("❌ Permiso denegado")
         return web.json_response({"error": "No tienes permiso para eliminar esta partida"}, status=403)
 
     try:
         jugador1 = await guild.fetch_member(int(jugador1_id))
-    except:
+        print(f"   Jugador1 encontrado: {jugador1}")
+    except Exception as e:
+        print(f"❌ Jugador 1 no encontrado: {e}")
         return web.json_response({"error": "Jugador 1 no encontrado"}, status=404)
     try:
         jugador2 = await guild.fetch_member(int(jugador2_id))
-    except:
+        print(f"   Jugador2 encontrado: {jugador2}")
+    except Exception as e:
+        print(f"❌ Jugador 2 no encontrado: {e}")
         return web.json_response({"error": "Jugador 2 no encontrado"}, status=404)
 
     canal = discord.utils.get(guild.text_channels, name="partidos-agendados")
     if not canal:
+        print("❌ Canal #partidos-agendados no encontrado")
         return web.json_response({"error": "Canal #partidos-agendados no encontrado"}, status=404)
 
     patron = re.compile(
@@ -1719,14 +1784,18 @@ async def api_eliminar_partida(request):
 
             if j1_encontrado and j2_encontrado:
                 mensaje_encontrado = msg
+                print(f"   Mensaje encontrado: {msg.content}")
                 break
 
     if not mensaje_encontrado:
+        print("❌ No se encontró la partida agendada")
         return web.json_response({"error": "No se encontró la partida agendada"}, status=404)
 
     try:
         await mensaje_encontrado.delete()
+        print("   Mensaje eliminado correctamente")
     except Exception as e:
+        print(f"❌ Error al eliminar: {e}")
         return web.json_response({"error": f"Error al eliminar: {str(e)}"}, status=500)
 
     # Notificar a los jugadores
@@ -1735,17 +1804,19 @@ async def api_eliminar_partida(request):
             await jugador.send(
                 f"🗑️ La partida del {fecha} a las {hora} entre {jugador1.display_name} y {jugador2.display_name} ha sido eliminada."
             )
-        except:
-            pass
+        except Exception as e:
+            print(f"⚠️ No se pudo enviar DM a {jugador}: {e}")
+
     class FakeCtx:
         def __init__(self, guild, bot):
             self.guild = guild
             self.bot = bot
     fake_ctx = FakeCtx(guild, _bot_instance)
     await actualizar_proximas_partidas(fake_ctx)
+    print("   Cartelera actualizada")
 
+    print("✅ [api_eliminar_partida] FIN OK")
     return web.json_response({"ok": True, "mensaje": "Partida eliminada correctamente"})
-
 # ============================================================
 # 9. SERVIDOR WEB — registro de rutas
 # ============================================================
