@@ -996,8 +996,16 @@ async def api_mis_torneos_pendientes(request):
         return web.json_response({"error": "No se pudo verificar tu membresía"}, status=403)
 
     try:
+        # 1. Obtener torneos del estado
         estado = await leer_estado(_bot_instance)
         torneos_estado = estado.get("torneos", [])
+
+        # 2. Obtener todos los mensajes del canal #partidos-agendados (una vez para todos los torneos)
+        canal_agendados = discord.utils.get(guild.text_channels, name="partidos-agendados")
+        mensajes_agendados = []
+        if canal_agendados:
+            async for msg in canal_agendados.history(limit=500):
+                mensajes_agendados.append(msg.content)
 
         resultado = []
 
@@ -1006,11 +1014,15 @@ async def api_mis_torneos_pendientes(request):
             if not codigo:
                 continue
 
+            # Solo torneos no finalizados
             if t.get("estado") == "finalizado":
                 continue
+
+            # Solo torneos en los que el usuario está inscrito
             if str(discord_id) not in t.get("inscritos_ids", []):
                 continue
 
+            # Obtener rondas del torneo
             rondas_data = await leer_rondas(_bot_instance, codigo)
             if not rondas_data:
                 continue
@@ -1018,6 +1030,7 @@ async def api_mis_torneos_pendientes(request):
             if not rondas:
                 continue
 
+            # Buscar la última ronda incompleta
             ronda_actual = None
             for r in reversed(rondas):
                 if not r.get("completa", False):
@@ -1030,40 +1043,68 @@ async def api_mis_torneos_pendientes(request):
             pendientes = []
 
             for emp in emparejamientos:
+                # Saltar emparejamientos que ya tienen resultado
                 if emp.get("resultado") is not None:
                     continue
+
                 j1 = emp.get("j1")
                 j2 = emp.get("j2")
 
+                # Obtener nombre del jugador 1
                 try:
                     member1 = await guild.fetch_member(int(j1))
                     nombre1 = member1.display_name
                 except:
                     nombre1 = f"Usuario {j1}"
 
+                # Caso BYE
                 if j2 is None:
                     pendientes.append({
                         "jugador1": nombre1,
                         "jugador1_id": j1,
                         "jugador2": "BYE",
                         "jugador2_id": None,
-                        "resultado": None
+                        "resultado": None,
+                        "agendada": False  # BYE no necesita agendar
                     })
-                else:
-                    try:
-                        member2 = await guild.fetch_member(int(j2))
-                        nombre2 = member2.display_name
-                    except:
-                        nombre2 = f"Usuario {j2}"
+                    continue
 
-                    pendientes.append({
-                        "jugador1": nombre1,
-                        "jugador1_id": j1,
-                        "jugador2": nombre2,
-                        "jugador2_id": j2,
-                        "resultado": None
-                    })
+                # Obtener nombre del jugador 2
+                try:
+                    member2 = await guild.fetch_member(int(j2))
+                    nombre2 = member2.display_name
+                except:
+                    nombre2 = f"Usuario {j2}"
 
+                # --- Comprobar si la partida ya está agendada ---
+                agendada = False
+                # Posibles menciones de ambos jugadores
+                j1_mention1 = f"<@{j1}>"
+                j1_mention2 = f"<@!{j1}>"
+                j2_mention1 = f"<@{j2}>"
+                j2_mention2 = f"<@!{j2}>"
+                j1_str = str(j1)
+                j2_str = str(j2)
+
+                for msg in mensajes_agendados:
+                    # El mensaje debe contener el código del torneo y ambos jugadores
+                    if codigo in msg:
+                        j1_encontrado = (j1_mention1 in msg or j1_mention2 in msg or j1_str in msg)
+                        j2_encontrado = (j2_mention1 in msg or j2_mention2 in msg or j2_str in msg)
+                        if j1_encontrado and j2_encontrado:
+                            agendada = True
+                            break
+
+                pendientes.append({
+                    "jugador1": nombre1,
+                    "jugador1_id": j1,
+                    "jugador2": nombre2,
+                    "jugador2_id": j2,
+                    "resultado": None,
+                    "agendada": agendada  # <-- NUEVO CAMPO
+                })
+
+            # Solo añadir torneos con partidas pendientes
             if pendientes:
                 resultado.append({
                     "codigo": codigo,
@@ -1079,7 +1120,7 @@ async def api_mis_torneos_pendientes(request):
     except Exception as e:
         print(f"❌ Error en api_mis_torneos_pendientes: {e}")
         return web.json_response({"error": str(e)}, status=500)
-
+    
 async def api_reportar_resultado(request):
     try:
         body = await request.json()
