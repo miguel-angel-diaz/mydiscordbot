@@ -108,6 +108,7 @@ async def obtener_torneo_usuario(ctx, mensaje_inicial: str = None, complete=Fals
     """
     Devuelve el código (tournament url/slug) o una lista con varios códigos si el usuario elige 'todos'.
     Solo muestra la opción 'todos' si complete=True.
+    Ahora incluye tanto torneos de Challonge como torneos Swiss del estado.
     """
     # 1️⃣ Enviar mensaje inicial si existe
     if mensaje_inicial:
@@ -121,41 +122,68 @@ async def obtener_torneo_usuario(ctx, mensaje_inicial: str = None, complete=Fals
     comando_actual = getattr(ctx.command, "name", "").lower()
     solo_inscritos = comando_actual not in ("ver-inscritos", "iniciar-torneo")
 
-    # 3️⃣ Obtener lista de torneos desde Challonge
+    # --- OBTENER TORNEOS DE CHALLONGE (legacy) ---
     url_torneos = "https://api.challonge.com/v1/tournaments.json?state=all"
+    torneos_challonge = []
     async with aiohttp.ClientSession() as session:
         async with session.get(url_torneos, auth=aiohttp.BasicAuth(config.CHALLONGE_USERNAME, config.CHALLONGE_API_KEY)) as resp:
-            if resp.status != 200:
-                await ctx.author.send("❌ Error al obtener la lista de torneos.")
-                return None
-            torneos_raw = await resp.json()
+            if resp.status == 200:
+                torneos_raw = await resp.json()
+                for entry in torneos_raw:
+                    t = entry.get("tournament", {})
+                    estado = t.get("state")
+                    tid = t.get("url") or str(t.get("id"))
+                    nombre = t.get("name") or "(sin nombre)"
+                    
+                    # Filtrar por complete si aplica
+                    if complete and estado != "complete":
+                        continue
+                    if not complete and estado == "complete":
+                        continue
+                    
+                    # Si solo queremos torneos donde el usuario está inscrito
+                    if solo_inscritos:
+                        url_participantes = f"https://api.challonge.com/v1/tournaments/{tid}/participants.json"
+                        async with session.get(url_participantes, auth=aiohttp.BasicAuth(config.CHALLONGE_USERNAME, config.CHALLONGE_API_KEY)) as p_resp:
+                            if p_resp.status != 200:
+                                continue
+                            participantes_data = await p_resp.json()
+                            inscritos = [p["participant"].get("name") for p in participantes_data]
+                            usuario_id_str = str(ctx.author.id)
+                            if usuario_id_str not in inscritos:
+                                continue
+                    
+                    torneos_challonge.append((tid, nombre, "challonge"))
 
-        torneos = []
-        for entry in torneos_raw:
-            t = entry.get("tournament", {})
-            estado = t.get("state")
-            tid = t.get("url") or str(t.get("id"))
-            nombre = t.get("name") or "(sin nombre)"
-
-            # 🔹 Filtrar según complete
-            if complete and estado != "complete":
-                continue  # solo torneos completados
-            if not complete and estado == "complete":
-                continue  # solo torneos no completados
-
-            # 🔹 Si solo queremos torneos donde el usuario está inscrito
+    # --- OBTENER TORNEOS SWISS DEL ESTADO ---
+    torneos_swiss = []
+    try:
+        estado_swiss = await leer_estado(ctx.bot)
+        for t in estado_swiss.get("torneos", []):
+            if t.get("tipo") != "swiss":
+                continue
+            estado_t = t.get("estado")
+            # Si complete=True, solo torneos finalizados
+            if complete and estado_t != "finalizado":
+                continue
+            if not complete and estado_t == "finalizado":
+                continue
+            
+            codigo = t.get("codigo")
+            nombre = t.get("nombre", "Torneo Swiss sin nombre")
+            
+            # Si solo queremos torneos donde el usuario está inscrito
             if solo_inscritos:
-                url_participantes = f"https://api.challonge.com/v1/tournaments/{tid}/participants.json"
-                async with session.get(url_participantes, auth=aiohttp.BasicAuth(config.CHALLONGE_USERNAME, config.CHALLONGE_API_KEY)) as p_resp:
-                    if p_resp.status != 200:
-                        continue
-                    participantes_data = await p_resp.json()
-                    inscritos = [p["participant"].get("name") for p in participantes_data]
-                    usuario_id_str = str(ctx.author.id)
-                    if usuario_id_str not in inscritos:
-                        continue
+                inscritos_ids = t.get("inscritos_ids", [])
+                if str(ctx.author.id) not in inscritos_ids:
+                    continue
+            
+            torneos_swiss.append((codigo, nombre, "swiss"))
+    except Exception as e:
+        print(f"⚠️ Error al leer torneos Swiss en obtener_torneo_usuario: {e}")
 
-            torneos.append((tid, nombre))
+    # --- UNIR AMBAS LISTAS ---
+    torneos = torneos_challonge + torneos_swiss  # cada elemento: (codigo, nombre, tipo)
 
     # 4️⃣ Comprobación básica
     if not torneos:
@@ -174,9 +202,9 @@ async def obtener_torneo_usuario(ctx, mensaje_inicial: str = None, complete=Fals
     for start in range(0, total, chunk_size):
         chunk = torneos[start:start + chunk_size]
         texto = header_base if start == 0 else ""
-        for idx, (tid, nombre) in enumerate(chunk, start=start):
+        for idx, (tid, nombre, tipo) in enumerate(chunk, start=start):
             emoji = numeros_emoji[idx] if idx < len(numeros_emoji) else f"{idx+1}."
-            texto += f"{emoji} `{tid}` → {nombre}\n"
+            texto += f"{emoji} `{tid}` → {nombre} (tipo: {tipo.capitalize()})\n"
 
         # 🔸 Solo mostrar la opción "todos" si complete=True
         if complete and total > 1:
@@ -202,7 +230,7 @@ async def obtener_torneo_usuario(ctx, mensaje_inicial: str = None, complete=Fals
 
         # ✅ Solo aceptar "todos" si complete=True
         if complete and contenido == "todos":
-            return [tid for tid, _ in torneos]
+            return [tid for tid, _, _ in torneos]
 
         # ✅ Aceptar número de torneo
         seleccion = int(contenido)
@@ -210,7 +238,7 @@ async def obtener_torneo_usuario(ctx, mensaje_inicial: str = None, complete=Fals
             await ctx.author.send("❌ Opción no válida. Cancelo la operación.")
             return None
 
-        elegido = torneos[seleccion - 1][0]
+        elegido = torneos[seleccion - 1][0]  # devolvemos solo el código
         return elegido
 
     except ValueError:
