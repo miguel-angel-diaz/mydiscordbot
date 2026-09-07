@@ -1268,121 +1268,50 @@ async def obtener_decks_por_usuario(guild, discord_id: str, limite: int = 500, i
     return decks
 
 async def editar_deck_web(guild, member: discord.Member, codigo_torneo: str, nombre_deck: str, archetype: str, decklist: str, sideboard: str):
-    """
-    Versión web (sin DMs) de editar_deck_handle: aplica exactamente las
-    mismas reglas de ediciones permitidas que el flujo de Discord.
-    Soporta tanto torneos Challonge como torneos Swiss.
-    """
-    from utils.torneos_estado import leer_estado, actualizar_torneo_estado
-    import aiohttp
-    import config
-
-    # 1️⃣ Obtener el deck actual del usuario
     codigo_deck = f"{codigo_torneo}_{member.id}"
-    decks = await obtener_decks_por_usuario(guild, str(member.id))
-    deck_actual = next((d for d in decks if d["codigo_deck"] == codigo_deck), None)
-
+    
+    # Obtener el deck directamente desde el canal (incluye el mensaje)
+    deck_actual = await obtener_deck_en_canal(guild, codigo_deck)
     if not deck_actual:
         return False, "No se encontró tu deck para este torneo. Debes subirlo primero."
 
+    ok_validacion, mensaje_validacion = await validar_torneo_para_edicion(codigo_torneo, member)
+
     edited_actual = deck_actual.get("edited", 0)
 
-    # 2️⃣ Determinar si el torneo es Swiss o Challonge
-    estado = await leer_estado(guild._state._get_client())
-    torneo_swiss = None
-    for t in estado.get("torneos", []):
-        if t.get("codigo") == codigo_torneo and t.get("tipo") == "swiss":
-            torneo_swiss = t
-            break
-
-    if torneo_swiss:
-        # 🔹 CASO SWISS
-        estado_torneo = torneo_swiss.get("estado", "abierto")
-        inscritos_ids = torneo_swiss.get("inscritos_ids", [])
-
-        if str(member.id) not in inscritos_ids:
-            return False, "No estás inscrito en este torneo."
-
-        # Verificar si el torneo ha comenzado (estado 'en desarrollo' o 'finalizado')
-        if estado_torneo == "abierto":
-            # Torneo abierto: se puede editar sin límite
-            nuevo_edited = edited_actual
-            mensaje_validacion = "Torneo abierto, puedes editar sin restricciones."
-        elif estado_torneo == "en desarrollo":
-            # Torneo en curso: solo se permite una edición
-            if edited_actual >= 1:
-                return False, "El torneo ya comenzó y ya usaste tu única edición disponible (1/1)."
-            nuevo_edited = edited_actual + 1
-            mensaje_validacion = "Torneo en curso, usarás tu única edición disponible."
-        else:  # finalizado
-            return False, "El torneo ya finalizó, no se pueden editar decks."
-
-        # Actualizar el mensaje del deck
-        mensaje = deck_actual.get("_mensaje")
-        if not mensaje:
-            return False, "No se encontró el mensaje del deck para actualizar."
-
-        color_embed = discord.Color.blue() if nuevo_edited == 0 else discord.Color.orange()
-        embed_final = discord.Embed(
-            title=f"🃏 Deck Actualizado: {nombre_deck}",
-            description=f"**Código:** `{codigo_deck}`\n**Torneo:** `{codigo_torneo}`",
-            color=color_embed
-        )
-        embed_final.add_field(name="Jugador", value=f"{member.mention} (ID: {member.id})", inline=False)
-        embed_final.add_field(name="Archetype", value=archetype, inline=False)
-        embed_final.add_field(name="Decklist", value=decklist[:1000], inline=False)
-        embed_final.add_field(name="Sideboard", value=sideboard[:1000], inline=False)
-        embed_final.add_field(name="Ediciones post-inicio", value=f"{nuevo_edited}/1", inline=False)
-
-        fecha_legible = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-        embed_final.set_footer(text=f"Última edición: {fecha_legible} (vía web)")
-
-        try:
-            await mensaje.edit(embed=embed_final)
-            return True, mensaje_validacion
-        except Exception as e:
-            return False, f"Error al actualizar el mensaje: {str(e)}"
-
+    if not ok_validacion:
+        if edited_actual >= 1:
+            return False, f"No puedes editar tu deck: ya usaste tu única edición disponible. {mensaje_validacion}"
+        nuevo_edited = edited_actual + 1
     else:
-        # 🔹 CASO CHALLONGE (legacy) - usar la lógica existente
-        # (reutilizamos la misma lógica que ya tenía la función)
-        ok_validacion, mensaje_validacion = await validar_torneo_para_edicion(codigo_torneo, member)
+        nuevo_edited = edited_actual
 
-        edited_actual = deck_actual.get("edited", 0)
+    color_embed = discord.Color.blue() if nuevo_edited == 0 else discord.Color.orange()
 
-        if not ok_validacion:
-            if edited_actual >= 1:
-                return False, f"No puedes editar tu deck: ya usaste tu única edición disponible. {mensaje_validacion}"
-            nuevo_edited = edited_actual + 1
-        else:
-            nuevo_edited = edited_actual
+    embed_final = discord.Embed(
+        title=f"🃏 Deck Actualizado: {nombre_deck}",
+        description=f"**Código:** `{codigo_deck}`\n**Torneo:** `{codigo_torneo}`",
+        color=color_embed
+    )
+    embed_final.add_field(name="Jugador", value=f"{member.mention} (ID: {member.id})", inline=False)
+    embed_final.add_field(name="Archetype", value=archetype, inline=False)
+    embed_final.add_field(name="Decklist", value=decklist[:1000], inline=False)
+    embed_final.add_field(name="Sideboard", value=sideboard[:1000], inline=False)
+    embed_final.add_field(name="Ediciones post-inicio", value=f"{nuevo_edited}/1", inline=False)
 
-        color_embed = discord.Color.blue() if nuevo_edited == 0 else discord.Color.orange()
+    fecha_legible = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    embed_final.set_footer(text=f"Última edición: {fecha_legible} (vía web)")
 
-        embed_final = discord.Embed(
-            title=f"🃏 Deck Actualizado: {nombre_deck}",
-            description=f"**Código:** `{codigo_deck}`\n**Torneo:** `{codigo_torneo}`",
-            color=color_embed
-        )
-        embed_final.add_field(name="Jugador", value=f"{member.mention} (ID: {member.id})", inline=False)
-        embed_final.add_field(name="Archetype", value=archetype, inline=False)
-        embed_final.add_field(name="Decklist", value=decklist[:1000], inline=False)
-        embed_final.add_field(name="Sideboard", value=sideboard[:1000], inline=False)
-        embed_final.add_field(name="Ediciones post-inicio", value=f"{nuevo_edited}/1", inline=False)
+    mensaje = deck_actual["mensaje"]  # ✅ Ahora existe porque obtener_deck_en_canal lo incluye
 
-        fecha_legible = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-        embed_final.set_footer(text=f"Última edición: {fecha_legible} (vía web)")
+    try:
+        await mensaje.edit(embed=embed_final)
+    except discord.NotFound:
+        return False, "No se pudo actualizar el deck (el mensaje original ya no existe). Contacta con un administrador."
+    except discord.Forbidden:
+        return False, "No tengo permisos para editar el mensaje del deck."
 
-        mensaje = deck_actual["_mensaje"]
-
-        try:
-            await mensaje.edit(embed=embed_final)
-        except discord.NotFound:
-            return False, "No se pudo actualizar el deck (el mensaje original ya no existe). Contacta con un administrador."
-        except discord.Forbidden:
-            return False, "No tengo permisos para editar el mensaje del deck."
-
-        return True, mensaje_validacion
+    return True, mensaje_validacion
 
 def tiene_rol_permitido(member: discord.Member, roles_permitidos: set):
     return any(role.name in roles_permitidos for role in member.roles)
