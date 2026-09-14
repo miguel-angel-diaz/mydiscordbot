@@ -22,12 +22,14 @@ from utils.torneos_estado import (
 # GESTIÓN DE TORNEOS
 # ============================================================
 
-async def crear_torneo(bot, nombre: str, max_jugadores: int, nivel: str, fecha_inicio: str) -> str:
+async def crear_torneo(bot, nombre: str, formato: str, max_jugadores: int, nivel: str, fecha_inicio: str) -> str:
     nivel_slug = slugify_challonge(nivel)
-    codigo = f"premodern{nivel_slug}{generar_codigo_unico(6)}"
+    formato_slug = slugify_challonge(formato)
+    codigo = f"{formato_slug}{nivel_slug}{generar_codigo_unico(6)}"
 
     await actualizar_torneo_estado(bot, codigo, {
         "nombre": nombre,
+        "formato": formato,
         "nivel": nivel,
         "total_maximo": int(max_jugadores),
         "tipo": "swiss",

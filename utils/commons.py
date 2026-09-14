@@ -252,14 +252,21 @@ async def obtener_torneo_usuario(ctx, mensaje_inicial: str = None, complete=Fals
 # ARQUETIPOS Y SUGERENCIAS
 # ============================================================
 
-def obtener_sugerencias_arquetipos(nombre_usuario: str, max_sugerencias: int = 5):
+def obtener_sugerencias_arquetipos(nombre_usuario: str, formato: str = "Premodern", max_sugerencias: int = 5):
     """
     Devuelve una lista de arquetipos similares al texto ingresado.
+    El formato determina qué array de arquetipos usar (Premodern o Pauper).
     """
-    nombres_validos = [a["nombre"] for a in config.ARQUETIPOS_PREMODERN]
+    formato_lower = formato.lower()
+    if "pauper" in formato_lower:
+        lista = config.ARQUETIPOS_PAUPER
+    else:
+        lista = config.ARQUETIPOS_PREMODERN
+
+    nombres_validos = [a["nombre"] for a in lista]
     nombre_usuario = nombre_usuario.strip().lower()
 
-    # Buscar coincidencias aproximadas (por similitud)
+    # Buscar coincidencias aproximadas
     sugerencias = get_close_matches(nombre_usuario, nombres_validos, n=max_sugerencias, cutoff=0.4)
 
     # Buscar coincidencias que contengan la palabra directamente
@@ -270,10 +277,13 @@ def obtener_sugerencias_arquetipos(nombre_usuario: str, max_sugerencias: int = 5
 
     return sugerencias[:max_sugerencias]
 
-def obtener_lista_arquetipos():
-    """Lista completa de arquetipos, para poblar un <select>/<datalist>."""
-    return [a["nombre"] for a in config.ARQUETIPOS_PREMODERN]
 
+def obtener_lista_arquetipos(formato: str = "Premodern"):
+    """Lista completa de arquetipos para el formato indicado."""
+    formato_lower = formato.lower()
+    if "pauper" in formato_lower:
+        return [a["nombre"] for a in config.ARQUETIPOS_PAUPER]
+    return [a["nombre"] for a in config.ARQUETIPOS_PREMODERN]
 # ============================================================
 # CARTAS MÁS JUGADAS
 # ============================================================

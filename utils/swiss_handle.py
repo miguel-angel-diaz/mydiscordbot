@@ -49,7 +49,12 @@ async def swiss_nuevo_asistente_handle(ctx):
         if nombre_msg.content.lower() == "cancelar": return
         nombre = nombre_msg.content.strip()
 
-        await ctx.author.send("2️⃣ ¿Número máximo de jugadores?")
+        await ctx.author.send("2️⃣ ¿Formato? (Premodern, Classic-Legacy, 7Pts, etc.)")
+        formato_msg = await ctx.bot.wait_for("message", check=dm_check, timeout=90)
+        if formato_msg.content.lower() == "cancelar": return
+        formato = formato_msg.content.strip()
+
+        await ctx.author.send("3️⃣ ¿Número máximo de jugadores?")
         jugadores_msg = await ctx.bot.wait_for("message", check=dm_check, timeout=90)
         if jugadores_msg.content.lower() == "cancelar": return
         try:
@@ -58,7 +63,7 @@ async def swiss_nuevo_asistente_handle(ctx):
             await ctx.author.send("❌ Debe ser un número.")
             return
 
-        await ctx.author.send("3️⃣ ¿Nivel? (`todos` o `socios`)")
+        await ctx.author.send("4️⃣ ¿Nivel? (`todos` o `socios`)")
         nivel_msg = await ctx.bot.wait_for("message", check=dm_check, timeout=90)
         if nivel_msg.content.lower() == "cancelar": return
         nivel = nivel_msg.content.strip().lower()
@@ -66,7 +71,7 @@ async def swiss_nuevo_asistente_handle(ctx):
             await ctx.author.send("❌ Nivel no válido.")
             return
 
-        await ctx.author.send("4️⃣ Fecha de inicio (DD/MM/YYYY)")
+        await ctx.author.send("5️⃣ Fecha de inicio (DD/MM/YYYY)")
         fecha_msg = await ctx.bot.wait_for("message", check=dm_check, timeout=90)
         if fecha_msg.content.lower() == "cancelar": return
         fecha_str = fecha_msg.content.strip()
@@ -76,14 +81,14 @@ async def swiss_nuevo_asistente_handle(ctx):
             await ctx.author.send("❌ Formato inválido. Usaré hoy.")
             fecha_str = datetime.now().strftime("%d/%m/%Y")
 
-        codigo = await crear_torneo(ctx.bot, nombre, max_jugadores, nivel, fecha_str)
+        codigo = await crear_torneo(ctx.bot, nombre, formato, max_jugadores, nivel, fecha_str)
 
         canal_activos = discord.utils.get(ctx.guild.text_channels, name="torneos-activos")
         if canal_activos:
             await canal_activos.send(
                 f"🎮 **Torneo creado:** {nombre}\n"
                 f"🏷️ **Código:** `{codigo}`\n"
-                f"📋 **Formato:** Premodern (Swiss)\n"
+                f"📋 **Formato:** {formato} (Swiss)\n"
                 f"👥 **Jugadores:** {max_jugadores}\n"
                 f"📅 **Inicio:** {fecha_str}\n"
                 f"🎯 **Nivel:** {nivel}"
@@ -93,6 +98,7 @@ async def swiss_nuevo_asistente_handle(ctx):
             await canal_cartelera.send(
                 f"📢 **Nuevo torneo suizo creado!**\n"
                 f"🏷️ **Nombre:** {nombre}\n"
+                f"📋 **Formato:** {formato}\n"
                 f"👥 **Máximo jugadores:** {max_jugadores}\n"
                 f"🔒 **Nivel:** {nivel}\n"
                 f"🏷️ **Código:** `{codigo}`\n"
@@ -100,7 +106,7 @@ async def swiss_nuevo_asistente_handle(ctx):
                 f"📌 Usa `!inscribir-swiss {codigo}` para apuntarte."
             )
 
-        await ctx.author.send(f"✅ Torneo **{nombre}** creado con código `{codigo}`.")
+        await ctx.author.send(f"✅ Torneo **{nombre}** ({formato}) creado con código `{codigo}`.")
 
     except asyncio.TimeoutError:
         await ctx.author.send("⏰ Tiempo agotado.")
