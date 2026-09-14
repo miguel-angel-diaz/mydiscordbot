@@ -282,6 +282,7 @@ async def ejecutar_tareas_diarias(bot: commands.Bot):
     await limpiar_torneos_vencidos(bot)
     await limpiar_partidos_pasados(bot)
     await publicar_eventos_semanales(bot)
+    await enviar_recordatorios_deck(bot)
 
 # -------------------------------------------------------------
 # INICIO (llamar una vez desde on_ready)
