@@ -36,7 +36,9 @@ async def crear_torneo(bot, nombre: str, formato: str, max_jugadores: int, nivel
         "fecha_inicio": fecha_inicio,
         "estado": "abierto",
         "ronda_actual": 0,
-        "inscritos_ids": []
+        "inscritos_ids": [],
+        "recordatorio_3d_enviado": False,
+        "recordatorio_1d_enviado": False,
     })
 
     await guardar_rondas(bot, codigo, {"codigo": codigo, "rondas": []})
