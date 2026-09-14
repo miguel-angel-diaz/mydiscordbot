@@ -70,6 +70,7 @@ from utils.swiss_handle import (
     swiss_desinscribir_asistente_handle,
     swiss_iniciar_asistente_handle,
     swiss_reportar_asistente_handle,
+    swiss_modificar_resultado_asistente_handle,
     swiss_clasificacion_asistente_handle,
     swiss_siguiente_ronda_asistente_handle,
     swiss_eliminar_asistente_handle,
@@ -418,6 +419,12 @@ async def reiniciar_swiss(ctx):
 @bot.command(name="reportar-swiss")
 async def reportar_swiss(ctx):
     await swiss_reportar_asistente_handle(ctx)
+
+@bot.command(name="modificar-resultado-swiss",
+    aliases=["modificar resultado swiss", "modificar_resultado_swiss"])
+@commands.has_permissions(administrator=True)
+async def modificar_resultado_swiss(ctx):
+    await swiss_modificar_resultado_asistente_handle(ctx)
 
 @bot.command(name="clasificacion-swiss")
 async def clasificacion_swiss(ctx):

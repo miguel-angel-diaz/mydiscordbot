@@ -325,11 +325,23 @@ async def reportar_resultado(bot, codigo: str, jugador1_id: int, resultado: str,
 
     emp_index = -1
     emp_encontrado = None
+    resultado_normalizado = resultado
     for i, emp in enumerate(ronda_actual["emparejamientos"]):
-        if (emp["j1"] == str(jugador1_id) and emp["j2"] == str(jugador2_id)) or \
-           (emp["j1"] == str(jugador2_id) and emp["j2"] == str(jugador1_id)):
+        if emp["j1"] == str(jugador1_id) and emp["j2"] == str(jugador2_id):
+            # Orden correcto: j1 = jugador1, j2 = jugador2
             emp_index = i
             emp_encontrado = emp
+            resultado_normalizado = resultado
+            break
+        elif emp["j1"] == str(jugador2_id) and emp["j2"] == str(jugador1_id):
+            # Orden inverso: hay que invertir el resultado
+            emp_index = i
+            emp_encontrado = emp
+            try:
+                s1, s2 = resultado.split("-")
+                resultado_normalizado = f"{s2}-{s1}"
+            except Exception:
+                resultado_normalizado = resultado
             break
 
     if not emp_encontrado:
@@ -338,7 +350,7 @@ async def reportar_resultado(bot, codigo: str, jugador1_id: int, resultado: str,
     if emp_encontrado.get("resultado") is not None:
         return False, "Este partido ya tiene un resultado reportado.", None, -1
 
-    emp_encontrado["resultado"] = resultado
+    emp_encontrado["resultado"] = resultado_normalizado
 
     todos_reportados = all(e.get("resultado") is not None for e in ronda_actual["emparejamientos"])
     if todos_reportados:

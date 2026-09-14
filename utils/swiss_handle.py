@@ -1155,3 +1155,170 @@ async def swiss_finalizar_asistente_handle(ctx):
         await ctx.author.send("⏰ Tiempo agotado.")
     except Exception as e:
         await ctx.author.send(f"❌ Error: {e}")
+
+# ============================================================
+# COMANDO: modificar-resultado-swiss (asistente)
+# ============================================================
+
+async def swiss_modificar_resultado_asistente_handle(ctx):
+    await borrar_mensaje_seguro(ctx)
+
+    if not ctx.author.guild_permissions.administrator:
+        await ctx.author.send("❌ Necesitas ser administrador.")
+        return
+
+    try:
+        await ctx.author.send("✏️ **Modificar resultado Swiss**\nEscribe `cancelar` para salir.")
+        def dm_check(m):
+            return m.author == ctx.author and isinstance(m.channel, discord.DMChannel)
+
+        # 1️⃣ Elegir torneo
+        torneos = await obtener_torneos_activos(ctx.bot)
+        activos = [t for t in torneos if t.get("ronda_actual", 0) > 0 and t.get("estado") != "finalizado"]
+        if not activos:
+            await ctx.author.send("❌ No hay torneos activos con rondas.")
+            return
+
+        mensaje = "📋 **Torneos activos:**\n"
+        for i, t in enumerate(activos, 1):
+            mensaje += f"{i}. `{t['codigo']}` → {t['nombre']} (Ronda {t.get('ronda_actual', 0)})\n"
+        mensaje += "\nEscribe el **número** del torneo:"
+        await ctx.author.send(mensaje)
+
+        sel_torneo = await ctx.bot.wait_for("message", check=dm_check, timeout=60)
+        if sel_torneo.content.lower() == "cancelar":
+            return
+        try:
+            idx = int(sel_torneo.content.strip()) - 1
+            torneo = activos[idx]
+        except:
+            await ctx.author.send("❌ Número no válido.")
+            return
+
+        # 2️⃣ Mostrar todas las rondas y partidos ya reportados
+        rondas_data = await leer_rondas(ctx.bot, torneo["codigo"])
+        if not rondas_data:
+            await ctx.author.send("❌ El torneo no tiene rondas.")
+            return
+        rondas = rondas_data.get("rondas", [])
+        if not rondas:
+            await ctx.author.send("❌ El torneo no tiene rondas.")
+            return
+
+        # Construir lista de partidos con resultado reportado
+        opciones = []
+        texto = "📋 **Partidos con resultado reportado:**\n"
+        contador = 1
+        for ronda in rondas:
+            ronda_num = ronda.get("numero", 0)
+            for emp in ronda.get("emparejamientos", []):
+                if emp.get("resultado") is None:
+                    continue
+                j1_id = emp.get("j1")
+                j2_id = emp.get("j2")
+
+                try:
+                    m1 = await ctx.guild.fetch_member(int(j1_id))
+                    nombre1 = m1.display_name
+                except:
+                    nombre1 = f"Usuario {j1_id}"
+
+                if j2_id is None:
+                    nombre2 = "BYE"
+                else:
+                    try:
+                        m2 = await ctx.guild.fetch_member(int(j2_id))
+                        nombre2 = m2.display_name
+                    except:
+                        nombre2 = f"Usuario {j2_id}"
+
+                texto += f"{contador}. Ronda {ronda_num}: {nombre1} vs {nombre2} → {emp.get('resultado')}\n"
+                opciones.append({
+                    "ronda": ronda_num,
+                    "emp": emp,
+                    "j1": j1_id,
+                    "j2": j2_id,
+                    "nombre1": nombre1,
+                    "nombre2": nombre2,
+                })
+                contador += 1
+
+        if not opciones:
+            await ctx.author.send("❌ No hay resultados reportados en este torneo.")
+            return
+
+        await ctx.author.send(texto)
+        await ctx.author.send("\nEscribe el **número** del partido a modificar:")
+
+        sel_partido = await ctx.bot.wait_for("message", check=dm_check, timeout=60)
+        if sel_partido.content.lower() == "cancelar":
+            return
+        try:
+            idx_p = int(sel_partido.content.strip()) - 1
+            if idx_p < 0 or idx_p >= len(opciones):
+                await ctx.author.send("❌ Número fuera de rango.")
+                return
+            elegido = opciones[idx_p]
+        except:
+            await ctx.author.send("❌ Número no válido.")
+            return
+
+        emp = elegido["emp"]
+        j1_id = elegido["j1"]
+        j2_id = elegido["j2"]
+        nombre1 = elegido["nombre1"]
+        nombre2 = elegido["nombre2"]
+
+        # 3️⃣ Pedir nuevo resultado
+        await ctx.author.send(
+            f"📊 Nuevo resultado para el partido (formato `X-Y`, según orden **{nombre1} vs {nombre2}**):"
+        )
+        res_msg = await ctx.bot.wait_for("message", check=dm_check, timeout=60)
+        if res_msg.content.lower() == "cancelar":
+            return
+        nuevo_resultado = res_msg.content.strip()
+        if "-" not in nuevo_resultado:
+            await ctx.author.send("❌ Formato inválido. Usa X-Y.")
+            return
+
+        # 4️⃣ Confirmación
+        await ctx.author.send(f"🔒 Confirmar cambio a **{nuevo_resultado}** (sí/no):")
+        conf = await ctx.bot.wait_for("message", check=dm_check, timeout=60)
+        if conf.content.lower() not in ["sí", "si", "yes", "y"]:
+            await ctx.author.send("❌ Modificación cancelada.")
+            return
+
+        # 5️⃣ Aplicar el cambio
+        emp["resultado"] = nuevo_resultado
+        await guardar_rondas(ctx.bot, torneo["codigo"], {"codigo": torneo["codigo"], "rondas": rondas})
+
+        # 6️⃣ Recalcular clasificación y republicar
+        await calcular_clasificacion(ctx.bot, torneo["codigo"])
+        await publicar_clasificacion_swiss(ctx.bot, ctx.guild, torneo["codigo"])
+
+        # 7️⃣ Anunciar en canal de resultados
+        canal_resultados = discord.utils.get(ctx.guild.text_channels, name="🍺-quién‐se‐lleva‐la‐ronda")
+        if canal_resultados:
+            try:
+                m1 = await ctx.guild.fetch_member(int(j1_id))
+                nombre1 = m1.display_name
+            except:
+                nombre1 = f"Usuario {j1_id}"
+            try:
+                m2 = await ctx.guild.fetch_member(int(j2_id))
+                nombre2 = m2.display_name
+            except:
+                nombre2 = f"Usuario {j2_id}"
+
+            await canal_resultados.send(
+                f"🔄 Resultado **modificado** en `{torneo['codigo']}`:\n"
+                f"**{nombre1}** {nuevo_resultado} **{nombre2}**"
+            )
+
+        await ctx.author.send(f"✅ Resultado modificado a **{nuevo_resultado}** correctamente.")
+
+    except asyncio.TimeoutError:
+        await ctx.author.send("⏰ Tiempo agotado.")
+    except Exception as e:
+        await ctx.author.send(f"❌ Error: {e}")
+        print(f"❌ Error en modificar-resultado-swiss: {e}")
