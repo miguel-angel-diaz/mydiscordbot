@@ -1258,24 +1258,60 @@ def _parsear_embed_deck(embed: discord.Embed) -> dict | None:
         "edited": edited,
     }
 
-async def obtener_decks_por_usuario(guild, discord_id: str, limite: int = 500, include_message: bool = False):
-    canal = discord.utils.get(guild.text_channels, name="submitted-decks")
-    if not canal:
-        return []
+def _parsear_embed_deck(embed: discord.Embed) -> dict | None:
+    campos = {f.name: f.value for f in embed.fields}
 
-    decks = []
-    async for mensaje in canal.history(limit=limite):
-        if not mensaje.embeds:
-            continue
+    jugador_raw = campos.get("Jugador", "")
+    match_id = DECK_ID_REGEX.search(jugador_raw)
+    if not match_id:
+        return None
 
-        for embed in mensaje.embeds:
-            deck = _parsear_embed_deck(embed)
-            if deck and deck["discord_id"] == discord_id:
-                if include_message:
-                    deck["_mensaje"] = mensaje
-                decks.append(deck)
+    discord_id = match_id.group(1)
 
-    return decks
+    titulo = embed.title or ""
+    nombre_deck = re.sub(r"^🃏\s*Deck (Subido|Actualizado):\s*", "", titulo).strip()
+    if not nombre_deck:
+        nombre_deck = titulo
+
+    descripcion = embed.description or ""
+
+    codigo_deck = None
+    match_codigo = re.search(r"\*\*Código:\*\*\s*`([^`]+)`", descripcion, re.IGNORECASE)
+    if match_codigo:
+        codigo_deck = match_codigo.group(1).strip()
+
+    codigo_torneo = None
+    match_torneo = re.search(r"\*\*Torneo:\*\*\s*`([^`]+)`", descripcion, re.IGNORECASE)
+    if match_torneo:
+        codigo_torneo = match_torneo.group(1).strip()
+
+    # 🔹 NUEVO: extraer formato
+    formato = None
+    match_formato = re.search(r"\*\*Formato:\*\*\s*(.+?)(?:\n|$)", descripcion, re.IGNORECASE)
+    if match_formato:
+        formato = match_formato.group(1).strip()
+
+    if not codigo_torneo and codigo_deck:
+        partes = codigo_deck.split("_")
+        if len(partes) >= 2:
+            codigo_torneo = partes[0]
+
+    try:
+        edited = int(campos.get("Ediciones post-inicio", campos.get("edited", "0")).split("/")[0])
+    except (ValueError, AttributeError):
+        edited = 0
+
+    return {
+        "nombre_deck": nombre_deck,
+        "codigo_deck": codigo_deck,
+        "codigo_torneo": codigo_torneo,
+        "discord_id": discord_id,
+        "archetype": campos.get("Archetype", "Desconocido"),
+        "decklist": campos.get("Decklist", ""),
+        "sideboard": campos.get("Sideboard", ""),
+        "formato": formato or "Premodern",  # ⬅️ NUEVO
+        "edited": edited,
+    }
 
 async def editar_deck_web(guild, member: discord.Member, codigo_torneo: str, formato: str,
                           nombre_deck: str, archetype: str, decklist: str, sideboard: str):
