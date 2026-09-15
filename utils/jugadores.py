@@ -717,7 +717,7 @@ async def desinscribirse_handler(ctx, codigo_torneo: str, usuario: discord.Membe
                                     await ctx.author.send(f"⚠️ Error al eliminar el deck `{codigo_deck}`: {str(e)}")
                                 break
 
-async def ver_inscritos_handler(ctx, codigo_torneo: str):
+async def ver_inscritos_handler(ctx, codigo_torneo: str = None):
     await borrar_mensaje_seguro(ctx)
     if not await validar_canal_correcto(ctx, "preguntale-a-el-barbas", "!ver-inscritos"):
         return
@@ -732,72 +732,105 @@ async def ver_inscritos_handler(ctx, codigo_torneo: str):
         if not codigo_torneo:
             return
 
-    # 2️⃣ Obtener participantes del torneo
-    url = f"https://api.challonge.com/v1/tournaments/{codigo_torneo}/participants.json"
-    async with aiohttp.ClientSession() as session:
-        async with session.get(url, auth=aiohttp.BasicAuth(config.CHALLONGE_USERNAME, config.CHALLONGE_API_KEY)) as resp:
-            if resp.status != 200:
-                error_text = await resp.text()
-                await ctx.author.send(f"❌ Error al obtener los participantes: {error_text}")
-                return
-            data = await resp.json()
+    # 2️⃣ Determinar si es Swiss (estado) o Challonge
+    from utils.torneos_estado import obtener_torneo_estado
 
-    if not data:
-        await ctx.author.send(f"📭 No hay jugadores inscritos en el torneo `{codigo_torneo}`.")
-        return
+    torneo_swiss = await obtener_torneo_estado(ctx.bot, codigo_torneo)
+    jugadores = {}   # {str(discord_id): nombre_mostrado}
 
-    # 3️⃣ Preparar diccionario de jugadores {id_usuario: nombre_mostrado}
-    jugadores = {}
-    for p in data:
-        participante = p.get("participant", {})
-        nombre = participante.get("name", "Desconocido")
-        try:
-            miembro = await ctx.guild.fetch_member(int(nombre))
-            jugadores[miembro.id] = miembro.display_name
-        except (ValueError, discord.NotFound):
-            jugadores[nombre] = nombre  # No es un ID válido, usar nombre tal cual
+    if torneo_swiss and torneo_swiss.get("tipo") == "swiss":
+        # --- SWISS: inscritos desde el estado ---
+        inscritos_ids = torneo_swiss.get("inscritos_ids", [])
+        if not inscritos_ids:
+            await ctx.author.send(f"📭 No hay jugadores inscritos en el torneo `{codigo_torneo}`.")
+            return
 
-    # 4️⃣ Revisar qué jugadores han subido deck
+        for uid in inscritos_ids:
+            try:
+                miembro = await ctx.guild.fetch_member(int(uid))
+                jugadores[str(miembro.id)] = miembro.display_name
+            except (ValueError, discord.NotFound):
+                jugadores[str(uid)] = f"Usuario {uid}"
+    else:
+        # --- CHALLONGE: inscritos desde la API ---
+        url = f"https://api.challonge.com/v1/tournaments/{codigo_torneo}/participants.json"
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, auth=aiohttp.BasicAuth(config.CHALLONGE_USERNAME, config.CHALLONGE_API_KEY)) as resp:
+                if resp.status != 200:
+                    error_text = await resp.text()
+                    await ctx.author.send(f"❌ Error al obtener los participantes: {error_text}")
+                    return
+                data = await resp.json()
+
+        if not data:
+            await ctx.author.send(f"📭 No hay jugadores inscritos en el torneo `{codigo_torneo}`.")
+            return
+
+        for p in data:
+            participante = p.get("participant", {})
+            nombre = participante.get("name", "Desconocido")
+            try:
+                miembro = await ctx.guild.fetch_member(int(nombre))
+                jugadores[str(miembro.id)] = miembro.display_name
+            except (ValueError, discord.NotFound):
+                # No es un ID de Discord válido, lo guardamos tal cual
+                jugadores[str(nombre)] = str(nombre)
+
+    # 3️⃣ Revisar qué jugadores han subido deck
     canal_decks = discord.utils.get(ctx.guild.text_channels, name="submitted-decks")
     decks_subidos = set()
     if canal_decks:
         async for msg in canal_decks.history(limit=500):
             for embed in msg.embeds:
-                if embed.title and "🃏 Deck " in embed.title:
+                if embed.title and ("🃏 Deck " in embed.title or "🎴 Deck " in embed.title):
                     contenido = ""
                     if embed.description:
                         contenido += embed.description + "\n"
                     for field in embed.fields:
                         contenido += f"{field.name}: {field.value}\n"
 
-                    # Buscar línea con "Código:"
                     for linea in contenido.splitlines():
                         if "Código:" in linea:
                             match = re.search(r'`(.+?)`', linea)
                             if match:
-                                codigo_embed = match.group(1)
-                                decks_subidos.add(codigo_embed)
+                                decks_subidos.add(match.group(1))
 
-    # 5️⃣ Verificar si el usuario es moderador
+    # 4️⃣ Verificar si el autor es moderador
     es_moderador = await moderador_permisos_handle(ctx, only_check=True)
+    author_id = str(ctx.author.id)
 
-    # 6️⃣ Construir lista con ticks
-    inscritos_lista = []
-    for jugador_id, nombre_mostrado in jugadores.items():
-        tick = ""
-        if es_moderador:
-            # Construir string que debe existir en decks_subidos
-            deck_key = f"{codigo_torneo}_{jugador_id}" if isinstance(jugador_id, int) else None
-            if deck_key and deck_key in decks_subidos:
-                tick = "✅"
-            elif deck_key:
-                tick = "❌"
-        inscritos_lista.append(f"{nombre_mostrado} {tick}")
+    # 5️⃣ Construir la respuesta según el rol
+    if es_moderador:
+        # --- ADMIN: listado completo con ticks ---
+        inscritos_lista = []
+        for jugador_id, nombre_mostrado in jugadores.items():
+            deck_key = f"{codigo_torneo}_{jugador_id}"
+            tick = "✅" if deck_key in decks_subidos else "❌"
+            inscritos_lista.append(f"{nombre_mostrado} {tick}")
 
-    # 7️⃣ Enviar al usuario por privado
-    mensaje_final = "\n".join(inscritos_lista)
-    await ctx.author.send(f"📋 **Jugadores inscritos en `{codigo_torneo}`:**\n```{mensaje_final}```")
+        total = len(inscritos_lista)
+        mensaje_final = "\n".join(inscritos_lista)
+        await ctx.author.send(
+            f"📋 **Jugadores inscritos en `{codigo_torneo}` ({total}):**\n"
+            f"```{mensaje_final}```\n"
+            f"✅ = deck subido · ❌ = deck pendiente"
+        )
+    else:
+        # --- JUGADOR NORMAL: solo su estado ---
+        if author_id not in jugadores:
+            await ctx.author.send(f"❌ No estás inscrito en el torneo `{codigo_torneo}`.")
+            return
 
+        deck_key = f"{codigo_torneo}_{author_id}"
+        subido = deck_key in decks_subidos
+        estado_deck = "✅ Sí, ya lo has subido." if subido else "❌ Todavía no has subido tu deck."
+
+        await ctx.author.send(
+            f"📋 **Estado de tu inscripción en `{codigo_torneo}`:**\n"
+            f"👤 **Jugador:** {jugadores[author_id]}\n"
+            f"🎴 **Deck:** {estado_deck}"
+        )
+        
 async def reportar_resultado_handle(ctx, codigo_torneo: str = None, jugador1: discord.Member = None, resultado: str = None, jugador2: discord.Member = None):
     # Eliminar mensaje original si es posible
     await borrar_mensaje_seguro(ctx)
