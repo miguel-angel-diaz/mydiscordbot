@@ -580,7 +580,8 @@ async def api_torneos_disponibles(request):
     return web.json_response({"torneos": torneos_usuario})
 
 async def api_arquetipos(request):
-    return web.json_response({"arquetipos": obtener_lista_arquetipos()})
+    formato = request.query.get("formato", "Premodern")
+    return web.json_response({"arquetipos": obtener_lista_arquetipos(formato)})
 
 async def api_subir_deck(request):
     try:
@@ -596,6 +597,7 @@ async def api_subir_deck(request):
     discord_id = payload["discord_id"]
 
     codigo_torneo = str(body.get("codigo_torneo", "")).strip()
+    formato_input = str(body.get("formato", "")).strip()
     nombre_deck = str(body.get("nombre_deck", "")).strip()
     archetype_input = str(body.get("archetype", "")).strip()
     decklist_raw = str(body.get("decklist", "")).strip()
@@ -618,7 +620,18 @@ async def api_subir_deck(request):
     if not miembro:
         return web.json_response({"error": "No se pudo verificar tu membresía en el servidor"}, status=403)
 
-    sugerencias = obtener_sugerencias_arquetipos(archetype_input, max_sugerencias=5)
+    # 🔹 Determinar el formato: si no viene del front, lo sacamos del torneo
+    from utils.torneos_estado import obtener_torneo_estado
+    torneo = await obtener_torneo_estado(_bot_instance, codigo_torneo)
+    formato_torneo = torneo.get("formato", "Premodern") if torneo else "Premodern"
+
+    if formato_input and formato_input.lower() in ("premodern", "pauper"):
+        formato = formato_input.capitalize()
+    else:
+        formato = formato_torneo
+
+    # Validar arquetipo según el formato
+    sugerencias = obtener_sugerencias_arquetipos(archetype_input, formato=formato, max_sugerencias=5)
     coincidencia_exacta = next((s for s in sugerencias if s.lower() == archetype_input.lower()), None)
 
     if not coincidencia_exacta:
@@ -656,7 +669,11 @@ async def api_subir_deck(request):
 
     embed_final = discord.Embed(
         title=f"🃏 Deck Subido: {nombre_deck}",
-        description=f"**Código:** `{codigo_deck}`\n**Torneo:** `{codigo_torneo}`",
+        description=(
+            f"**Código:** `{codigo_deck}`\n"
+            f"**Torneo:** `{codigo_torneo}`\n"
+            f"**Formato:** {formato}"
+        ),
         color=discord.Color.purple()
     )
     embed_final.add_field(name="Jugador", value=f"{miembro} (ID: {discord_id})", inline=False)
@@ -816,6 +833,7 @@ async def api_editar_deck(request):
 
     discord_id = payload["discord_id"]
     codigo_torneo = str(body.get("codigo_torneo", "")).strip()
+    formato_input = str(body.get("formato", "")).strip()
     nombre_deck = str(body.get("nombre_deck", "")).strip()
     archetype_input = str(body.get("archetype", "")).strip()
     decklist_raw = str(body.get("decklist", "")).strip()
@@ -835,7 +853,17 @@ async def api_editar_deck(request):
     if not miembro:
         return web.json_response({"error": "No se pudo verificar tu membresía en el servidor"}, status=403)
 
-    sugerencias = obtener_sugerencias_arquetipos(archetype_input, max_sugerencias=5)
+    # 🔹 Determinar formato
+    from utils.torneos_estado import obtener_torneo_estado
+    torneo = await obtener_torneo_estado(_bot_instance, codigo_torneo)
+    formato_torneo = torneo.get("formato", "Premodern") if torneo else "Premodern"
+
+    if formato_input and formato_input.lower() in ("premodern", "pauper"):
+        formato = formato_input.capitalize()
+    else:
+        formato = formato_torneo
+
+    sugerencias = obtener_sugerencias_arquetipos(archetype_input, formato=formato, max_sugerencias=5)
     coincidencia_exacta = next((s for s in sugerencias if s.lower() == archetype_input.lower()), None)
 
     if not coincidencia_exacta:
@@ -858,7 +886,10 @@ async def api_editar_deck(request):
             return web.json_response({"error": "La sideboard no puede superar 15 cartas"}, status=400)
         sideboard = sideboard_limpio
 
-    ok, mensaje = await editar_deck_web(guild, miembro, codigo_torneo, nombre_deck, archetype, decklist, sideboard)
+    ok, mensaje = await editar_deck_web(
+        guild, miembro, codigo_torneo, formato,
+        nombre_deck, archetype, decklist, sideboard
+    )
 
     if not ok:
         return web.json_response({"error": mensaje}, status=400)

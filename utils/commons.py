@@ -1277,10 +1277,10 @@ async def obtener_decks_por_usuario(guild, discord_id: str, limite: int = 500, i
 
     return decks
 
-async def editar_deck_web(guild, member: discord.Member, codigo_torneo: str, nombre_deck: str, archetype: str, decklist: str, sideboard: str):
+async def editar_deck_web(guild, member: discord.Member, codigo_torneo: str, formato: str,
+                          nombre_deck: str, archetype: str, decklist: str, sideboard: str):
     codigo_deck = f"{codigo_torneo}_{member.id}"
-    
-    # Obtener el deck directamente desde el canal (incluye el mensaje)
+
     deck_actual = await obtener_deck_en_canal(guild, codigo_deck)
     if not deck_actual:
         return False, "No se encontró tu deck para este torneo. Debes subirlo primero."
@@ -1300,7 +1300,11 @@ async def editar_deck_web(guild, member: discord.Member, codigo_torneo: str, nom
 
     embed_final = discord.Embed(
         title=f"🃏 Deck Actualizado: {nombre_deck}",
-        description=f"**Código:** `{codigo_deck}`\n**Torneo:** `{codigo_torneo}`",
+        description=(
+            f"**Código:** `{codigo_deck}`\n"
+            f"**Torneo:** `{codigo_torneo}`\n"
+            f"**Formato:** {formato}"
+        ),
         color=color_embed
     )
     embed_final.add_field(name="Jugador", value=f"{member.mention} (ID: {member.id})", inline=False)
@@ -1312,7 +1316,7 @@ async def editar_deck_web(guild, member: discord.Member, codigo_torneo: str, nom
     fecha_legible = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     embed_final.set_footer(text=f"Última edición: {fecha_legible} (vía web)")
 
-    mensaje = deck_actual["mensaje"]  # ✅ Ahora existe porque obtener_deck_en_canal lo incluye
+    mensaje = deck_actual["mensaje"]
 
     try:
         await mensaje.edit(embed=embed_final)
