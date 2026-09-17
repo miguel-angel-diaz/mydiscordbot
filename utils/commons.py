@@ -1128,6 +1128,26 @@ async def obtener_estado_torneos_usuario(guild, member: discord.Member):
 
     return resultado
 
+async def obtener_decks_por_usuario(guild, discord_id: str, limite: int = 500, include_message: bool = False):
+    canal = discord.utils.get(guild.text_channels, name="submitted-decks")
+    if not canal:
+        return []
+
+    decks = []
+    async for mensaje in canal.history(limit=limite):
+        if not mensaje.embeds:
+            continue
+
+        for embed in mensaje.embeds:
+            deck = _parsear_embed_deck(embed)
+            if deck and deck["discord_id"] == discord_id:
+                if include_message:
+                    deck["_mensaje"] = mensaje
+                    deck["mensaje"] = mensaje
+                decks.append(deck)
+
+    return decks
+
 # ============================================================
 # INSCRIPCIÓN WEB (soporta Swiss y Challonge)
 # ============================================================
