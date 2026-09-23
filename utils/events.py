@@ -5,6 +5,8 @@ from datetime import datetime, timezone
 import asyncio
 import config
 
+from utils.jugadores import enviar_comandos_a_miembro
+
 tiempos_entrada = {}  # { user_id: datetime }
 
 
@@ -418,3 +420,47 @@ async def member_join_handle(member, before, after):
         # Reiniciar el tiempo en el nuevo canal
         tiempos_entrada[member.id] = datetime.now(timezone.utc)
 
+async def _esta_registrado_en_canal(guild: discord.Guild, member_id: int) -> bool:
+    """Comprueba si el miembro tiene una entrada en #registro-de-usuarios."""
+    canal_registro = discord.utils.get(guild.text_channels, name="registro-de-usuarios")
+    if not canal_registro:
+        return False
+
+    async for msg in canal_registro.history(limit=500):
+        for embed in msg.embeds:
+            # Buscar en fields
+            for field in embed.fields:
+                if str(member_id) in (field.value or ""):
+                    return True
+            # Buscar en description y footer
+            if embed.description and str(member_id) in embed.description:
+                return True
+            if embed.footer and embed.footer.text and str(member_id) in embed.footer.text:
+                return True
+    return False
+
+
+async def member_update_handle(before: discord.Member, after: discord.Member):
+    """Detecta cambios de rol y actúa en consecuencia."""
+    roles_antes = {r.name for r in before.roles}
+    roles_despues = {r.name for r in after.roles}
+
+    # Si acaba de obtener el rol "miembro"
+    if "miembro" not in roles_antes and "miembro" in roles_despues:
+        await comprobar_registro_y_enviar_comandos(after)
+
+    # Aquí puedes añadir el resto de lógica de evento_socio_handle
+    await evento_socio_handle(before, after)
+
+async def comprobar_registro_y_enviar_comandos(member: discord.Member):
+    """
+    Si el miembro NO está registrado en #registro-de-usuarios, le envía
+    los comandos disponibles por DM.
+    """
+    if member.bot or not member.guild:
+        return
+
+    registrado = await _esta_registrado_en_canal(member.guild, member.id)
+    if not registrado:
+        print(f"[INFO] {member.display_name} no está registrado → enviando comandos.")
+        await enviar_comandos_a_miembro(member)

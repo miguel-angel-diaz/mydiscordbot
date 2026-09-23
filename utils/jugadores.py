@@ -1319,12 +1319,152 @@ async def inscribirse_sorteo_handle(ctx, codigo: str):
         await ctx.send(f"⚠️ No pude enviarte un mensaje privado, revisa tus DMs.")
 
 async def mis_comandos_handle(ctx):
-    """Muestra los comandos disponibles según tus permisos y roles - !mis-comandos"""
+    """Asistente de búsqueda de comandos con tutorial - !mis-comandos"""
     await borrar_mensaje_seguro(ctx)
     if not await validar_canal_correcto(ctx, "preguntale-a-el-barbas", "!mis-comandos"):
         return
 
-    roles_usuario = [rol.name for rol in ctx.author.roles]
+    author = ctx.author
+    guild = ctx.guild
+
+    def dm_check(m):
+        return m.author == author and isinstance(m.channel, discord.DMChannel)
+
+    # 1️⃣ Filtrar comandos disponibles según los roles del autor
+    roles_usuario = [rol.name for rol in author.roles]
+    comandos_disponibles = []
+    for comando in config.COMANDOS_INFO:
+        if any(rol in roles_usuario for rol in comando["roles_permitidos"]):
+            comandos_disponibles.append(comando)
+
+    if not comandos_disponibles:
+        try:
+            await author.send(
+                "❌ No tienes acceso a ningún comando.\n"
+                "Si crees que deberías tener acceso, contacta con un moderador del servidor."
+            )
+        except discord.Forbidden:
+            await ctx.send("❌ No puedo enviarte mensajes privados. Activa los DMs para continuar.")
+        return
+
+    try:
+        # 2️⃣ Enviar introducción y lista numerada de comandos
+        await author.send(
+            "👋 ¡Hola! Vamos a buscar el comando que necesitas.\n"
+            "Aquí tienes la lista de comandos disponibles según tus roles:"
+        )
+
+        # Construir lista en bloques para no exceder límites de Discord
+        bloques = []
+        bloque = ""
+        for i, c in enumerate(comandos_disponibles, 1):
+            linea = f"`{i}.` **!{c['comando']}** — {c['descripcion']}\n"
+            if len(bloque) + len(linea) > 3800:
+                bloques.append(bloque)
+                bloque = ""
+            bloque += linea
+        if bloque:
+            bloques.append(bloque)
+
+        for i, bloque in enumerate(bloques):
+            titulo = "📋 Comandos disponibles" if i == 0 else f"📋 Comandos disponibles (cont. {i+1})"
+            embed_lista = discord.Embed(
+                title=titulo,
+                description=bloque.strip(),
+                color=discord.Color.green()
+            )
+            await author.send(embed=embed_lista)
+
+        await author.send("✏️ Responde con el **número** o el **nombre** del comando que buscas (o escribe `cancelar`):")
+
+        # 3️⃣ Esperar respuesta del usuario
+        respuesta = await ctx.bot.wait_for("message", check=dm_check, timeout=120.0)
+        contenido = respuesta.content.strip().lower()
+
+        if contenido == "cancelar":
+            await author.send("❌ Asistente cancelado.")
+            return
+
+        # 4️⃣ Buscar el comando por número, nombre o alias
+        comando_encontrado = None
+        if contenido.isdigit():
+            idx = int(contenido) - 1
+            if 0 <= idx < len(comandos_disponibles):
+                comando_encontrado = comandos_disponibles[idx]
+        else:
+            contenido_limpio = contenido.lstrip("!")
+            for c in comandos_disponibles:
+                if contenido_limpio == c["comando"].lower():
+                    comando_encontrado = c
+                    break
+                if any(contenido_limpio == a.lower() for a in c.get("aliases", [])):
+                    comando_encontrado = c
+                    break
+
+        if not comando_encontrado:
+            await author.send(
+                "❌ No he encontrado ese comando.\n"
+                "Vuelve a intentarlo con `!mis-comandos` en el canal."
+            )
+            return
+
+        # 5️⃣ Mostrar info del comando encontrado
+        aliases = comando_encontrado.get("aliases", [])
+        aliases_str = ", ".join([f"`!{a}`" for a in aliases]) if aliases else "Sin aliases"
+
+        embed_info = discord.Embed(
+            title=f"📖 !{comando_encontrado['comando']}",
+            description=comando_encontrado["descripcion"],
+            color=discord.Color.blue()
+        )
+        embed_info.add_field(name="Aliases", value=aliases_str, inline=False)
+        await author.send(embed=embed_info)
+
+        # 6️⃣ Preguntar si quiere tutorial
+        await author.send("❓ ¿Quieres ver un **tutorial paso a paso** sobre cómo usarlo? (sí/no)")
+
+        resp_tut = await ctx.bot.wait_for("message", check=dm_check, timeout=120.0)
+        if resp_tut.content.strip().lower() not in ("sí", "si", "yes", "y", "s"):
+            await author.send(
+                "👌 Perfecto. Si necesitas más ayuda, vuelve a escribir `!mis-comandos` en el canal."
+            )
+            return
+
+        # 7️⃣ Mostrar tutorial
+        tutorial = comando_encontrado.get("tutorial")
+        if not tutorial:
+            await author.send(
+                f"ℹ️ No hay un tutorial detallado para `!{comando_encontrado['comando']}`, "
+                f"pero puedes preguntar a un admin si tienes dudas."
+            )
+            return
+
+        embed_tut = discord.Embed(
+            title=f"📚 Tutorial: !{comando_encontrado['comando']}",
+            color=discord.Color.purple()
+        )
+        for i, paso in enumerate(tutorial, 1):
+            embed_tut.add_field(name=f"Paso {i}", value=paso, inline=False)
+
+        await author.send(embed=embed_tut)
+        await author.send("✅ ¡Listo! Si necesitas más ayuda, vuelve a escribir `!mis-comandos`.")
+
+    except asyncio.TimeoutError:
+        try:
+            await author.send("⏰ Tiempo agotado. Vuelve a intentarlo con `!mis-comandos`.")
+        except Exception:
+            pass
+    except discord.Forbidden:
+        await ctx.send("❌ No puedo enviarte mensajes privados. Activa los DMs para continuar.")
+    except Exception as e:
+        print(f"❌ Error en mis_comandos_wizard_handle: {e}")
+
+async def enviar_comandos_a_miembro(member: discord.Member):
+    """Envía por DM la lista de comandos disponibles (sin necesitar ctx)."""
+    if member.bot:
+        return
+
+    roles_usuario = [rol.name for rol in member.roles]
     comandos_disponibles = []
 
     for comando in config.COMANDOS_INFO:
@@ -1333,13 +1473,15 @@ async def mis_comandos_handle(ctx):
             comandos_disponibles.append(f"!{comando['comando']} - {comando['descripcion']}")
 
     if not comandos_disponibles:
-        await ctx.author.send(
-            "❌ No tienes acceso a ningún comando.\n"
-            "Si crees que deberías tener acceso, contacta con un moderador del servidor."
-        )
+        try:
+            await member.send(
+                "❌ No tienes acceso a ningún comando.\n"
+                "Si crees que deberías tener acceso, contacta con un moderador del servidor."
+            )
+        except discord.Forbidden:
+            print(f"[INFO] No pude enviar DM a {member}")
         return
 
-    # Mensaje introductorio
     mensaje_intro = (
         "👋 ¡Hola! Aquí tienes los comandos que puedes usar en el servidor:\n\n"
         "Para usar un comando, simplemente escríbelo en el canal preguntale-a-el-barbas "
@@ -1354,14 +1496,21 @@ async def mis_comandos_handle(ctx):
         color=discord.Color.green()
     )
 
+    mensaje_ayuda = (
+        "💡 **¿No sabes cómo funciona algún comando?**\n"
+        "Escribe `!mis-comandos` en el canal **#preguntale-a-el-barbas** "
+        "y te guiaré paso a paso con un tutorial.\n\n"
+        "Si sigues con dudas, consulta con un **admin** del servidor."
+    )
+
     try:
-        await ctx.author.send(mensaje_intro)
-        await ctx.author.send(embed=embed)
+        await member.send(mensaje_intro)
+        await member.send(embed=embed)
+        await member.send(mensaje_ayuda)
     except discord.Forbidden:
-        await ctx.send(
-            "❌ No puedo enviarte un mensaje privado. "
-            "Revisa tus ajustes de privacidad o contacta con un moderador."
-        )
+        print(f"[INFO] No pude enviar comandos a {member}")
+
+
 async def deck_dm_flow(ctx, author: discord.Member, codigo_torneo: str, modo: str = "subir"):
     """
     Flujo de DM para subir o editar un deck.

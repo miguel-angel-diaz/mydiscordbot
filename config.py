@@ -96,169 +96,490 @@ CANALES_EXCLUIDOS = {"preguntale-a-el-barbas", "🍺-el‐ranking‐de‐la‐ba
 ROLES_BIENVENIDA = {"Accept Welcome", "Accept Rules"}
 ROLES_SOCIOS = {"socio", "second-chance-socio", "admin"}
 COMANDOS_INFO = [
+    # ============================================================
+    # ADMIN - MODERACIÓN
+    # ============================================================
     {
         "comando": "strike",
+        "aliases": [],
         "roles_permitidos": ["admin"],
         "permisos_discord": ["manage_messages", "manage_roles"],
-        "descripcion": "Aplica un strike a un miembro del servidor"
+        "descripcion": "Aplica un strike a un miembro del servidor",
+        "tutorial": [
+            "Escribe `!strike` en `#preguntale-a-el-barbas` (o con mención: `!strike @usuario`).",
+            "Si no pasas mención, el bot te preguntará por DM a quién quieres aplicar el strike.",
+            "El bot asignará el rol `Strike` al usuario y le enviará un mensaje privado explicándole la situación."
+        ]
     },
     {
         "comando": "out",
+        "aliases": [],
         "roles_permitidos": ["admin"],
         "permisos_discord": ["manage_messages", "manage_roles"],
-        "descripcion": "Aplica el rol 'Out' a un miembro del servidor"
+        "descripcion": "Aplica el rol 'Out' a un miembro del servidor",
+        "tutorial": [
+            "Escribe `!out` (o `!out @usuario`) en `#preguntale-a-el-barbas`.",
+            "El bot asignará el rol `Out` y le enviará un mensaje privado de expulsión.",
+            "Se registrará el evento en el canal `#blacklist`."
+        ]
     },
     {
         "comando": "eliminar-mensajes",
+        "aliases": ["eliminar mensajes", "eliminar_mensajes"],
         "roles_permitidos": ["admin"],
         "permisos_discord": ["manage_messages", "manage_roles"],
-        "descripcion": "Elimina una cantidad específica de mensajes en un canal"
+        "descripcion": "Elimina una cantidad específica de mensajes en un canal",
+        "tutorial": [
+            "Escribe `!eliminar-mensajes` en `#preguntale-a-el-barbas`.",
+            "El bot te preguntará por DM: canal, cantidad (1-1000), orden (recientes/antiguos) y si incluir fijados.",
+            "Los mensajes se eliminan y se registra el evento en `#mensajes-borrados`."
+        ]
     },
     {
         "comando": "cerrar-peticion",
+        "aliases": ["cerrar peticion", "cerrar_peticion"],
         "roles_permitidos": ["admin"],
         "permisos_discord": ["manage_messages", "manage_roles"],
-        "descripcion": "Cierra una petición y envía la respuesta al usuario"
+        "descripcion": "Cierra una petición y envía la respuesta al usuario",
+        "tutorial": [
+            "Escribe `!cerrar-peticion` en `#preguntale-a-el-barbas`.",
+            "El bot te pedirá por DM el código de la petición y la respuesta.",
+            "Se envía la respuesta por DM al autor, se borra del canal `#peticiones-de-usuarios` y se publica el resumen en `#resolucion-de-peticiones`."
+        ]
     },
     {
-        "comando": "sorteo-torneo",
+        "comando": "nuevo-comunicado",
+        "aliases": ["nuevo_comunicado"],
         "roles_permitidos": ["admin"],
         "permisos_discord": ["manage_messages", "manage_roles"],
-        "descripcion": "Realiza un sorteo entre los inscritos de un torneo"
+        "descripcion": "Envía un comunicado al canal 📰-tablón-anuncios",
+        "tutorial": [
+            "Escribe `!nuevo-comunicado <mensaje>` o solo `!nuevo-comunicado` (el bot te lo pedirá por DM).",
+            "El mensaje se publica como embed en `#📰-tablon-anuncios` con `@everyone`."
+        ]
     },
+
+    # ============================================================
+    # ADMIN - SORTEOS
+    # ============================================================
     {
         "comando": "nuevo-sorteo",
+        "aliases": ["nuevo sorteo", "nuevo_sorteo"],
         "roles_permitidos": ["admin"],
         "permisos_discord": ["manage_guild"],
-        "descripcion": "Crea un nuevo sorteo con sus datos"
+        "descripcion": "Crea un nuevo sorteo con sus datos",
+        "tutorial": [
+            "Escribe `!nuevo-sorteo` en `#preguntale-a-el-barbas`.",
+            "El bot te pedirá por DM: código, fecha límite y regalo del sorteo.",
+            "El sorteo se publica en `#📰-tablon-anuncios` y `#sorteos-activos`."
+        ]
     },
     {
         "comando": "realizar-sorteo",
+        "aliases": ["realizar sorteo", "realizar_sorteo"],
         "roles_permitidos": ["admin"],
         "permisos_discord": ["manage_guild"],
-        "descripcion": "Ejecuta un sorteo ya creado por su código"
+        "descripcion": "Ejecuta un sorteo ya creado por su código",
+        "tutorial": [
+            "Escribe `!realizar-sorteo <código>` en `#preguntale-a-el-barbas`.",
+            "El bot elegirá un ganador aleatorio entre los inscritos en `#inscritos-sorteos`.",
+            "Se notifica por DM al ganador y se publica el resultado en `#tablon-anuncios`."
+        ]
     },
+
+    # ============================================================
+    # ADMIN - TORNEOS SWISS
+    # ============================================================
     {
-        "comando": "agendar-partida",
-        "roles_permitidos": ["socio", "second-chance-socio", "miembro", "admin", "second-chance-miembro"],
-        "permisos_discord": ["manage_messages", "manage_roles"],
-        "descripcion": "Agenda una partida entre dos jugadores"
-    },
-    {
-        "comando": "modificar-agenda",
-        "roles_permitidos": ["socio", "second-chance-socio", "miembro", "admin", "second-chance-miembro"],
-        "permisos_discord": ["manage_messages", "manage_roles"],
-        "descripcion": "permite modificar o eliminar una partida agendada"
-    },
-    {
-        "comando": "eventos-hoy",
-        "roles_permitidos": ["socio", "second-chance-socio", "miembro", "admin", "second-chance-miembro"],
-        "permisos_discord": ["manage_messages", "manage_roles"],
-        "descripcion": "Muestra los eventos programados para hoy"
-    },
-    {
-        "comando": "nueva-peticion",
-        "roles_permitidos": ["socio", "second-chance-socio", "miembro", "admin", "second-chance-miembro"],
-        "permisos_discord": ["manage_messages", "manage_roles"],
-        "descripcion": "Crea una nueva petición"
-    },
-    {
-        "comando": "inscribirse",
-        "roles_permitidos": ["socio", "second-chance-socio", "miembro", "admin", "second-chance-miembro"],
-        "permisos_discord": ["manage_messages", "manage_roles"],
-        "descripcion": "Inscribe a un usuario en un torneo"
-    },
-    {
-        "comando": "desinscribirse",
-        "roles_permitidos": ["socio", "second-chance-socio", "miembro", "admin", "second-chance-miembro"],
-        "permisos_discord": ["manage_messages", "manage_roles"],
-        "descripcion": "Desinscribe a un usuario de un torneo"
-    },
-    {
-        "comando": "ver-inscritos",
-        "roles_permitidos": ["socio", "second-chance-socio", "miembro", "admin", "second-chance-miembro"],
-        "permisos_discord": ["manage_messages", "manage_roles"],
-        "descripcion": "Muestra los inscritos en un torneo"
-    },
-    {
-        "comando": "subir-deck",
-        "roles_permitidos": ["socio", "second-chance-socio", "miembro", "admin", "second-chance-miembro"],
-        "permisos_discord": ["manage_messages", "manage_roles"],
-        "descripcion": "permite subir el decklist de un jugador para un torneo"
-    },
-    {
-        "comando": "editar-deck",
-        "roles_permitidos": ["socio", "second-chance-socio", "miembro", "admin", "second-chance-miembro"],
-        "permisos_discord": ["manage_messages", "manage_roles"],
-        "descripcion": "permite modificar el decklist de un jugador para un torneo"
-    },
-    {
-        "comando": "reportar-resultado",
-        "roles_permitidos": ["socio", "second-chance-socio", "miembro", "admin", "second-chance-miembro"],
-        "permisos_discord": ["manage_messages", "manage_roles"],
-        "descripcion": "Reporta el resultado de un partido de un torneo"
-    },
-    {
-        "comando": "modificar-resultado",
-        "roles_permitidos": ["socio", "second-chance-socio", "miembro", "admin", "second-chance-miembro"],
-        "permisos_discord": ["manage_messages", "manage_roles"],
-        "descripcion": "permite modificar o eliminar el resultado de un partido mientras la ronda esté abierta"
-    },
-    {
-        "comando": "partidos-pendientes",
-        "roles_permitidos": ["socio", "second-chance-socio", "miembro", "admin", "second-chance-miembro"],
-        "permisos_discord": ["manage_messages", "manage_roles"],
-        "descripcion": "Muestra los partidos pendientes de esa ronda de un torneo"
-    },
-    {
-        "comando": "inscribirse-sorteo",
-        "roles_permitidos": ["socio", "second-chance-socio", "miembro", "admin", "second-chance-miembro"],
-        "permisos_discord": ["manage_messages", "manage_roles"],
-        "descripcion": "Inscribe a un usuario en un sorteo"
-    }, {
-        "comando": "cartas-mas-jugadas",
-        "roles_permitidos": ["socio", "second-chance-socio", "miembro", "admin", "second-chance-miembro"],
-        "permisos_discord": ["manage_messages", "manage_roles"],
-        "descripcion": "nos muestra las cartas más jugadas en un torneo o en todos los torneos completados"
-        
-    },
-    {
-        "comando": "stats",
-        "roles_permitidos": ["socio", "second-chance-socio", "miembro", "admin", "second-chance-miembro"],
-        "permisos_discord": ["manage_messages", "manage_roles"],
-        "descripcion": "Permite al usuario ver sus estadísticas en un torneo"
-    },
-    {
-        "comando": "nuevo-torneo",
+        "comando": "nuevo-swiss",
+        "aliases": ["nuevo torneo", "nuevo_torneo", "nuevo-torneo"],
         "roles_permitidos": ["admin"],
         "permisos_discord": ["manage_messages", "manage_roles"],
-        "descripcion": "Crea un nuevo torneo en Challonge"
+        "descripcion": "Crea un nuevo torneo suizo (Swiss)",
+        "tutorial": [
+            "Escribe `!nuevo-swiss` en `#preguntale-a-el-barbas`.",
+            "El bot te preguntará por DM: nombre, formato (Premodern/Pauper), jugadores máximos, nivel (`todos`/`socios`) y fecha de inicio (DD/MM/YYYY).",
+            "El torneo se publica en `#torneos-activos` y `#📰-cartelera-torneos`."
+        ]
     },
     {
-        "comando": "iniciar-torneo",
+        "comando": "iniciar-swiss",
+        "aliases": ["iniciar torneo", "iniciar_torneo", "iniciar-torneo"],
         "roles_permitidos": ["admin"],
         "permisos_discord": ["manage_messages", "manage_roles"],
-        "descripcion": "Inicia un torneo con el código proporcionado"
+        "descripcion": "Inicia un torneo suizo tras verificar los decks subidos",
+        "tutorial": [
+            "Escribe `!iniciar-swiss` en `#preguntale-a-el-barbas`.",
+            "Elige el torneo entre los activos.",
+            "El bot te muestra quién subió deck y quién no. Puedes eliminarlos o continuar.",
+            "Se genera la Ronda 1 y se publican los emparejamientos en `#🍸-citas-a-ciegas`."
+        ]
     },
+    {
+        "comando": "siguiente-ronda-swiss",
+        "aliases": [],
+        "roles_permitidos": ["admin"],
+        "permisos_discord": ["manage_messages", "manage_roles"],
+        "descripcion": "Genera la siguiente ronda del torneo suizo",
+        "tutorial": [
+            "Escribe `!siguiente-ronda-swiss` en `#preguntale-a-el-barbas`.",
+            "Elige el torneo. Se calculan los emparejamientos según la clasificación actual.",
+            "Se publica la nueva ronda y se actualiza la clasificación."
+        ]
+    },
+    {
+        "comando": "reiniciar-swiss",
+        "aliases": ["reiniciar torneo", "reiniciar_torneo", "reiniciar-torneo"],
+        "roles_permitidos": ["admin"],
+        "permisos_discord": ["manage_messages", "manage_roles"],
+        "descripcion": "Reinicia un torneo suizo (borra rondas y clasificación)",
+        "tutorial": [
+            "Escribe `!reiniciar-swiss` en `#preguntale-a-el-barbas`.",
+            "Elige el torneo y confirma.",
+            "Se borran las rondas, la clasificación y los mensajes de citas a ciegas. El torneo queda en estado `abierto`."
+        ]
+    },
+    {
+        "comando": "eliminar-swiss",
+        "aliases": ["eliminar torneo", "eliminar_torneo", "eliminar-torneo"],
+        "roles_permitidos": ["admin"],
+        "permisos_discord": ["manage_messages", "manage_roles"],
+        "descripcion": "Elimina un torneo suizo permanentemente",
+        "tutorial": [
+            "Escribe `!eliminar-swiss` en `#preguntale-a-el-barbas`.",
+            "Elige el torneo y confirma.",
+            "Se borran todos los datos del torneo (estado, rondas, clasificación)."
+        ]
+    },
+    {
+        "comando": "modificar-resultado-swiss",
+        "aliases": ["modificar resultado swiss", "modificar_resultado_swiss", "modificar-resultado", "modificar resultado", "modificar_resultado"],
+        "roles_permitidos": ["admin"],
+        "permisos_discord": ["manage_messages", "manage_roles"],
+        "descripcion": "Modifica un resultado ya reportado en un torneo suizo",
+        "tutorial": [
+            "Escribe `!modificar-resultado-swiss` en `#preguntale-a-el-barbas`.",
+            "Elige el torneo y el partido a modificar (se muestra una lista de los ya reportados).",
+            "Introduce el nuevo resultado en formato `X-Y` y confirma.",
+            "La clasificación se recalcula automáticamente."
+        ]
+    },
+
+    # ============================================================
+    # ADMIN - CHALLONGE (legacy)
+    # ============================================================
     {
         "comando": "actualizar-clasificacion",
+        "aliases": ["actualizar clasificacion", "actualizar_clasificacion"],
         "roles_permitidos": ["admin"],
         "permisos_discord": ["manage_messages", "manage_roles"],
-        "descripcion": "Actualiza la clasificación y la publica"
+        "descripcion": "Actualiza la clasificación de un torneo y la publica",
+        "tutorial": [
+            "Escribe `!actualizar-clasificacion <código_torneo>` en `#preguntale-a-el-barbas`.",
+            "El bot calcula OMW%, Buchholz y diferencia de games, y publica la tabla en `#🍺-el-ranking-de-la-barra`."
+        ]
     },
     {
         "comando": "forzar-ronda",
+        "aliases": ["forzar ronda", "forzar_ronda"],
         "roles_permitidos": ["admin"],
         "permisos_discord": ["manage_messages", "manage_roles"],
-        "descripcion": "Termina la ronda actual y comienza la siguiente"
+        "descripcion": "Termina la ronda actual con empates y comienza la siguiente",
+        "tutorial": [
+            "Escribe `!forzar-ronda <código_torneo>` en `#preguntale-a-el-barbas`.",
+            "Todas las partidas pendientes se marcan como empate `0-0`.",
+            "Se genera la siguiente ronda automáticamente."
+        ]
     },
     {
-        "comando": "eliminar-decks",
+        "comando": "reportar-torneo",
+        "aliases": ["reportar torneo", "reportar_torneo"],
         "roles_permitidos": ["admin"],
         "permisos_discord": ["manage_messages", "manage_roles"],
-        "descripcion": "elimina los decks submiteados para un torneo especificado"
-    }
+        "descripcion": "Genera un informe completo del torneo con análisis IA",
+        "tutorial": [
+            "Escribe `!reportar-torneo` en `#preguntale-a-el-barbas`.",
+            "Elige el torneo (debe estar completado).",
+            "El bot analiza las cartas más jugadas, los mejores decks y genera un informe con IA que se publica en `#🧠📈analisis-torneos`."
+        ]
+    },
+    {
+        "comando": "actualizar-web",
+        "aliases": ["actualizar web", "actualizar_web"],
+        "roles_permitidos": ["admin"],
+        "permisos_discord": ["manage_messages"],
+        "descripcion": "Actualiza la caché de torneos para la web",
+        "tutorial": [
+            "Escribe `!actualizar-web` en `#preguntale-a-el-barbas`.",
+            "El bot regenera `cache/torneos.json` con la clasificación de los torneos finalizados.",
+            "La web mostrará los datos actualizados."
+        ]
+    },
+    {
+        "comando": "sincronizar-estado",
+        "aliases": [],
+        "roles_permitidos": ["admin"],
+        "permisos_discord": ["administrator"],
+        "descripcion": "Reconstruye el estado interno de los torneos desde #torneos-activos",
+        "tutorial": [
+            "Escribe `!sincronizar-estado` en cualquier canal (solo admins).",
+            "El bot borra el estado interno y lo reconstruye a partir de los torneos visibles en `#torneos-activos`.",
+            "⚠️ Es una operación destructiva: se pierden inscritos, rondas y clasificación."
+        ]
+    },
+
+    # ============================================================
+    # JUGADOR - INSCRIPCIONES
+    # ============================================================
+    {
+        "comando": "inscribir-swiss",
+        "aliases": ["inscribir swiss", "inscribir_swiss", "inscribirse", "inscribir"],
+        "roles_permitidos": ["socio", "second-chance-socio", "miembro", "admin", "second-chance-miembro"],
+        "permisos_discord": ["manage_messages", "manage_roles"],
+        "descripcion": "Te inscribe en un torneo suizo",
+        "tutorial": [
+            "Escribe `!inscribir-swiss` en `#preguntale-a-el-barbas`.",
+            "El bot te muestra los torneos abiertos. Elige el número.",
+            "Se te inscribe y el bot te pregunta por DM si quieres subir tu deck ahora."
+        ]
+    },
+    {
+        "comando": "desinscribir-swiss",
+        "aliases": ["desinscribir swiss", "desinscribir_swiss", "desinscribirse", "desinscribir"],
+        "roles_permitidos": ["socio", "second-chance-socio", "miembro", "admin", "second-chance-miembro"],
+        "permisos_discord": ["manage_messages", "manage_roles"],
+        "descripcion": "Te desinscribe de un torneo suizo",
+        "tutorial": [
+            "Escribe `!desinscribir-swiss` en `#preguntale-a-el-barbas`.",
+            "Elige el torneo de la lista de tus inscripciones.",
+            "Se te desinscribe y se elimina tu deck si lo habías subido."
+        ]
+    },
+    {
+        "comando": "ver-inscritos",
+        "aliases": ["ver inscritos", "ver_inscritos"],
+        "roles_permitidos": ["socio", "second-chance-socio", "miembro", "admin", "second-chance-miembro"],
+        "permisos_discord": ["manage_messages", "manage_roles"],
+        "descripcion": "Muestra los inscritos en un torneo (con estado de deck para admin)",
+        "tutorial": [
+            "Escribe `!ver-inscritos` en `#preguntale-a-el-barbas`.",
+            "Elige el torneo.",
+            "Si eres admin, verás la lista completa con ✅/❌ según si cada uno ha subido deck.",
+            "Si eres jugador, verás solo tu estado (inscrito y si has subido deck)."
+        ]
+    },
+
+    # ============================================================
+    # JUGADOR - DECKS
+    # ============================================================
+    {
+        "comando": "subir-deck",
+        "aliases": ["subir deck", "subir_deck"],
+        "roles_permitidos": ["socio", "second-chance-socio", "miembro", "admin", "second-chance-miembro"],
+        "permisos_discord": ["manage_messages", "manage_roles"],
+        "descripcion": "Sube tu decklist para un torneo",
+        "tutorial": [
+            "Escribe `!subir-deck` en `#preguntale-a-el-barbas`.",
+            "Elige el torneo (debes estar inscrito y no tener deck subido ya).",
+            "El bot te pedirá por DM: nombre, formato, arquetipo, decklist (mín. 60) y sideboard (máx. 15 o N/A).",
+            "El deck se publica en `#submitted-decks`."
+        ]
+    },
+    {
+        "comando": "editar-deck",
+        "aliases": ["editar deck", "editar_deck"],
+        "roles_permitidos": ["socio", "second-chance-socio", "miembro", "admin", "second-chance-miembro"],
+        "permisos_discord": ["manage_messages", "manage_roles"],
+        "descripcion": "Edita tu decklist para un torneo",
+        "tutorial": [
+            "Escribe `!editar-deck` en `#preguntale-a-el-barbas`.",
+            "Elige el torneo. Si ya subiste deck, podrás modificar sus campos.",
+            "Si el torneo ya comenzó, solo tienes **1 edición disponible** (post-inicio).",
+            "Si el torneo no ha comenzado, puedes editar todas las veces que quieras."
+        ]
+    },
+
+    # ============================================================
+    # JUGADOR - RESULTADOS
+    # ============================================================
+    {
+        "comando": "reportar-swiss",
+        "aliases": ["reportar resultado", "reportar_resultado", "reportar-resultado"],
+        "roles_permitidos": ["socio", "second-chance-socio", "miembro", "admin", "second-chance-miembro"],
+        "permisos_discord": ["manage_messages", "manage_roles"],
+        "descripcion": "Reporta el resultado de un partido en un torneo suizo",
+        "tutorial": [
+            "Escribe `!reportar-swiss` en `#preguntale-a-el-barbas`.",
+            "Elige el torneo, elige los jugadores y el resultado (X-Y).",
+            "Solo pueden reportar los jugadores implicados o un admin.",
+            "El bot actualiza la clasificación automáticamente."
+        ]
+    },
+    {
+        "comando": "clasificacion-swiss",
+        "aliases": [],
+        "roles_permitidos": ["socio", "second-chance-socio", "miembro", "admin", "second-chance-miembro"],
+        "permisos_discord": ["manage_messages", "manage_roles"],
+        "descripcion": "Muestra la clasificación actual del torneo suizo",
+        "tutorial": [
+            "Escribe `!clasificacion-swiss` en `#preguntale-a-el-barbas`.",
+            "Elige el torneo.",
+            "Se te muestra la clasificación por DM."
+        ]
+    },
+    {
+        "comando": "partidos-pendientes",
+        "aliases": ["partidos pendientes", "partidos_pendientes"],
+        "roles_permitidos": ["socio", "second-chance-socio", "miembro", "admin", "second-chance-miembro"],
+        "permisos_discord": ["manage_messages", "manage_roles"],
+        "descripcion": "Muestra los partidos pendientes de la ronda actual",
+        "tutorial": [
+            "Escribe `!partidos-pendientes` en `#preguntale-a-el-barbas`.",
+            "Elige el torneo.",
+            "El bot lista los partidos sin resultado de la ronda actual."
+        ]
+    },
+
+    # ============================================================
+    # JUGADOR - AGENDA
+    # ============================================================
+    {
+        "comando": "agendar-partida",
+        "aliases": ["agendar partida", "agendar_partida"],
+        "roles_permitidos": ["socio", "second-chance-socio", "miembro", "admin", "second-chance-miembro"],
+        "permisos_discord": ["manage_messages", "manage_roles"],
+        "descripcion": "Agenda una partida entre dos jugadores",
+        "tutorial": [
+            "Escribe `!agendar-partida` en `#preguntale-a-el-barbas`.",
+            "El bot te pedirá por DM: fecha (DD/MM/YYYY), hora (HH:MM) y los dos jugadores.",
+            "La partida se publica en `#partidos-agendados` y se notifica por DM a los implicados."
+        ]
+    },
+    {
+        "comando": "modificar-agenda",
+        "aliases": ["modificar agenda", "modificar_agenda"],
+        "roles_permitidos": ["socio", "second-chance-socio", "miembro", "admin", "second-chance-miembro"],
+        "permisos_discord": ["manage_messages", "manage_roles"],
+        "descripcion": "Modifica o elimina una partida agendada",
+        "tutorial": [
+            "Escribe `!modificar-agenda` en `#preguntale-a-el-barbas`.",
+            "El bot te muestra tus partidas agendadas. Elige una.",
+            "Podrás modificar fecha, hora, jugadores, o eliminarla."
+        ]
+    },
+    {
+        "comando": "eventos-hoy",
+        "aliases": ["eventos hoy", "eventos_hoy"],
+        "roles_permitidos": ["socio", "second-chance-socio", "miembro", "admin", "second-chance-miembro"],
+        "permisos_discord": ["manage_messages", "manage_roles"],
+        "descripcion": "Muestra los eventos programados para hoy",
+        "tutorial": [
+            "Escribe `!eventos-hoy` en `#preguntale-a-el-barbas`.",
+            "El bot te envía por DM la lista de partidas agendadas para hoy."
+        ]
+    },
+
+    # ============================================================
+    # JUGADOR - BATTLE ROYALE
+    # ============================================================
+    {
+        "comando": "iniciar-battle",
+        "aliases": ["iniciar battle", "iniciar_battle"],
+        "roles_permitidos": ["socio", "second-chance-socio", "miembro", "admin", "second-chance-miembro"],
+        "permisos_discord": ["manage_messages", "manage_roles"],
+        "descripcion": "Inicia un enfrentamiento de tipo Battle Royale",
+        "tutorial": [
+            "Escribe `!iniciar-battle` en `#preguntale-a-el-barbas`.",
+            "Elige el torneo Battle y los dos jugadores.",
+            "El bot comprueba que no hayan jugado ya 2 veces y registra la batalla en `#batallas-iniciadas`."
+        ]
+    },
+    {
+        "comando": "reportar-resultado-battle",
+        "aliases": ["reportar resultado battle", "reportar_resultado_battle"],
+        "roles_permitidos": ["socio", "second-chance-socio", "miembro", "admin", "second-chance-miembro"],
+        "permisos_discord": ["manage_messages", "manage_roles"],
+        "descripcion": "Reporta el resultado de un enfrentamiento Battle Royale",
+        "tutorial": [
+            "Escribe `!reportar-resultado-battle` en `#preguntale-a-el-barbas`.",
+            "Elige el torneo, los jugadores y el resultado (X-Y).",
+            "El bot actualiza la clasificación del Battle."
+        ]
+    },
+
+    # ============================================================
+    # JUGADOR - ESTADÍSTICAS
+    # ============================================================
+    {
+        "comando": "cartas-mas-jugadas",
+        "aliases": ["cartas mas jugadas", "cartas_mas_jugadas"],
+        "roles_permitidos": ["socio", "second-chance-socio", "miembro", "admin", "second-chance-miembro"],
+        "permisos_discord": ["manage_messages", "manage_roles"],
+        "descripcion": "Muestra las cartas más jugadas en un torneo o en todos",
+        "tutorial": [
+            "Escribe `!cartas-mas-jugadas` en `#preguntale-a-el-barbas`.",
+            "Elige un torneo completado o `todos`.",
+            "El bot genera un gráfico tipo donut con las cartas más jugadas (sin tierras básicas)."
+        ]
+    },
+    {
+        "comando": "best-decks",
+        "aliases": ["best decks", "best_decks"],
+        "roles_permitidos": ["socio", "second-chance-socio", "miembro", "admin", "second-chance-miembro"],
+        "permisos_discord": ["manage_messages", "manage_roles"],
+        "descripcion": "Analiza los mejores decks de un torneo (top 4 + último)",
+        "tutorial": [
+            "Escribe `!best-decks` en `#preguntale-a-el-barbas`.",
+            "Elige el torneo.",
+            "El bot muestra los decks del top 4 y del último clasificado."
+        ]
+    },
+    {
+        "comando": "stats",
+        "aliases": [],
+        "roles_permitidos": ["socio", "second-chance-socio", "miembro", "admin", "second-chance-miembro"],
+        "permisos_discord": ["manage_messages", "manage_roles"],
+        "descripcion": "Muestra tus estadísticas globales en los torneos",
+        "tutorial": [
+            "Escribe `!stats` en `#preguntale-a-el-barbas`.",
+            "El bot genera gráficos (winrate, arquetipos, oponentes) y un análisis personalizado."
+        ]
+    },
+
+    # ============================================================
+    # JUGADOR - PETICIONES
+    # ============================================================
+    {
+        "comando": "nueva-peticion",
+        "aliases": ["nueva peticion", "nueva_peticion"],
+        "roles_permitidos": ["socio", "second-chance-socio", "miembro", "admin", "second-chance-miembro"],
+        "permisos_discord": ["manage_messages", "manage_roles"],
+        "descripcion": "Crea una nueva petición o sugerencia al equipo",
+        "tutorial": [
+            "Escribe `!nueva-peticion <descripción>` en `#preguntale-a-el-barbas`.",
+            "Si no incluyes descripción, el bot te la pedirá por DM.",
+            "Se publica en `#peticiones-de-usuarios` con un código único."
+        ]
+    },
+
+    # ============================================================
+    # GENERAL
+    # ============================================================
+    {
+        "comando": "mis-comandos",
+        "aliases": ["mis comandos", "mis_comandos", "comandos", "comandios", "comandiox"],
+        "roles_permitidos": ["socio", "second-chance-socio", "miembro", "admin", "second-chance-miembro"],
+        "permisos_discord": [],
+        "descripcion": "Abre el asistente para buscar un comando y ver su tutorial",
+        "tutorial": [
+            "Escribe `!mis-comandos` en `#preguntale-a-el-barbas`.",
+            "El bot te abre un asistente por DM: te muestra la lista de comandos disponibles.",
+            "Responde con el número o nombre del comando.",
+            "El bot te muestra su descripción y te pregunta si quieres un tutorial paso a paso."
+        ]
+    },
 ]
+
 BLACKLIST_USERS = [
     690865294117306398,
     747176417745305672,

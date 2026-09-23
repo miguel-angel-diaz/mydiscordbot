@@ -81,7 +81,7 @@ from utils.swiss_handle import (
 )
 
 from utils.watchers import cargar_tareas;
-from utils.stats import stats_handle;
+
 from utils.commons import best_decks_handle;
 
 DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
@@ -219,17 +219,17 @@ async def nueva_peticion(ctx, *, descripcion: str = None):
     """Crea una nueva petición - !nueva-peticion"""
     await nueva_peticion_handle(ctx, descripcion)
 
-@bot.command(name="inscribirse")
-@comando_roles_permitidos("socio", "second-chance-socio", "miembro", "second-chance-miembro")
-async def inscribirse(ctx, codigo: str = None, usuario: discord.Member = None):
-    """Inscribe a un usuario en un torneo - !inscribirse"""
-    await inscribirse_handler(ctx, codigo, usuario)
+# @bot.command(name="inscribirse")
+# @comando_roles_permitidos("socio", "second-chance-socio", "miembro", "second-chance-miembro")
+# async def inscribirse(ctx, codigo: str = None, usuario: discord.Member = None):
+#     """Inscribe a un usuario en un torneo - !inscribirse"""
+#     await inscribirse_handler(ctx, codigo, usuario)
 
-@bot.command(name="desinscribirse")
-@comando_roles_permitidos("socio", "second-chance-socio", "miembro", "second-chance-miembro")
-async def desinscribirse(ctx, codigo: str = None, usuario: discord.Member = None):
-    """Desinscribe a un usuario de un torneo - !desinscribirse"""
-    await desinscribirse_handler(ctx, codigo, usuario)
+# @bot.command(name="desinscribirse")
+# @comando_roles_permitidos("socio", "second-chance-socio", "miembro", "second-chance-miembro")
+# async def desinscribirse(ctx, codigo: str = None, usuario: discord.Member = None):
+#     """Desinscribe a un usuario de un torneo - !desinscribirse"""
+#     await desinscribirse_handler(ctx, codigo, usuario)
 
 @bot.command(name="ver-inscritos",
     aliases=["ver inscritos", "ver_inscritos"])
@@ -238,19 +238,19 @@ async def ver_inscritos(ctx, codigo=None):
     """Muestra los inscritos en un torneo - !ver-inscritos"""
     await ver_inscritos_handler(ctx, codigo)
 
-@bot.command(name="reportar-resultado",
-    aliases=["reportar resultado", "reportar_resultado"])
-@comando_roles_permitidos("socio", "second-chance-socio", "miembro", "second-chance-miembro")
-async def reportar_resultado(ctx, codigo_torneo: str = None, jugador1: discord.Member = None, resultado: str = None, jugador2: discord.Member = None):
-    """Reporta el resultado de un partido de un torneo - !reportar-resultado"""
-    await reportar_resultado_handle(ctx, codigo_torneo, jugador1, resultado, jugador2)
+# @bot.command(name="reportar-resultado",
+#     aliases=["reportar resultado", "reportar_resultado"])
+# @comando_roles_permitidos("socio", "second-chance-socio", "miembro", "second-chance-miembro")
+# async def reportar_resultado(ctx, codigo_torneo: str = None, jugador1: discord.Member = None, resultado: str = None, jugador2: discord.Member = None):
+#     """Reporta el resultado de un partido de un torneo - !reportar-resultado"""
+#     await reportar_resultado_handle(ctx, codigo_torneo, jugador1, resultado, jugador2)
 
-@bot.command(name="modificar-resultado",
-    aliases=["modificar resultado", "modificar_resultado"])
-@comando_roles_permitidos("socio", "second-chance-socio", "miembro", "second-chance-miembro")
-async def modificar_resultado(ctx, codigo: str = None):
-    """Permite cambiar el resultado de un encuentro mientras la ronda siga en juego - !modificar-resultado"""
-    await modificar_resultado_handle(ctx, codigo)
+# @bot.command(name="modificar-resultado",
+#     aliases=["modificar resultado", "modificar_resultado"])
+# @comando_roles_permitidos("socio", "second-chance-socio", "miembro", "second-chance-miembro")
+# async def modificar_resultado(ctx, codigo: str = None):
+#     """Permite cambiar el resultado de un encuentro mientras la ronda siga en juego - !modificar-resultado"""
+#     await modificar_resultado_handle(ctx, codigo)
 
 @bot.command(name="iniciar-battle",
     aliases=["iniciar battle", "iniciar_battle"])
@@ -293,12 +293,6 @@ async def editar_deck(ctx, codigo: str = None):
     """Permite editar la lista que has subido para jugar un torneo - !editar-deck"""
     await editar_deck_handle(ctx, codigo)
 
-@bot.command(name="stats")
-@comando_roles_permitidos("socio", "second-chance-socio", "miembro", "second-chance-miembro")
-async def stats(ctx):
-    """Inicia el wizard de estadísticas - !stats"""
-    await stats_handle(ctx)
-
 @bot.command(name="cartas-mas-jugadas", 
     aliases=["cartas mas jugadas","cartas_mas_jugadas"])
 @comando_roles_permitidos("socio", "second-chance-socio", "miembro", "second-chance-miembro")
@@ -318,26 +312,26 @@ async def best_decks(ctx, codigo_torneo: str = None):
 ######################################### COMANDOS TORNEOS ##############################################
 
 
-@bot.command(name="nuevo-torneo",
-    aliases=["nuevo torneo", "nuevo_torneo"])
-@comando_roles_permitidos("admin")
-async def new_tournament(ctx, *, args=None):
-    """Crea un nuevo torneo en Challonge -!nuevo-torneo Nombre | Formato | tipo | Jugadores | Fecha | Roles_permitidos | DeckURL"""
-    await new_tournament_assistance_handle(ctx, args=args)
+# @bot.command(name="nuevo-torneo",
+#     aliases=["nuevo torneo", "nuevo_torneo"])
+# @comando_roles_permitidos("admin")
+# async def new_tournament(ctx, *, args=None):
+#     """Crea un nuevo torneo en Challonge -!nuevo-torneo Nombre | Formato | tipo | Jugadores | Fecha | Roles_permitidos | DeckURL"""
+#     await new_tournament_assistance_handle(ctx, args=args)
 
-@bot.command(name="iniciar-torneo",
-    aliases=["iniciar torneo", "iniciar_torneo"])
-@comando_roles_permitidos("admin")
-async def iniciar_torneo(ctx, codigo_torneo: str = None):
-    """Inicia un torneo con el código proporcionado - !iniciar-torneo <código_torneo>"""
-    await iniciar_torneo_handle(ctx, codigo_torneo)
+# @bot.command(name="iniciar-torneo",
+#     aliases=["iniciar torneo", "iniciar_torneo"])
+# @comando_roles_permitidos("admin")
+# async def iniciar_torneo(ctx, codigo_torneo: str = None):
+#     """Inicia un torneo con el código proporcionado - !iniciar-torneo <código_torneo>"""
+#     await iniciar_torneo_handle(ctx, codigo_torneo)
 
-@bot.command(name="iniciar-torneo-battle",
-    aliases=["iniciar torneo battle", "iniciar_torneo_battle"])
-@comando_roles_permitidos("admin")
-async def iniciar_torneo_battle(ctx, codigo_torneo: str = None):
-    """Inicia un torneo de tipo battle con el código proporcionado - !iniciar-torneo-battle <código_torneo>"""
-    await iniciar_torneo_battle_handle(ctx, codigo_torneo)
+# @bot.command(name="iniciar-torneo-battle",
+#     aliases=["iniciar torneo battle", "iniciar_torneo_battle"])
+# @comando_roles_permitidos("admin")
+# async def iniciar_torneo_battle(ctx, codigo_torneo: str = None):
+#     """Inicia un torneo de tipo battle con el código proporcionado - !iniciar-torneo-battle <código_torneo>"""
+#     await iniciar_torneo_battle_handle(ctx, codigo_torneo)
 
 
 @bot.command(name="actualizar-clasificacion",
@@ -361,11 +355,11 @@ async def forzar_ronda(ctx, codigo_torneo: str = None):
     """Se termina la rondar actual con empate de las partidas no jugadas y se inicia la siguiente - !forzar-ronda <código_torneo>"""
     await forzar_ronda_handle(ctx, codigo_torneo)
 
-@bot.command(name="eliminar-torneo",
-    aliases=["eliminar torneo", "eliminar_torneo"])
-@comando_roles_permitidos("admin")
-async def listar_torneos(ctx):
-        await listar_torneos_handle(ctx)
+# @bot.command(name="eliminar-torneo",
+#     aliases=["eliminar torneo", "eliminar_torneo"])
+# @comando_roles_permitidos("admin")
+# async def listar_torneos(ctx):
+#         await listar_torneos_handle(ctx)
 
 @bot.command(name="reportar-torneo",
     aliases=["reportar torneo", "reportar_torneo"])
@@ -378,50 +372,42 @@ async def tournament_report(ctx):
 async def actualizar_web(ctx):
     await actualizar_web_handle(ctx)
 
-
-
 @bot.command(name="sincronizar-estado")
 @commands.has_permissions(administrator=True)
 async def sincronizar_estado(ctx):
     await sincronizar_estado_handle(ctx)
 
-
-
 #####################################################################################################
 
-@bot.command(name="nuevo-swiss")
+@bot.command(name="nuevo-swiss", aliases=["nuevo torneo", "nuevo_torneo", "nuevo-torneo"])
 @commands.has_permissions(administrator=True)
 async def nuevo_swiss(ctx):
     await swiss_nuevo_asistente_handle(ctx)
 
-@bot.command(name="inscribir-swiss")
+@bot.command(name="inscribir-swiss", aliases=["inscribir swiss", "inscribir_swiss", "inscribirse", "inscribir"])
 async def inscribir_swiss(ctx):
     await swiss_inscribir_asistente_handle(ctx)
 
-@bot.command(name="desinscribir-swiss")
+@bot.command(name="desinscribir-swiss", aliases=["desinscribir swiss", "desinscribir_swiss", "desinscribirse", "desinscribir"])
 async def desinscribir_swiss(ctx):
     await swiss_desinscribir_asistente_handle(ctx)
 
-@bot.command(name="lista-inscritos-swiss")
-async def lista_inscritos_swiss(ctx, codigo: str = None):
-    await swiss_lista_inscritos_asistente_handle(ctx)
-
-@bot.command(name="iniciar-swiss")
+@bot.command(name="iniciar-swiss", aliases=["iniciar torneo", "iniciar_torneo", "iniciar-torneo"])
 @commands.has_permissions(administrator=True)
 async def iniciar_swiss(ctx):
     await swiss_iniciar_asistente_handle(ctx)
 
-@bot.command(name="reiniciar-swiss")
+@bot.command(name="reiniciar-swiss", aliases=["reiniciar torneo", "reiniciar_torneo", "reiniciar-torneo"])
 @commands.has_permissions(administrator=True)
 async def reiniciar_swiss(ctx):
     await swiss_reiniciar_asistente_handle(ctx)
 
-@bot.command(name="reportar-swiss")
+@bot.command(name="reportar-swiss", aliases=["reportar resultado", "reportar_resultado", "reportar-resultado"])
 async def reportar_swiss(ctx):
     await swiss_reportar_asistente_handle(ctx)
 
 @bot.command(name="modificar-resultado-swiss",
-    aliases=["modificar resultado swiss", "modificar_resultado_swiss"])
+    aliases=["modificar resultado swiss", "modificar_resultado_swiss", "modificar-resultado", "modificar resultado", "modificar_resultado"])
 @commands.has_permissions(administrator=True)
 async def modificar_resultado_swiss(ctx):
     await swiss_modificar_resultado_asistente_handle(ctx)
@@ -435,7 +421,7 @@ async def clasificacion_swiss(ctx):
 async def siguiente_ronda_swiss(ctx):
     await swiss_siguiente_ronda_asistente_handle(ctx)
 
-@bot.command(name="eliminar-swiss")
+@bot.command(name="eliminar-swiss", aliases=["eliminar torneo", "eliminar_torneo", "eliminar-torneo"])
 @commands.has_permissions(administrator=True)
 async def eliminar_swiss(ctx):
     await swiss_eliminar_asistente_handle(ctx)
@@ -453,10 +439,6 @@ async def finalizar_swiss(ctx):
 
 #####################################################################################################
 
-
-
-
-#########################################################################################################
 
 @bot.command(name="mis-comandos",
     aliases=["mis comandos", "mis_comandos", "comandos", "comandios", "comandiox"])
