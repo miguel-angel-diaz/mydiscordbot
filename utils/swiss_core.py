@@ -165,79 +165,62 @@ async def generar_ronda(bot, codigo: str) -> Tuple[bool, str]:
     rondas = rondas_data.get("rondas", []) if rondas_data else []
 
     stats = await _calcular_stats_completos(bot, codigo, participantes, rondas)
-
-    ordenados = sorted(
-        participantes,
-        key=lambda pid: (-stats[pid]["mp"], -stats[pid]["omw"])
-    )
-
     historial = _cargar_historial_emparejamientos(rondas)
-    usados = set()
-    emparejamientos = []
+    jugadores_con_bye = _jugadores_con_bye(rondas)
 
-    # Agrupar por puntos
-    grupos = {}
-    for pid in ordenados:
+    # ============================================================
+    # AGRUPAR POR PUNTOS
+    # ============================================================
+    grupos: Dict[float, List[str]] = {}
+    for pid in participantes:
         mp = stats[pid]["mp"]
         grupos.setdefault(mp, []).append(pid)
 
-    sin_emparejar = []
+    puntos_ordenados = sorted(grupos.keys(), reverse=True)
 
-    for mp in sorted(grupos.keys(), reverse=True):
-        grupo = grupos[mp]
-        if sin_emparejar:
-            grupo = sin_emparejar + grupo
-            sin_emparejar = []
+    emparejamientos: List[dict] = []
+    usados: Set[str] = set()
+    flotantes: List[str] = []
 
-        grupo.sort(key=lambda pid: (-stats[pid]["omw"], -stats[pid].get("dif", 0)))
+    # ============================================================
+    # EMPAREJAR GRUPO POR GRUPO (con floating)
+    # ============================================================
+    for mp in puntos_ordenados:
+        pool = flotantes + grupos[mp]
+        flotantes = []
 
-        i = 0
-        max_intentos = len(grupo) * 3
-        intentos = 0
-        while i < len(grupo) and intentos < max_intentos:
-            intentos += 1
-            if i + 1 < len(grupo):
-                j1 = grupo[i]
-                j2 = grupo[i+1]
-                if historial.get(j1, {}).get(j2, 0) == 0:
-                    emparejamientos.append({"j1": j1, "j2": j2, "resultado": None})
-                    usados.add(j1)
-                    usados.add(j2)
-                    i += 2
-                    intentos = 0
-                else:
-                    grupo.append(grupo.pop(i+1))
-            else:
-                sin_emparejar.append(grupo[i])
-                i += 1
-                intentos = 0
+        emparejados, sobrantes = _emparejar_pool(
+            pool, historial, stats, jugadores_con_bye
+        )
 
-        if i < len(grupo):
-            sin_emparejar.extend(grupo[i:])
-
-    # Emparejar los que quedaron sin pareja
-    if sin_emparejar:
-        while len(sin_emparejar) >= 2:
-            j1 = sin_emparejar.pop(0)
-            j2 = sin_emparejar.pop(0)
+        for j1, j2 in emparejados:
             emparejamientos.append({"j1": j1, "j2": j2, "resultado": None})
             usados.add(j1)
             usados.add(j2)
-        if sin_emparejar:
-            bye_player = sin_emparejar[0]
-            emparejamientos.append({"j1": bye_player, "j2": None, "resultado": "BYE"})
-            usados.add(bye_player)
 
+        flotantes = sobrantes
+
+    # ============================================================
+    # SI QUEDAN FLOTANTES AL FINAL → BYE
+    # ============================================================
+    for pid in flotantes:
+        emparejamientos.append({"j1": pid, "j2": None, "resultado": "BYE"})
+        usados.add(pid)
+
+    # Seguridad: cualquier jugador no emparejado recibe BYE
     for pid in participantes:
         if pid not in usados:
             emparejamientos.append({"j1": pid, "j2": None, "resultado": "BYE"})
             usados.add(pid)
 
+    # ============================================================
+    # GUARDAR RONDA
+    # ============================================================
     nueva_ronda = torneo.get("ronda_actual", 0) + 1
     ronda_data = {
         "numero": nueva_ronda,
         "emparejamientos": emparejamientos,
-        "completa": False
+        "completa": False,
     }
     rondas.append(ronda_data)
     await guardar_rondas(bot, codigo, {"codigo": codigo, "rondas": rondas})
@@ -678,3 +661,152 @@ async def publicar_clasificacion_swiss(bot, guild, codigo: str):
             chunks.append("\n".join(chunk_lines))
         for chunk in chunks:
             await canal_ranking.send(chunk)
+
+from typing import List, Dict, Tuple, Optional, Set
+from collections import defaultdict
+
+
+def _cargar_historial_emparejamientos(rondas: List[dict]) -> Dict[str, Dict[str, int]]:
+    """Devuelve un diccionario {j1: {j2: veces}} con todos los enfrentamientos previos."""
+    historial = defaultdict(lambda: defaultdict(int))
+    for ronda in rondas:
+        for emp in ronda.get("emparejamientos", []):
+            j1 = emp["j1"]
+            j2 = emp.get("j2")
+            if j2 is not None:
+                historial[j1][j2] += 1
+                historial[j2][j1] += 1
+    return historial
+
+
+def _jugadores_con_bye(rondas: List[dict]) -> Set[str]:
+    """Devuelve el conjunto de IDs de jugadores que ya han tenido un BYE."""
+    byes = set()
+    for ronda in rondas:
+        for emp in ronda.get("emparejamientos", []):
+            if emp.get("j2") is None:
+                byes.add(emp["j1"])
+    return byes
+
+
+def _buscar_emparejamiento(
+    jugadores: List[str],
+    historial: Dict[str, Dict[str, int]],
+    permitir_rematch: bool = False,
+    memo: Optional[Dict] = None,
+) -> Optional[List[Tuple[str, str]]]:
+    """
+    Backtracking con memoización para encontrar un emparejamiento completo
+    que evite rematches (o los permita como último recurso).
+
+    - Prueba a emparejar `jugadores[0]` con cada uno de los siguientes, en orden
+      de ranking (el orden de la lista importa: los mejores primero).
+    - Si `permitir_rematch=False`, solo acepta rivales sin historial previo.
+    - Si `permitir_rematch=True`, acepta cualquier rival (fallback).
+    - Memoiza por conjunto de jugadores restantes (frozenset) para evitar
+      recalcular subproblemas idénticos.
+
+    Devuelve lista de tuplas (j1, j2) o None si no hay solución.
+    """
+    if memo is None:
+        memo = {}
+
+    # Casos base
+    if len(jugadores) == 0:
+        return []
+    if len(jugadores) % 2 != 0:
+        return None  # Impar → no se puede emparejar
+
+    # Clave de memoización: el conjunto de jugadores restantes
+    clave = frozenset(jugadores)
+    if clave in memo:
+        return memo[clave]
+
+    j1 = jugadores[0]
+    resto = jugadores[1:]
+
+    for i, j2 in enumerate(resto):
+        ya_jugaron = historial.get(j1, {}).get(j2, 0) > 0
+
+        if ya_jugaron and not permitir_rematch:
+            continue
+
+        nuevos_restantes = resto[:i] + resto[i + 1:]
+        sub = _buscar_emparejamiento(
+            nuevos_restantes, historial, permitir_rematch, memo
+        )
+
+        if sub is not None:
+            resultado = [(j1, j2)] + sub
+            memo[clave] = resultado
+            return resultado
+
+    # Sin solución desde este estado
+    memo[clave] = None
+    return None
+
+
+def _emparejar_pool(
+    pool: List[str],
+    historial: Dict[str, Dict[str, int]],
+    stats: Dict[str, dict],
+    jugadores_con_bye: Set[str],
+) -> Tuple[List[Tuple[str, str]], List[str]]:
+    """
+    Empareja un pool de jugadores evitando rematches si es posible.
+    Devuelve (emparejamientos, sobrantes).
+
+    - Si el pool es impar, uno flota. Se elige al jugador de menor ranking
+      que NO haya tenido BYE previamente. Si todos han tenido, se elige al
+      de menor ranking.
+    - Primero intenta emparejamiento sin rematch (backtracking).
+    - Si falla, permite rematch (backtracking con permitir_rematch=True).
+    - Si aún falla (imposible matemáticamente), hace un emparejamiento
+      de emergencia adyacente.
+    """
+    if not pool:
+        return [], []
+
+    # Ordenar por ranking: mejor primero
+    pool_ordenado = sorted(
+        pool,
+        key=lambda pid: (
+            -stats[pid]["mp"],
+            -stats[pid]["omw"],
+            -stats[pid].get("dif", 0),
+        ),
+    )
+
+    # Si es impar, elegir quién flota
+    if len(pool_ordenado) % 2 == 1:
+        flotante = None
+        # Preferir al de menor ranking que no haya tenido BYE
+        for pid in reversed(pool_ordenado):
+            if pid not in jugadores_con_bye:
+                flotante = pid
+                break
+        # Si todos han tenido BYE, flotar al de menor ranking
+        if flotante is None:
+            flotante = pool_ordenado[-1]
+
+        a_emparejar = [p for p in pool_ordenado if p != flotante]
+    else:
+        flotante = None
+        a_emparejar = pool_ordenado
+
+    # Intento 1: sin rematch
+    resultado = _buscar_emparejamiento(a_emparejar, historial, permitir_rematch=False)
+
+    # Intento 2: permitir rematch como último recurso
+    if resultado is None:
+        resultado = _buscar_emparejamiento(a_emparejar, historial, permitir_rematch=True)
+
+    # Fallback extremo (no debería llegar aquí)
+    if resultado is None:
+        resultado = [
+            (a_emparejar[i], a_emparejar[i + 1])
+            for i in range(0, len(a_emparejar), 2)
+        ]
+
+    sobrantes = [flotante] if flotante else []
+    return resultado, sobrantes
