@@ -97,25 +97,41 @@ async def publicar_eventos_semanales(bot: commands.Bot):
         canal_origen = discord.utils.get(guild.text_channels, name="partidos-agendados")
         canal_proximas = discord.utils.get(guild.text_channels, name="🎭-cartelera‐proximas-partidas")
         if not canal_origen or not canal_proximas:
+            log(f"publicar_eventos_semanales: faltan canales en {guild.name} (origen={bool(canal_origen)}, proximas={bool(canal_proximas)})")
             continue
+
         hoy_date = hoy()
         inicio_semana = hoy_date - timedelta(days=hoy_date.weekday())
         fin_semana = inicio_semana + timedelta(days=6)
+        log(f"[DEBUG] {guild.name} → hoy={hoy_date} | semana: {inicio_semana} → {fin_semana}")
+
         eventos = []
         patron = re.compile(r"\[EVENTO\]\s+(\d{2}/\d{2}/\d{4})\s+(\d{2}:\d{2})\s+\|\s+(.+?)\s+vs\s+(.+?)\s+\|")
+
+        total_mensajes = 0
         async for mensaje in canal_origen.history(limit=300):
             if not mensaje.content.startswith("📅 [EVENTO]"):
                 continue
+            total_mensajes += 1
             match = patron.search(mensaje.content)
             if not match:
+                log(f"[DEBUG] Mensaje sin match: {mensaje.content[:80]}")
                 continue
             fecha_str, hora_str, j1, j2 = match.groups()
             try:
                 fecha = datetime.strptime(fecha_str, "%d/%m/%Y").date()
-                if inicio_semana <= fecha <= fin_semana:
-                    eventos.append((fecha, hora_str, j1.strip(), j2.strip()))
-            except:
+            except Exception as e:
+                log(f"[DEBUG] Fecha inválida '{fecha_str}': {e}")
                 continue
+
+            en_rango = inicio_semana <= fecha <= fin_semana
+            log(f"[DEBUG] Evento detectado: {fecha} {hora_str} | {j1.strip()} vs {j2.strip()} → en_rango={en_rango}")
+
+            if en_rango:
+                eventos.append((fecha, hora_str, j1.strip(), j2.strip()))
+
+        log(f"[DEBUG] {guild.name}: {total_mensajes} mensajes [EVENTO] escaneados, {len(eventos)} dentro de la semana actual")
+
         # Buscar mensaje existente
         mensaje_existente = None
         async for msg in canal_proximas.history(limit=50):
@@ -123,6 +139,7 @@ async def publicar_eventos_semanales(bot: commands.Bot):
                 if msg.embeds[0].title == "📅 Partidas programadas esta semana":
                     mensaje_existente = msg
                     break
+
         # Crear o actualizar embed
         if not eventos:
             embed = discord.Embed(
@@ -138,10 +155,14 @@ async def publicar_eventos_semanales(bot: commands.Bot):
                     value=f"{j1} vs {j2}",
                     inline=False
                 )
+
         if mensaje_existente:
             await mensaje_existente.edit(embed=embed)
+            log(f"[DEBUG] Embed actualizado con {len(eventos)} eventos")
         else:
             await canal_proximas.send(embed=embed)
+            log(f"[DEBUG] Embed creado con {len(eventos)} eventos")
+
         log(f"publicar_eventos_semanales: {len(eventos)} eventos en {guild.name}")
 
 # ============================================================

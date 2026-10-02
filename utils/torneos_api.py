@@ -764,10 +764,8 @@ async def api_estado_torneos(request):
                 "deck_subido": deck_subido,
                 "deck_edited": deck_edited,
                 "tiene_deck": deck_subido,
-                "puede_editar": (
-                    t.get("estado") == "abierto" or
-                    (t.get("estado") == "en desarrollo" and deck_edited < 1)
-                ) if deck_subido else False,
+                # 🔒 REGLA ÚNICA: solo puede editar si tiene deck y NO ha editado aún
+                "puede_editar": (deck_edited < 1) if deck_subido else False,
                 "puede_inscribirse": not inscrito and t.get("estado") == "abierto",
                 "puede_desinscribirse": inscrito and t.get("estado") == "abierto"
             })
@@ -820,6 +818,7 @@ async def api_inscribirse(request):
     response.headers['Access-Control-Allow-Origin'] = '*'
     return response
 
+
 async def api_editar_deck(request):
     try:
         body = await request.json()
@@ -852,6 +851,20 @@ async def api_editar_deck(request):
     miembro = guild.get_member(int(discord_id))
     if not miembro:
         return web.json_response({"error": "No se pudo verificar tu membresía en el servidor"}, status=403)
+
+    # 🔒 COMPROBAR QUE EL DECK NO HA SIDO EDITADO YA
+    codigo_deck = f"{codigo_torneo}_{discord_id}"
+    deck_existente = await obtener_deck_en_canal(guild, codigo_deck)
+
+    if not deck_existente:
+        return web.json_response({"error": "No tienes ningún deck subido para este torneo."}, status=400)
+
+    edited = deck_existente.get("edited", 0)
+    if edited >= 1:
+        return web.json_response(
+            {"error": "Ya has usado tu única edición disponible (1/1). No puedes editar más."},
+            status=400
+        )
 
     # 🔹 Determinar formato
     from utils.torneos_estado import obtener_torneo_estado

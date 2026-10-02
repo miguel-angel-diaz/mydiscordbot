@@ -528,7 +528,6 @@ async def best_decks_handle(ctx, codigo_torneo: str = None, channel: str = None)
 # ============================================================
 # OBTENER DECK EN CANAL
 # ============================================================
-
 async def obtener_deck_en_canal(guild: discord.Guild, codigo_deck: str):
     """
     Busca en el canal 'submitted-decks' un deck con el código dado.
@@ -558,9 +557,10 @@ async def obtener_deck_en_canal(guild: discord.Guild, codigo_deck: str):
 
                 id_torneo, jugador_id = partes
 
-                # ✅ Extraer el campo "edited" o "ediciones post-inicio"
+                # ✅ Extraer el campo "edited" buscando las distintas variantes de etiqueta
+                # Soportamos: "ediciones", "ediciones post-inicio", "edited"
                 edited = 0
-                for field_name in ["edited", "ediciones post-inicio"]:
+                for field_name in ["ediciones", "ediciones post-inicio", "edited"]:
                     if field_name in campos:
                         try:
                             valor = campos[field_name]
@@ -1345,14 +1345,18 @@ async def editar_deck_web(guild, member: discord.Member, codigo_torneo: str, for
 
     edited_actual = deck_actual.get("edited", 0)
 
-    if not ok_validacion:
-        if edited_actual >= 1:
-            return False, f"No puedes editar tu deck: ya usaste tu única edición disponible. {mensaje_validacion}"
-        nuevo_edited = edited_actual + 1
-    else:
-        nuevo_edited = edited_actual
+    # 🔒 BLOQUEO GLOBAL: Si ya editó una vez, no puede volver a editar (sin importar el estado)
+    if edited_actual >= 1:
+        return False, (
+            "No puedes editar tu deck: ya usaste tu única edición disponible (1/1).\n"
+            f"{mensaje_validacion}"
+        )
 
-    color_embed = discord.Color.blue() if nuevo_edited == 0 else discord.Color.orange()
+    # 📊 SIEMPRE INCREMENTAMOS EL CONTADOR
+    nuevo_edited = edited_actual + 1
+
+    # 🎨 COLOR DEL EMBED: Naranja porque ya usó su edición
+    color_embed = discord.Color.orange()
 
     embed_final = discord.Embed(
         title=f"🃏 Deck Actualizado: {nombre_deck}",
@@ -1367,7 +1371,7 @@ async def editar_deck_web(guild, member: discord.Member, codigo_torneo: str, for
     embed_final.add_field(name="Archetype", value=archetype, inline=False)
     embed_final.add_field(name="Decklist", value=decklist[:1000], inline=False)
     embed_final.add_field(name="Sideboard", value=sideboard[:1000], inline=False)
-    embed_final.add_field(name="Ediciones post-inicio", value=f"{nuevo_edited}/1", inline=False)
+    embed_final.add_field(name="Ediciones", value=f"{nuevo_edited}/1", inline=False)
 
     fecha_legible = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     embed_final.set_footer(text=f"Última edición: {fecha_legible} (vía web)")
@@ -1381,7 +1385,7 @@ async def editar_deck_web(guild, member: discord.Member, codigo_torneo: str, for
     except discord.Forbidden:
         return False, "No tengo permisos para editar el mensaje del deck."
 
-    return True, mensaje_validacion
+    return True, "✅ Deck actualizado correctamente. Has usado tu única edición disponible."
 
 def tiene_rol_permitido(member: discord.Member, roles_permitidos: set):
     return any(role.name in roles_permitidos for role in member.roles)

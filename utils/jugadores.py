@@ -1893,46 +1893,61 @@ async def editar_deck_handle(ctx, codigo_torneo: str = None):
         await subir_deck_desde_edicion(ctx, author, codigo_torneo, ok_validacion, mensaje_validacion)
         return
 
-    # ✅ DECK ENCONTRADO: CONTINUAR CON EDICIÓN NORMAL
+    # ✅ DECK ENCONTRADO: COMPROBAR SI YA EDITÓ
     edited = deck_existente.get("edited", 0)
     mensaje_deck = deck_existente.get("mensaje")
 
+    # 🔒 BLOQUEO GLOBAL: Si ya editó una vez, no puede volver a editar
+    if edited >= 1:
+        await author.send(
+            "❌ **No puedes editar tu deck**\n\n"
+            "Ya has usado tu única edición disponible (1/1).\n"
+            "El deck quedará bloqueado hasta que finalice el torneo."
+        )
+        return
+
+    # Si es la primera edición, avisar según el estado del torneo
     if not ok_validacion:
-        # El torneo ya comenzó: verificar ediciones disponibles
-        if edited >= 1:
-            await author.send(
-                "❌ **No puedes editar tu deck**\n\n"
-                "El torneo ya ha comenzado y **ya usaste tu única edición disponible** (1/1).\n"
-                f"ℹ️ {mensaje_validacion}"
-            )
-            return
-        else:
-            await author.send(
-                "⚠️ **AVISO IMPORTANTE**\n\n"
-                "El torneo **ya ha comenzado**, pero aún tienes **1 edición disponible**.\n"
-                "⚡ Esta será tu **última oportunidad** para modificar el deck.\n"
-                f"ℹ️ {mensaje_validacion}\n\n"
-                "¿Deseas continuar? (Escribe `continuar` o espera 30 segundos para cancelar)"
-            )
+        # Torneo ya comenzado
+        await author.send(
+            "⚠️ **AVISO IMPORTANTE**\n\n"
+            "El torneo **ya ha comenzado**, pero aún tienes **1 edición disponible**.\n"
+            "⚡ Esta será tu **última oportunidad** para modificar el deck.\n"
+            f"ℹ️ {mensaje_validacion}\n\n"
+            "¿Deseas continuar? (Escribe `continuar` o espera 30 segundos para cancelar)"
+        )
 
-            def dm_check(m):
-                return m.author == author and isinstance(m.channel, discord.DMChannel)
+        def dm_check(m):
+            return m.author == author and isinstance(m.channel, discord.DMChannel)
 
-            try:
-                msg = await ctx.bot.wait_for("message", check=dm_check, timeout=30.0)
-                if msg.content.strip().lower() != "continuar":
-                    await author.send("❌ Edición cancelada.")
-                    return
-            except asyncio.TimeoutError:
-                await author.send("⏰ Tiempo agotado. Edición cancelada.")
+        try:
+            msg = await ctx.bot.wait_for("message", check=dm_check, timeout=30.0)
+            if msg.content.strip().lower() != "continuar":
+                await author.send("❌ Edición cancelada.")
                 return
+        except asyncio.TimeoutError:
+            await author.send("⏰ Tiempo agotado. Edición cancelada.")
+            return
     else:
-        # El torneo NO ha comenzado: ediciones ilimitadas
+        # Torneo abierto, primera edición
         await author.send(
             f"✅ **Edición permitida**\n\n"
             f"{mensaje_validacion}\n"
-            "Puedes editar tu deck libremente hasta que comience el torneo."
+            "⚠️ **Recuerda:** solo puedes editar tu deck UNA VEZ, sea cual sea el estado del torneo.\n"
+            "¿Deseas continuar? (Escribe `continuar` o espera 30 segundos para cancelar)"
         )
+
+        def dm_check(m):
+            return m.author == author and isinstance(m.channel, discord.DMChannel)
+
+        try:
+            msg = await ctx.bot.wait_for("message", check=dm_check, timeout=30.0)
+            if msg.content.strip().lower() != "continuar":
+                await author.send("❌ Edición cancelada.")
+                return
+        except asyncio.TimeoutError:
+            await author.send("⏰ Tiempo agotado. Edición cancelada.")
+            return
 
     # 🔹 Continuar flujo normal de edición
     datos = await deck_dm_flow(ctx, author, codigo_torneo, modo="editar")
@@ -1943,14 +1958,11 @@ async def editar_deck_handle(ctx, codigo_torneo: str = None):
 
     nombre_deck, formato, archetype, decklist, sideboard, _ = datos
 
-    # 📊 CALCULAR nuevo valor de Edited
-    if not ok_validacion:
-        nuevo_edited = edited + 1
-    else:
-        nuevo_edited = edited
+    # 📊 SIEMPRE INCREMENTAMOS EL CONTADOR
+    nuevo_edited = edited + 1
 
-    # 🎨 CREAR EMBED FINAL
-    color_embed = discord.Color.blue() if nuevo_edited == 0 else discord.Color.orange()
+    # 🎨 COLOR DEL EMBED: Naranja porque ya usó su edición
+    color_embed = discord.Color.orange()
 
     embed_final = discord.Embed(
         title=f"🃏 Deck Actualizado: {nombre_deck}",
@@ -1979,7 +1991,7 @@ async def editar_deck_handle(ctx, codigo_torneo: str = None):
         inline=False
     )
     embed_final.add_field(
-        name="Ediciones post-inicio",
+        name="Ediciones",
         value=f"{nuevo_edited}/1",
         inline=False
     )
@@ -2023,13 +2035,10 @@ async def editar_deck_handle(ctx, codigo_torneo: str = None):
     # 📬 Enviar confirmación al usuario con el embed
     await author.send("📋 **Resumen de tu deck actualizado:**")
     await author.send(embed=embed_final)
-
-    # 📊 Estadística adicional
-    if nuevo_edited == 1:
-        await author.send(
-            "⚠️ **Importante:** Has usado tu única edición post-inicio.\n"
-            "Ya no podrás modificar este deck hasta que finalice el torneo."
-        )
+    await author.send(
+        "⚠️ **Importante:** Has usado tu única edición disponible.\n"
+        "Ya no podrás modificar este deck hasta que finalice el torneo."
+    )
 
 async def subir_deck_desde_edicion(ctx, author: discord.Member, codigo_torneo: str, torneo_activo: bool, mensaje_estado: str):
     """
