@@ -79,9 +79,22 @@ def enviar_ayuda_handle():
         return wrapper
     return decorator
 
-def buscar_usuario_en_servidor(guild, nombre_busqueda: str):
-    nombre_busqueda = nombre_busqueda.strip().lower()
+async def buscar_usuario_en_servidor(guild, nombre_busqueda: str, guild_full: bool = True):
+    """
+    Busca un miembro en el servidor por display_name, username, o coincidencia parcial.
+    Si `guild_full=True` y no se encuentra, devuelve None.
+    """
+    nombre_busqueda = str(nombre_busqueda).strip().lower()
 
+    # Si es un ID numérico puro, devolver un objeto "pseudo-miembro"
+    if nombre_busqueda.isdigit():
+        miembro = guild.get_member(int(nombre_busqueda))
+        if miembro:
+            return miembro
+        # No está en el servidor → devolver un objeto ligero
+        return _MiembroFantasma(int(nombre_busqueda), guild)
+
+    # Búsqueda normal
     for miembro in guild.members:
         if miembro.display_name.lower() == nombre_busqueda:
             return miembro
@@ -99,6 +112,27 @@ def buscar_usuario_en_servidor(guild, nombre_busqueda: str):
             return miembro
 
     return None
+
+
+class _MiembroFantasma:
+    """
+    Representación ligera de un usuario que ya no está en el servidor.
+    Permite usar los atributos que el bot necesita (id, mention, display_name).
+    """
+    def __init__(self, user_id: int, guild: discord.Guild):
+        self.id = user_id
+        self.guild = guild
+        self.display_name = f"Usuario {user_id}"
+        self.name = f"Usuario {user_id}"
+        self.mention = f"<@{user_id}>"
+        self.roles = []
+        self.bot = False
+
+    def __str__(self):
+        return self.display_name
+
+    def __repr__(self):
+        return f"<MiembroFantasma id={self.id}>"
 
 # ============================================================
 # TORNEOS (Challonge legacy) - obtener torneo usuario
