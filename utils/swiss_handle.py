@@ -508,13 +508,13 @@ async def swiss_reportar_asistente_handle(ctx):
             await ctx.author.send("❌ Número no válido.")
             return
 
-        await ctx.author.send("2️⃣ ¿Jugador 1? (nombre o mención)")
+        await ctx.author.send("2️⃣ ¿Jugador 1? (nombre, mención o **ID numérico**)")
         j1_msg = await ctx.bot.wait_for("message", check=dm_check, timeout=60)
         if j1_msg.content.lower() == "cancelar":
             return
         jugador1 = buscar_usuario_en_servidor(ctx.guild, j1_msg.content)
         if not jugador1:
-            await ctx.author.send("❌ Usuario no encontrado.")
+            await ctx.author.send("❌ Usuario no encontrado. Prueba con el **ID numérico**.")
             return
 
         await ctx.author.send("3️⃣ ¿Resultado? (formato X-Y, ej: 2-1)")
@@ -526,13 +526,13 @@ async def swiss_reportar_asistente_handle(ctx):
             await ctx.author.send("❌ Formato inválido. Usa X-Y.")
             return
 
-        await ctx.author.send("4️⃣ ¿Jugador 2? (nombre o mención)")
+        await ctx.author.send("4️⃣ ¿Jugador 2? (nombre, mención o **ID numérico**)")
         j2_msg = await ctx.bot.wait_for("message", check=dm_check, timeout=60)
         if j2_msg.content.lower() == "cancelar":
             return
         jugador2 = buscar_usuario_en_servidor(ctx.guild, j2_msg.content)
         if not jugador2:
-            await ctx.author.send("❌ Usuario no encontrado.")
+            await ctx.author.send("❌ Usuario no encontrado. Prueba con el **ID numérico**.")
             return
 
         # Validaciones
@@ -557,8 +557,8 @@ async def swiss_reportar_asistente_handle(ctx):
         emp_encontrado = None
         emp_idx = -1
         for i, emp in enumerate(emparejamientos):
-            if (emp.get("j1") == str(jugador1.id) and emp.get("j2") == str(jugador2.id)) or \
-               (emp.get("j1") == str(jugador2.id) and emp.get("j2") == str(jugador1.id)):
+            if (emp.get("j1") == jugador1.id and emp.get("j2") == jugador2.id) or \
+               (emp.get("j1") == jugador2.id and emp.get("j2") == jugador1.id):
                 emp_encontrado = emp
                 emp_idx = i
                 break
@@ -570,12 +570,14 @@ async def swiss_reportar_asistente_handle(ctx):
             return
 
         es_admin = ctx.author.guild_permissions.administrator
-        es_jugador = ctx.author.id in (jugador1.id, jugador2.id)
+        es_jugador = str(ctx.author.id) in (jugador1.id, jugador2.id)
         if not es_admin and not es_jugador:
             await ctx.author.send("❌ Solo los jugadores o un administrador pueden reportar.")
             return
 
-        await ctx.author.send(f"📋 Confirmar: {jugador1.display_name} {resultado} {jugador2.display_name} en `{torneo['codigo']}`. ¿Continuar? (sí/no)")
+        await ctx.author.send(
+            f"📋 Confirmar: {jugador1.display_name} {resultado} {jugador2.display_name} en `{torneo['codigo']}`. ¿Continuar? (sí/no)"
+        )
         confirm = await ctx.bot.wait_for("message", check=dm_check, timeout=60)
         if confirm.content.lower() not in ["sí", "si", "yes", "y"]:
             await ctx.author.send("❌ Cancelado.")
@@ -583,7 +585,7 @@ async def swiss_reportar_asistente_handle(ctx):
 
         # Reportar
         ok, msg, emp, emp_idx = await reportar_resultado(
-            ctx.bot, torneo["codigo"], jugador1.id, resultado, jugador2.id, ctx.guild
+            ctx.bot, torneo["codigo"], int(jugador1.id), resultado, int(jugador2.id), ctx.guild
         )
 
         if not ok:
@@ -610,12 +612,10 @@ async def swiss_reportar_asistente_handle(ctx):
                                 lines = msg.content.splitlines()
                                 nueva_lines = []
                                 for line in lines:
-                                    # Si la línea contiene ambos jugadores (menciones), la saltamos
                                     if (jugador1.mention in line and jugador2.mention in line) or \
                                        (jugador2.mention in line and jugador1.mention in line):
                                         continue
                                     nueva_lines.append(line)
-                                # Si solo queda el título, eliminamos el mensaje
                                 if len(nueva_lines) <= 1:
                                     await msg.delete()
                                 else:
