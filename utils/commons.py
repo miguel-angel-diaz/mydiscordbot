@@ -80,34 +80,30 @@ def enviar_ayuda_handle():
         return wrapper
     return decorator
 
-
-
-def buscar_usuario_en_servidor(guild, nombre_busqueda: str):
+def buscar_usuario_en_servidor(guild, nombre_busqueda):
     """
-    - Si es un ID numérico → lo usa directamente (aunque no esté en el servidor).
-    - Si es un nombre → busca en los miembros del servidor.
+    - Si recibe un ID numérico (llega como string del chat) → lo usa directamente.
+    - Si recibe un nombre → busca en los miembros del servidor.
     - Si no encuentra nada → None.
     """
     texto = str(nombre_busqueda).strip()
 
-    # 🔹 Si es un ID numérico, usarlo sin buscar
+    # Si son solo dígitos → es un ID de Discord
     if texto.isdigit():
-        uid = int(texto)
-        # Intentar coger el miembro real si está en el servidor
-        miembro = guild.get_member(uid)
+        miembro = guild.get_member(int(texto))
         if miembro:
             return miembro
-        # Si no está, devolver un objeto con id/display_name/mention
+        # No está en el servidor → objeto ligero con id como STRING
         return SimpleNamespace(
-            id=uid,
-            display_name=f"Usuario {uid}",
-            name=f"Usuario {uid}",
-            mention=f"<@{uid}>",
+            id=texto,
+            display_name=f"Usuario {texto}",
+            name=f"Usuario {texto}",
+            mention=f"<@{texto}>",
             roles=[],
             bot=False,
         )
 
-    # 🔹 Búsqueda por nombre en el servidor
+    # Búsqueda por nombre
     t = texto.lower()
     for m in guild.members:
         if m.display_name.lower() == t or m.name.lower() == t:
@@ -117,7 +113,6 @@ def buscar_usuario_en_servidor(guild, nombre_busqueda: str):
             return m
 
     return None
-
 # ============================================================
 # TORNEOS (Challonge legacy) - obtener torneo usuario
 # ============================================================
