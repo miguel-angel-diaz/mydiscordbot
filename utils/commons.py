@@ -12,6 +12,7 @@ import re
 import time
 from datetime import datetime, timezone
 from typing import List, Dict
+from types import SimpleNamespace
 
 from difflib import get_close_matches
 
@@ -79,60 +80,43 @@ def enviar_ayuda_handle():
         return wrapper
     return decorator
 
-async def buscar_usuario_en_servidor(guild, nombre_busqueda: str, guild_full: bool = True):
-    """
-    Busca un miembro en el servidor por display_name, username, o coincidencia parcial.
-    Si `guild_full=True` y no se encuentra, devuelve None.
-    """
-    nombre_busqueda = str(nombre_busqueda).strip().lower()
 
-    # Si es un ID numérico puro, devolver un objeto "pseudo-miembro"
-    if nombre_busqueda.isdigit():
-        miembro = guild.get_member(int(nombre_busqueda))
+
+def buscar_usuario_en_servidor(guild, nombre_busqueda: str):
+    """
+    - Si es un ID numérico → lo usa directamente (aunque no esté en el servidor).
+    - Si es un nombre → busca en los miembros del servidor.
+    - Si no encuentra nada → None.
+    """
+    texto = str(nombre_busqueda).strip()
+
+    # 🔹 Si es un ID numérico, usarlo sin buscar
+    if texto.isdigit():
+        uid = int(texto)
+        # Intentar coger el miembro real si está en el servidor
+        miembro = guild.get_member(uid)
         if miembro:
             return miembro
-        # No está en el servidor → devolver un objeto ligero
-        return _MiembroFantasma(int(nombre_busqueda), guild)
+        # Si no está, devolver un objeto con id/display_name/mention
+        return SimpleNamespace(
+            id=uid,
+            display_name=f"Usuario {uid}",
+            name=f"Usuario {uid}",
+            mention=f"<@{uid}>",
+            roles=[],
+            bot=False,
+        )
 
-    # Búsqueda normal
-    for miembro in guild.members:
-        if miembro.display_name.lower() == nombre_busqueda:
-            return miembro
-
-    for miembro in guild.members:
-        if miembro.name.lower() == nombre_busqueda:
-            return miembro
-
-    for miembro in guild.members:
-        if nombre_busqueda in miembro.display_name.lower():
-            return miembro
-
-    for miembro in guild.members:
-        if nombre_busqueda in miembro.name.lower():
-            return miembro
+    # 🔹 Búsqueda por nombre en el servidor
+    t = texto.lower()
+    for m in guild.members:
+        if m.display_name.lower() == t or m.name.lower() == t:
+            return m
+    for m in guild.members:
+        if t in m.display_name.lower() or t in m.name.lower():
+            return m
 
     return None
-
-
-class _MiembroFantasma:
-    """
-    Representación ligera de un usuario que ya no está en el servidor.
-    Permite usar los atributos que el bot necesita (id, mention, display_name).
-    """
-    def __init__(self, user_id: int, guild: discord.Guild):
-        self.id = user_id
-        self.guild = guild
-        self.display_name = f"Usuario {user_id}"
-        self.name = f"Usuario {user_id}"
-        self.mention = f"<@{user_id}>"
-        self.roles = []
-        self.bot = False
-
-    def __str__(self):
-        return self.display_name
-
-    def __repr__(self):
-        return f"<MiembroFantasma id={self.id}>"
 
 # ============================================================
 # TORNEOS (Challonge legacy) - obtener torneo usuario
