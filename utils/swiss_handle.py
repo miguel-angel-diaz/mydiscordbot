@@ -553,12 +553,13 @@ async def swiss_reportar_asistente_handle(ctx):
             await ctx.author.send("❌ La ronda actual ya está completa.")
             return
 
+        # 🔹 Comparación SIEMPRE como string (el JSON guarda IDs como string)
         emparejamientos = ronda_actual.get("emparejamientos", [])
         emp_encontrado = None
         emp_idx = -1
         for i, emp in enumerate(emparejamientos):
-            if (emp.get("j1") == jugador1.id and emp.get("j2") == jugador2.id) or \
-               (emp.get("j1") == jugador2.id and emp.get("j2") == jugador1.id):
+            if (str(emp.get("j1")) == str(jugador1.id) and str(emp.get("j2")) == str(jugador2.id)) or \
+               (str(emp.get("j1")) == str(jugador2.id) and str(emp.get("j2")) == str(jugador1.id)):
                 emp_encontrado = emp
                 emp_idx = i
                 break
@@ -570,7 +571,7 @@ async def swiss_reportar_asistente_handle(ctx):
             return
 
         es_admin = ctx.author.guild_permissions.administrator
-        es_jugador = str(ctx.author.id) in (jugador1.id, jugador2.id)
+        es_jugador = str(ctx.author.id) in (str(jugador1.id), str(jugador2.id))
         if not es_admin and not es_jugador:
             await ctx.author.send("❌ Solo los jugadores o un administrador pueden reportar.")
             return
@@ -641,7 +642,6 @@ async def swiss_reportar_asistente_handle(ctx):
     except Exception as e:
         await ctx.author.send(f"❌ Error: {e}")
         print(f"❌ Error en reportar: {e}")
-
 # ============================================================
 # COMANDO: clasificacion-swiss (asistente)
 # ============================================================
