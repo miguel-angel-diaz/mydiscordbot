@@ -770,7 +770,17 @@ async def partidos_pendientes_handle(ctx, codigo_torneo: str, type: str):
             pendientes.append((ronda, p1, p2, p1_id, p2_id))
 
     if not pendientes:
-        await finalizar_torneo_handle(ctx, codigo_torneo)
+        # Solo un admin cierra el torneo; los jugadores solo reciben el aviso
+        if await moderador_permisos_handle(ctx, only_check=True):
+            await finalizar_torneo_handle(ctx, codigo_torneo)
+        else:
+            try:
+                await ctx.author.send(
+                    f"✅ No quedan partidos pendientes en el torneo `{codigo_torneo}`. "
+                    "Un admin se encargará de cerrarlo."
+                )
+            except discord.Forbidden:
+                pass
         return
 
     # Ordenar por ronda
@@ -918,7 +928,11 @@ async def forzar_ronda_handle(ctx, codigo_torneo: str):
 async def finalizar_torneo_handle(ctx, codigo_torneo: str):
     """
     Finaliza un torneo en Challonge, limpia canales, anuncia y elimina el torneo del estado.
+    Solo admins.
     """
+    if not await moderador_permisos_handle(ctx):
+        return
+
     # 0️⃣ Llamar a la API de Challonge para finalizar el torneo
     url_finalize = f"https://api.challonge.com/v1/tournaments/{codigo_torneo}/finalize.json"
     async with aiohttp.ClientSession() as session:

@@ -117,6 +117,18 @@ async def swiss_nuevo_asistente_handle(ctx):
 # COMANDO: inscribir-swiss (asistente)
 # ============================================================
 
+def _es_admin(ctx) -> bool:
+    """Dueño del servidor, rol 'admin' o permiso de administrador (mismo criterio que comando_roles_permitidos)."""
+    autor = ctx.author
+    if ctx.guild is None or not isinstance(autor, discord.Member):
+        return False
+    return (
+        autor == ctx.guild.owner
+        or autor.guild_permissions.administrator
+        or any(r.name.lower() == "admin" for r in autor.roles)
+    )
+
+
 async def swiss_inscribir_asistente_handle(ctx):
     await borrar_mensaje_seguro(ctx)
 
@@ -149,17 +161,23 @@ async def swiss_inscribir_asistente_handle(ctx):
             await ctx.author.send("❌ Número no válido.")
             return
 
-        await ctx.author.send("2️⃣ ¿A quién inscribes? (`yo` o nombre/mención)")
-        usuario_msg = await ctx.bot.wait_for("message", check=dm_check, timeout=60)
-        if usuario_msg.content.lower() == "cancelar":
-            return
-        if usuario_msg.content.lower() in ["yo", "mi", "me"]:
-            usuario = ctx.author
-        else:
-            usuario = buscar_usuario_en_servidor(ctx.guild, usuario_msg.content)
-            if not usuario:
-                await ctx.author.send("❌ Usuario no encontrado.")
+        # Solo los admins pueden inscribir a otra persona; el resto se inscribe a sí mismo
+        if _es_admin(ctx):
+            await ctx.author.send("2️⃣ ¿A quién inscribes? (`yo` o nombre/mención)")
+            usuario_msg = await ctx.bot.wait_for("message", check=dm_check, timeout=60)
+            if usuario_msg.content.lower() == "cancelar":
                 return
+            if usuario_msg.content.lower() in ["yo", "mi", "me"]:
+                usuario = ctx.author
+            else:
+                # Acepta nombre, ID o mención (<@id> / <@!id>)
+                texto_usuario = re.sub(r"^<@!?(\d+)>$", r"\1", usuario_msg.content.strip())
+                usuario = buscar_usuario_en_servidor(ctx.guild, texto_usuario)
+                if not isinstance(usuario, discord.Member):
+                    await ctx.author.send("❌ Usuario no encontrado en el servidor.")
+                    return
+        else:
+            usuario = ctx.author
 
         ok, msg = await inscribir_jugador(ctx.bot, torneo["codigo"], usuario.id)
         if not ok:
@@ -200,19 +218,11 @@ async def swiss_inscribir_asistente_handle(ctx):
             except discord.Forbidden:
                 await ctx.author.send("⚠️ No pude enviarte el mensaje de confirmación. Revisa tus DMs.")
         else:
+            # Inscrito por un admin: solo se le avisa, sin abrir el asistente de deck
             try:
-                await usuario.send(f"🎮 Te han inscrito en el torneo `{torneo['codigo']}`.\n¿Quieres subir tu deck ahora? Responde `sí` o `no`.")
-                def dm_usuario(m):
-                    return m.author == usuario and isinstance(m.channel, discord.DMChannel)
-                respuesta = await ctx.bot.wait_for("message", check=dm_usuario, timeout=90.0)
-                if respuesta.content.lower() in ["sí", "si", "s", "yes", "y"]:
-                    await submitted_deck_handle(ctx, torneo["codigo"])
-                else:
-                    await usuario.send("👌 Perfecto, podrás subir tu deck más tarde usando el comando correspondiente.")
-            except asyncio.TimeoutError:
-                await usuario.send("⏰ Tiempo agotado para subir deck. Puedes hacerlo más tarde con `!subir-deck`.")
+                await usuario.send(f"🎮 Un admin te ha inscrito en el torneo `{torneo['codigo']}`.")
             except discord.Forbidden:
-                await ctx.author.send(f"⚠️ No pude enviar mensaje a {usuario.display_name} para preguntar por el deck. Puede que tenga DMs cerrados.")
+                await ctx.author.send(f"⚠️ No pude avisar a {usuario.display_name} por DM. Puede que tenga los DMs cerrados.")
 
     except asyncio.TimeoutError:
         await ctx.author.send("⏰ Tiempo agotado.")
@@ -232,9 +242,15 @@ async def swiss_desinscribir_asistente_handle(ctx):
             return m.author == ctx.author and isinstance(m.channel, discord.DMChannel)
 
         torneos = await obtener_torneos_activos(ctx.bot)
-        mis_torneos = [t for t in torneos if str(ctx.author.id) in t.get("inscritos_ids", [])]
+        mis_torneos = [
+            t for t in torneos
+            if str(ctx.author.id) in t.get("inscritos_ids", []) and t.get("estado", "abierto") == "abierto"
+        ]
         if not mis_torneos:
-            await ctx.author.send("❌ No estás inscrito en ningún torneo suizo activo.")
+            await ctx.author.send(
+                "❌ No estás inscrito en ningún torneo suizo con inscripciones abiertas.\n"
+                "Si el torneo ya ha empezado, habla con un admin."
+            )
             return
 
         mensaje = "📋 **Tus torneos:**\n"

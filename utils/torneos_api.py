@@ -5,8 +5,12 @@ import os
 import re
 import secrets
 import time
+import traceback
 from datetime import datetime, timezone
 from aiohttp import web
+from aiohttp.abc import AbstractAccessLogger
+
+from utils import validacion_web as v
 
 import feedparser
 import jwt
@@ -52,17 +56,59 @@ def set_bot_instance(bot):
 # ============================================================
 # MIDDLEWARE CORS (para todas las respuestas)
 # ============================================================
+# Orígenes que pueden llamar a la API desde el navegador. Se puede sobrescribir en Railway con
+# CORS_ORIGENES="https://theklubmtg.es,https://www.theklubmtg.es" (separados por comas).
+# "null" es el origen que envía el navegador al abrir la web como archivo local (file://).
+CORS_ORIGENES_PERMITIDOS = {
+    o.strip() for o in os.environ.get(
+        "CORS_ORIGENES", "https://theklubmtg.es,https://www.theklubmtg.es,null"
+    ).split(",") if o.strip()
+}
+
+
+def _error_interno(contexto: str, status: int = 500):
+    """Registra el traceback completo en los logs y responde un mensaje genérico (sin detalles internos)."""
+    print(f"❌ Error en API ({contexto}):\n{traceback.format_exc()}")
+    mensaje = "Servicio no disponible" if status == 503 else "Error interno"
+    return web.json_response({"error": mensaje}, status=status)
+
+
 @web.middleware
 async def cors_middleware(request, handler):
-    try:
-        response = await handler(request)
-    except Exception as e:
-        print(f"❌ Error en API: {e}")
-        response = web.json_response({"error": f"Error interno: {str(e)}"}, status=500)
-    response.headers['Access-Control-Allow-Origin'] = '*'
-    response.headers['Access-Control-Allow-Methods'] = 'POST, GET, OPTIONS'
-    response.headers['Access-Control-Allow-Headers'] = 'Content-Type'
+    if request.method == "OPTIONS":
+        # Preflight del navegador (p. ej. GET con cabecera Authorization): se responde en cualquier ruta
+        response = web.Response()
+    else:
+        try:
+            v.comprobar_limite(request)
+            response = await handler(request)
+        except v.EntradaInvalida as e:
+            response = v.respuesta_error(e)
+        except web.HTTPRequestEntityTooLarge:
+            response = web.json_response({"error": "Petición demasiado grande"}, status=413)
+        except web.HTTPException as e:
+            # 404/405 del router y demás errores HTTP: se mantiene su código, en JSON
+            mensajes = {404: "No encontrado", 405: "Método no permitido"}
+            response = web.json_response({"error": mensajes.get(e.status, e.reason)}, status=e.status)
+        except Exception:
+            response = _error_interno(f"{request.method} {request.path}")
+    origen = request.headers.get("Origin")
+    if origen in CORS_ORIGENES_PERMITIDOS:
+        response.headers['Access-Control-Allow-Origin'] = origen
+        response.headers['Access-Control-Allow-Methods'] = 'POST, GET, OPTIONS'
+        response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
+        response.headers['Access-Control-Max-Age'] = '600'
+    response.headers['Vary'] = 'Origin'
     return response
+
+
+class AccessLoggerSinQuery(AbstractAccessLogger):
+    """Log de accesos sin la query string, para que el token (?session=) no acabe en los logs."""
+    def log(self, request, response, time):
+        self.logger.info(
+            '%s "%s %s" %s %.3fs',
+            request.remote, request.method, request.path, response.status, time
+        )
 
 # ============================================================
 # JWT CONFIGURACIÓN (centralizada en config.py)
@@ -77,6 +123,21 @@ def crear_token(discord_id: str) -> str:
     }
     return jwt.encode(payload, SECRET_KEY, algorithm='HS256')
 
+def obtener_token(request, body: dict | None = None) -> str | None:
+    """
+    Token de sesión de la petición. Prioridad: cabecera `Authorization: Bearer <token>`,
+    luego `session` en el cuerpo JSON y por último `?session=` (compatibilidad con la web actual).
+    """
+    auth = request.headers.get("Authorization", "")
+    if auth.lower().startswith("bearer "):
+        token = auth[7:].strip()
+        if token:
+            return token
+    if body and body.get("session"):
+        return body.get("session")
+    return request.query.get("session")
+
+
 def verificar_token(token: str) -> dict | None:
     if not token:
         return None
@@ -88,9 +149,43 @@ def verificar_token(token: str) -> dict | None:
 # ============================================================
 # CÓDIGOS PENDIENTES PARA AUTENTICACIÓN POR DM
 # ============================================================
-codigos_pendientes = {}
+codigos_pendientes = {}        # nombre_key -> {codigo, discord_id, username, expira, enviado_en, intentos}
+bloqueos_login = {}            # discord_id -> timestamp hasta el que no puede pedir ni verificar códigos
 CODIGO_EXPIRA_SEGUNDOS = 300
 CODIGO_REENVIO_MINIMO = 60
+CODIGO_LONGITUD = 8
+CODIGO_MAX_INTENTOS = 3        # como el PIN de una tarjeta
+CODIGO_BLOQUEO_SEGUNDOS = 900  # 15 minutos tras agotar los intentos
+
+# Sin caracteres ambiguos (0/O, 1/l/I) ni los que Discord usa para formato (* _ ~ ` | \ >)
+_CODIGO_MAYUS = "ABCDEFGHJKLMNPQRSTUVWXYZ"
+_CODIGO_MINUS = "abcdefghijkmnpqrstuvwxyz"
+_CODIGO_DIGITOS = "23456789"
+_CODIGO_ESPECIALES = "!#$%&?+=@"
+_CODIGO_TODOS = _CODIGO_MAYUS + _CODIGO_MINUS + _CODIGO_DIGITOS + _CODIGO_ESPECIALES
+
+
+def generar_codigo_acceso() -> str:
+    """Código aleatorio con al menos una mayúscula y un carácter especial."""
+    chars = [secrets.choice(_CODIGO_MAYUS), secrets.choice(_CODIGO_ESPECIALES)]
+    chars += [secrets.choice(_CODIGO_TODOS) for _ in range(CODIGO_LONGITUD - len(chars))]
+    secrets.SystemRandom().shuffle(chars)
+    return "".join(chars)
+
+
+def _purgar_codigos_y_bloqueos():
+    ahora = time.time()
+    for clave in [k for k, p in codigos_pendientes.items() if p["expira"] < ahora]:
+        del codigos_pendientes[clave]
+    for uid in [k for k, hasta in bloqueos_login.items() if hasta < ahora]:
+        del bloqueos_login[uid]
+
+
+def _minutos_bloqueo_restantes(discord_id: str) -> int:
+    hasta = bloqueos_login.get(discord_id)
+    if not hasta:
+        return 0
+    return max(1, int((hasta - time.time() + 59) // 60))
 
 # ============================================================
 # 1. CHALLONGE — listar torneos finalizados
@@ -224,7 +319,6 @@ async def api_torneos(request):
     todos_los_torneos.sort(key=lambda x: x.get("fecha_fin") or "", reverse=True)
 
     response = web.json_response({"torneos": todos_los_torneos})
-    response.headers['Access-Control-Allow-Origin'] = '*'
     return response
 
 async def obtener_matches_torneo(codigo_torneo):
@@ -255,23 +349,11 @@ async def obtener_matches_torneo(codigo_torneo):
 # 4. ENDPOINTS HTTP — Admisión
 # ============================================================
 async def api_solicitar_acceso(request):
-    try:
-        body = await request.json()
-    except Exception:
-        return web.json_response({"error": "JSON inválido"}, status=400)
+    body = await v.leer_json(request)
 
-    discord_nick = str(body.get("discord_nick", "")).strip()
-    email = str(body.get("email", "")).strip()
-    comentario = str(body.get("comentario", "")).strip()
-
-    if not discord_nick or len(discord_nick) > 100:
-        return web.json_response({"error": "Usuario de Discord no válido"}, status=400)
-
-    if not EMAIL_REGEX.match(email):
-        return web.json_response({"error": "Email no válido"}, status=400)
-
-    if not comentario or len(comentario) > 1000:
-        return web.json_response({"error": "Comentario no válido"}, status=400)
+    discord_nick = v.texto(body.get("discord_nick"), "usuario de Discord", v.MAX_NOMBRE)
+    email = v.email(body.get("email"))
+    comentario = v.texto(body.get("comentario"), "comentario", v.MAX_COMENTARIO, multilinea=True)
 
     if _bot_instance is None:
         return web.json_response({"error": "Servicio no disponible"}, status=503)
@@ -301,14 +383,13 @@ async def api_solicitar_acceso(request):
 # 5. LOGIN — verificación de miembros vía código por DM
 # ============================================================
 async def auth_solicitar_codigo(request):
-    try:
-        body = await request.json()
-    except Exception:
-        return web.json_response({"error": "JSON inválido"}, status=400)
+    body = await v.leer_json(request)
 
     nombre = str(body.get("nombre", "")).strip()
     if not nombre:
         return web.json_response({"error": "Escribe tu usuario de Discord"}, status=400)
+    if len(nombre) > v.MAX_NOMBRE:
+        return web.json_response({"error": "Usuario de Discord no válido"}, status=400)
 
     if _bot_instance is None:
         return web.json_response({"error": "Servicio no disponible"}, status=503)
@@ -316,6 +397,8 @@ async def auth_solicitar_codigo(request):
     guild = _bot_instance.get_guild(config.GUILD_ID_ADMISION)
     if not guild:
         return web.json_response({"error": "Servicio no disponible"}, status=503)
+
+    _purgar_codigos_y_bloqueos()
 
     nombre_key = nombre.lower()
     pendiente_actual = codigos_pendientes.get(nombre_key)
@@ -335,19 +418,33 @@ async def auth_solicitar_codigo(request):
             status=404
         )
 
-    codigo = f"{secrets.randbelow(1000000):06d}"
+    discord_id = str(miembro.id)
+    minutos = _minutos_bloqueo_restantes(discord_id)
+    if minutos:
+        return web.json_response(
+            {"error": f"Acceso bloqueado por demasiados intentos fallidos. Inténtalo de nuevo en {minutos} min."},
+            status=429
+        )
+
+    # Un único código activo por usuario (aunque lo pida con otra variante del nombre)
+    for clave in [k for k, p in codigos_pendientes.items() if p["discord_id"] == discord_id]:
+        del codigos_pendientes[clave]
+
+    codigo = generar_codigo_acceso()
     codigos_pendientes[nombre_key] = {
         "codigo": codigo,
-        "discord_id": str(miembro.id),
+        "discord_id": discord_id,
         "username": miembro.display_name,
         "expira": time.time() + CODIGO_EXPIRA_SEGUNDOS,
         "enviado_en": time.time(),
+        "intentos": 0,
     }
 
     try:
         await miembro.send(
-            f"🔐 Tu código de acceso para **The Klub** es: **{codigo}**\n"
-            f"Caduca en 5 minutos. Si no has solicitado esto, ignora este mensaje."
+            f"🔐 Tu código de acceso para **The Klub** es: `{codigo}`\n"
+            f"Distingue mayúsculas y minúsculas. Caduca en 5 minutos y tienes {CODIGO_MAX_INTENTOS} intentos.\n"
+            f"Si no has solicitado esto, ignora este mensaje."
         )
     except Exception:
         del codigos_pendientes[nombre_key]
@@ -358,27 +455,64 @@ async def auth_solicitar_codigo(request):
 
     return web.json_response({"ok": True, "mensaje": "Código enviado por Discord"})
 
-async def auth_verificar_codigo(request):
+async def _avisar_bloqueo_login(discord_id: str):
+    """Avisa por DM al usuario de que alguien ha agotado los intentos con su código."""
+    guild = _bot_instance.get_guild(config.GUILD_ID_ADMISION) if _bot_instance else None
+    miembro = guild.get_member(int(discord_id)) if guild else None
+    if not miembro:
+        return
     try:
-        body = await request.json()
-    except Exception:
-        return web.json_response({"error": "JSON inválido"}, status=400)
+        await miembro.send(
+            f"⚠️ Se ha introducido mal tu código de acceso a **The Klub** {CODIGO_MAX_INTENTOS} veces. "
+            f"Por seguridad, el acceso queda bloqueado {CODIGO_BLOQUEO_SEGUNDOS // 60} minutos.\n"
+            f"Si no has sido tú, no compartas nunca tus códigos."
+        )
+    except discord.HTTPException:
+        pass
 
-    nombre = str(body.get("nombre", "")).strip().lower()
-    codigo_introducido = str(body.get("codigo", "")).strip()
+
+async def auth_verificar_codigo(request):
+    body = await v.leer_json(request)
+
+    nombre = str(body.get("nombre", "")).strip().lower()[:v.MAX_NOMBRE]
+    codigo_introducido = str(body.get("codigo", "")).strip()[:v.MAX_CODIGO_ACCESO]
 
     pendiente = codigos_pendientes.get(nombre)
-    if not pendiente:
-        return web.json_response({"error": "No hay ningún código pendiente para ese usuario"}, status=400)
-
-    if time.time() > pendiente["expira"]:
+    if pendiente and time.time() > pendiente["expira"]:
         del codigos_pendientes[nombre]
         return web.json_response({"error": "El código ha caducado, solicita uno nuevo"}, status=400)
 
-    if codigo_introducido != pendiente["codigo"]:
-        return web.json_response({"error": "Código incorrecto"}, status=400)
+    _purgar_codigos_y_bloqueos()
+    if not pendiente:
+        return web.json_response({"error": "No hay ningún código pendiente para ese usuario"}, status=400)
 
     discord_id = pendiente["discord_id"]
+    if _minutos_bloqueo_restantes(discord_id):
+        del codigos_pendientes[nombre]
+        return web.json_response({"error": "Acceso bloqueado por demasiados intentos fallidos."}, status=429)
+
+    if not secrets.compare_digest(codigo_introducido.encode(), pendiente["codigo"].encode()):
+        pendiente["intentos"] = pendiente.get("intentos", 0) + 1
+        restantes = CODIGO_MAX_INTENTOS - pendiente["intentos"]
+        if restantes > 0:
+            return web.json_response(
+                {"error": f"Código incorrecto. Te quedan {restantes} intento(s).", "intentos_restantes": restantes},
+                status=400
+            )
+
+        # Intentos agotados: se invalida el código y se bloquea al usuario un tiempo
+        del codigos_pendientes[nombre]
+        bloqueos_login[discord_id] = time.time() + CODIGO_BLOQUEO_SEGUNDOS
+        await _avisar_bloqueo_login(discord_id)
+        return web.json_response(
+            {
+                "error": f"Has agotado los {CODIGO_MAX_INTENTOS} intentos. "
+                         f"Acceso bloqueado {CODIGO_BLOQUEO_SEGUNDOS // 60} minutos.",
+                "intentos_restantes": 0,
+            },
+            status=429
+        )
+
     token = crear_token(discord_id)
     del codigos_pendientes[nombre]
 
@@ -398,7 +532,7 @@ async def auth_verificar_codigo(request):
     })
 
 async def auth_verificar_sesion(request):
-    token = request.query.get("session")
+    token = obtener_token(request)
     payload = verificar_token(token)
     if not payload:
         return web.json_response({"autenticado": False})
@@ -419,7 +553,6 @@ async def auth_verificar_sesion(request):
         "username": username,
         "discord_id": discord_id,
     })
-    response.headers['Access-Control-Allow-Origin'] = '*'
     return response
 
 # ============================================================
@@ -467,14 +600,14 @@ async def api_podcast(request):
     try:
         episodios = await obtener_ultimos_episodios()
     except Exception as e:
-        return web.json_response({"error": str(e)}, status=503)
+        return _error_interno("api_podcast", status=503)
     return web.json_response({"episodios": episodios})
 
 async def api_articulos(request):
     try:
         articulos = await obtener_ultimos_articulos()
     except Exception as e:
-        return web.json_response({"error": str(e)}, status=503)
+        return _error_interno("api_articulos", status=503)
     return web.json_response({"articulos": articulos})
 
 async def handle_options(request):
@@ -484,7 +617,7 @@ async def handle_options(request):
 # 7. ENDPOINTS DE USUARIO (protegidos con JWT)
 # ============================================================
 async def api_mis_torneos(request):
-    token = request.query.get("session")
+    token = obtener_token(request)
     payload = verificar_token(token)
     if not payload:
         return web.json_response({"error": "Sesión no válida"}, status=401)
@@ -521,7 +654,7 @@ async def api_mis_torneos(request):
     })
 
 async def api_mis_decks(request):
-    token = request.query.get("session")
+    token = obtener_token(request)
     payload = verificar_token(token)
     if not payload:
         return web.json_response({"error": "Sesión no válida"}, status=401)
@@ -538,17 +671,16 @@ async def api_mis_decks(request):
     try:
         decks = await obtener_decks_por_usuario(guild, discord_id, include_message=False)
     except Exception as e:
-        return web.json_response({"error": str(e)}, status=500)
+        return _error_interno("api_mis_decks", status=500)
 
     response = web.json_response({
         "username": payload.get("username", "Usuario"),
         "decks": decks,
     })
-    response.headers['Access-Control-Allow-Origin'] = '*'
     return response
 
 async def api_torneos_disponibles(request):
-    token = request.query.get("session")
+    token = obtener_token(request)
     payload = verificar_token(token)
     if not payload:
         return web.json_response({"error": "Sesión no válida"}, status=401)
@@ -580,31 +712,26 @@ async def api_torneos_disponibles(request):
     return web.json_response({"torneos": torneos_usuario})
 
 async def api_arquetipos(request):
-    formato = request.query.get("formato", "Premodern")
+    formato = v.formato(request.query.get("formato"))
     return web.json_response({"arquetipos": obtener_lista_arquetipos(formato)})
 
 async def api_subir_deck(request):
-    try:
-        body = await request.json()
-    except Exception:
-        return web.json_response({"error": "JSON inválido"}, status=400)
+    body = await v.leer_json(request)
 
-    token = body.get("session")
+    token = obtener_token(request, body)
     payload = verificar_token(token)
     if not payload:
         return web.json_response({"error": "Sesión no válida"}, status=401)
 
     discord_id = payload["discord_id"]
 
-    codigo_torneo = str(body.get("codigo_torneo", "")).strip()
-    formato_input = str(body.get("formato", "")).strip()
-    nombre_deck = str(body.get("nombre_deck", "")).strip()
-    archetype_input = str(body.get("archetype", "")).strip()
-    decklist_raw = str(body.get("decklist", "")).strip()
-    sideboard_raw = str(body.get("sideboard", "")).strip()
-
-    if not codigo_torneo or not nombre_deck or not archetype_input or not decklist_raw:
-        return web.json_response({"error": "Faltan campos obligatorios"}, status=400)
+    codigo_torneo = v.codigo_torneo(body.get("codigo_torneo"))
+    formato_input = str(body.get("formato", "")).strip().lower()
+    nombre_deck = v.texto(body.get("nombre_deck"), "nombre del deck", v.MAX_NOMBRE, markdown=True)
+    archetype_input = v.texto(body.get("archetype"), "arquetipo", v.MAX_NOMBRE, markdown=True)
+    decklist_raw = v.texto(body.get("decklist"), "decklist", v.MAX_DECKLIST, multilinea=True, markdown=True)
+    sideboard_raw = v.texto(body.get("sideboard"), "sideboard", v.MAX_DECKLIST, obligatorio=False,
+                            multilinea=True, markdown=True)
 
     if len(nombre_deck) > 100:
         return web.json_response({"error": "Nombre de deck demasiado largo"}, status=400)
@@ -699,7 +826,7 @@ async def api_subir_deck(request):
     return web.json_response({"ok": True, "mensaje": mensaje_validacion})
 
 async def api_estado_torneos(request):
-    token = request.query.get("session")
+    token = obtener_token(request)
     payload = verificar_token(token)
     if not payload:
         return web.json_response({"error": "Sesión no válida"}, status=401)
@@ -772,27 +899,21 @@ async def api_estado_torneos(request):
 
     except Exception as e:
         print(f"❌ [api_estado_torneos] Error: {e}")
-        return web.json_response({"error": str(e)}, status=500)
+        return _error_interno("api_estado_torneos", status=500)
 
     response = web.json_response({"torneos": torneos_respuesta})
-    response.headers['Access-Control-Allow-Origin'] = '*'
     return response
 
 async def api_inscribirse(request):
-    try:
-        body = await request.json()
-    except Exception:
-        return web.json_response({"error": "JSON inválido"}, status=400)
+    body = await v.leer_json(request)
 
-    token = body.get("session")
+    token = obtener_token(request, body)
     payload = verificar_token(token)
     if not payload:
         return web.json_response({"error": "Sesión no válida"}, status=401)
 
     discord_id = payload["discord_id"]
-    codigo_torneo = str(body.get("codigo_torneo", "")).strip()
-    if not codigo_torneo:
-        return web.json_response({"error": "Falta el código del torneo"}, status=400)
+    codigo_torneo = v.codigo_torneo(body.get("codigo_torneo"))
 
     if _bot_instance is None:
         return web.json_response({"error": "Servicio no disponible"}, status=503)
@@ -815,31 +936,25 @@ async def api_inscribirse(request):
         await canal_anuncios.send(f"📥 {miembro.mention} se ha inscrito en el torneo `{codigo_torneo}` (vía web).")
 
     response = web.json_response({"ok": True, "mensaje": mensaje})
-    response.headers['Access-Control-Allow-Origin'] = '*'
     return response
 
 
 async def api_editar_deck(request):
-    try:
-        body = await request.json()
-    except Exception:
-        return web.json_response({"error": "JSON inválido"}, status=400)
+    body = await v.leer_json(request)
 
-    token = body.get("session")
+    token = obtener_token(request, body)
     payload = verificar_token(token)
     if not payload:
         return web.json_response({"error": "Sesión no válida"}, status=401)
 
     discord_id = payload["discord_id"]
-    codigo_torneo = str(body.get("codigo_torneo", "")).strip()
-    formato_input = str(body.get("formato", "")).strip()
-    nombre_deck = str(body.get("nombre_deck", "")).strip()
-    archetype_input = str(body.get("archetype", "")).strip()
-    decklist_raw = str(body.get("decklist", "")).strip()
-    sideboard_raw = str(body.get("sideboard", "")).strip()
-
-    if not codigo_torneo or not nombre_deck or not archetype_input or not decklist_raw:
-        return web.json_response({"error": "Faltan campos obligatorios"}, status=400)
+    codigo_torneo = v.codigo_torneo(body.get("codigo_torneo"))
+    formato_input = str(body.get("formato", "")).strip().lower()
+    nombre_deck = v.texto(body.get("nombre_deck"), "nombre del deck", v.MAX_NOMBRE, markdown=True)
+    archetype_input = v.texto(body.get("archetype"), "arquetipo", v.MAX_NOMBRE, markdown=True)
+    decklist_raw = v.texto(body.get("decklist"), "decklist", v.MAX_DECKLIST, multilinea=True, markdown=True)
+    sideboard_raw = v.texto(body.get("sideboard"), "sideboard", v.MAX_DECKLIST, obligatorio=False,
+                            multilinea=True, markdown=True)
 
     if _bot_instance is None:
         return web.json_response({"error": "Servicio no disponible"}, status=503)
@@ -910,7 +1025,7 @@ async def api_editar_deck(request):
     return web.json_response({"ok": True, "mensaje": mensaje})
 
 async def api_todas_partidas(request):
-    token = request.query.get("session")
+    token = obtener_token(request)
     payload = verificar_token(token)
     if not payload:
         return web.json_response({"error": "Sesión no válida"}, status=401)
@@ -978,24 +1093,18 @@ async def api_todas_partidas(request):
         })
 
     response = web.json_response({"partidas": partidas})
-    response.headers['Access-Control-Allow-Origin'] = '*'
     return response
 
 async def api_desinscribirse(request):
-    try:
-        body = await request.json()
-    except Exception:
-        return web.json_response({"error": "JSON inválido"}, status=400)
+    body = await v.leer_json(request)
 
-    token = body.get("session")
+    token = obtener_token(request, body)
     payload = verificar_token(token)
     if not payload:
         return web.json_response({"error": "Sesión no válida"}, status=401)
 
     discord_id = payload["discord_id"]
-    codigo_torneo = str(body.get("codigo_torneo", "")).strip()
-    if not codigo_torneo:
-        return web.json_response({"error": "Falta el código del torneo"}, status=400)
+    codigo_torneo = v.codigo_torneo(body.get("codigo_torneo"))
 
     if _bot_instance is None:
         return web.json_response({"error": "Servicio no disponible"}, status=503)
@@ -1018,11 +1127,10 @@ async def api_desinscribirse(request):
         await canal_anuncios.send(f"📤 {miembro.mention} se ha desinscrito del torneo `{codigo_torneo}` (vía web).")
 
     response = web.json_response({"ok": True, "mensaje": mensaje})
-    response.headers['Access-Control-Allow-Origin'] = '*'
     return response
 
 async def api_mis_torneos_pendientes(request):
-    token = request.query.get("session")
+    token = obtener_token(request)
     payload = verificar_token(token)
     if not payload:
         return web.json_response({"error": "Sesión no válida"}, status=401)
@@ -1158,32 +1266,27 @@ async def api_mis_torneos_pendientes(request):
                 })
 
         response = web.json_response({"torneos": resultado})
-        response.headers['Access-Control-Allow-Origin'] = '*'
         return response
 
     except Exception as e:
         print(f"❌ Error en api_mis_torneos_pendientes: {e}")
-        return web.json_response({"error": str(e)}, status=500)
+        return _error_interno("api_mis_torneos_pendientes", status=500)
     
 async def api_reportar_resultado(request):
-    try:
-        body = await request.json()
-    except Exception:
-        return web.json_response({"error": "JSON inválido"}, status=400)
+    body = await v.leer_json(request)
 
-    token = body.get("session")
+    token = obtener_token(request, body)
     payload = verificar_token(token)
     if not payload:
         return web.json_response({"error": "Sesión no válida"}, status=401)
 
     discord_id = payload["discord_id"]
-    codigo_torneo = str(body.get("codigo_torneo", "")).strip()
-    jugador1_id = body.get("jugador1_id")
-    jugador2_id = body.get("jugador2_id")
-    resultado = str(body.get("resultado", "")).strip()
-
-    if not codigo_torneo or not jugador1_id or not jugador2_id or not resultado:
-        return web.json_response({"error": "Faltan datos"}, status=400)
+    codigo_torneo = v.codigo_torneo(body.get("codigo_torneo"))
+    jugador1_id = v.discord_id(body.get("jugador1_id"), "Jugador 1")
+    jugador2_id = v.discord_id(body.get("jugador2_id"), "Jugador 2")
+    resultado = v.resultado(body.get("resultado"))
+    if jugador1_id == jugador2_id:
+        return web.json_response({"error": "Los jugadores deben ser distintos"}, status=400)
 
     if _bot_instance is None:
         return web.json_response({"error": "Servicio no disponible"}, status=503)
@@ -1270,15 +1373,11 @@ async def api_reportar_resultado(request):
         print(f"⚠️ Error al actualizar canales: {e}")
 
     response = web.json_response({"ok": True, "mensaje": mensaje})
-    response.headers['Access-Control-Allow-Origin'] = '*'
     return response
 
 async def api_mis_enfrentamientos(request):
-    token = request.query.get("session")
-    torneo_codigo = request.query.get("torneo")
-
-    if not torneo_codigo:
-        return web.json_response({"error": "Falta el código del torneo"}, status=400)
+    token = obtener_token(request)
+    torneo_codigo = v.codigo_torneo(request.query.get("torneo"))
 
     payload = verificar_token(token)
     if not payload:
@@ -1354,19 +1453,15 @@ async def api_mis_enfrentamientos(request):
         enfrentamientos.sort(key=lambda x: x["ronda"])
 
         response = web.json_response({"enfrentamientos": enfrentamientos})
-        response.headers['Access-Control-Allow-Origin'] = '*'
         return response
 
     except Exception as e:
         print(f"❌ Error en api_mis_enfrentamientos: {e}")
-        return web.json_response({"error": str(e)}, status=500)
+        return _error_interno("api_mis_enfrentamientos", status=500)
 
 async def api_torneo_enfrentamientos(request):
-    token = request.query.get("session")
-    torneo_codigo = request.query.get("torneo")
-
-    if not torneo_codigo:
-        return web.json_response({"error": "Falta el código del torneo"}, status=400)
+    token = obtener_token(request)
+    torneo_codigo = v.codigo_torneo(request.query.get("torneo"))
 
     payload = verificar_token(token)
     if not payload:
@@ -1439,7 +1534,6 @@ async def api_torneo_enfrentamientos(request):
                     ronda_data["partidos"].append(partido)
                 resultado.append(ronda_data)
             response = web.json_response({"rondas": resultado})
-            response.headers['Access-Control-Allow-Origin'] = '*'
             return response
 
         # 2️⃣ CASO CHALLONGE: intentar obtener de caché primero
@@ -1533,8 +1627,12 @@ async def api_torneo_enfrentamientos(request):
                 })
 
             response = web.json_response({"rondas": resultado})
-            response.headers['Access-Control-Allow-Origin'] = '*'
             return response
+
+        # Solo se consulta Challonge para torneos nuestros (en el estado del bot o ya en caché);
+        # cualquier otro código devuelve vacío y no se escribe nada en la caché
+        if torneo is None and torneo_cache is None:
+            return web.json_response({"rondas": []})
 
         # 3️⃣ No estaba en caché → llamar a Challonge y guardar en caché
         url_matches = f"https://api.challonge.com/v1/tournaments/{torneo_codigo}/matches.json"
@@ -1569,15 +1667,17 @@ async def api_torneo_enfrentamientos(request):
             # Lo añadimos solo con la info mínima para que no se pierda
             cache_actual["torneos"].append({
                 "codigo": torneo_codigo,
-                "nombre": torneo_codigo,  # podríamos obtenerlo de Challonge, pero no es crítico
+                "nombre": (torneo or {}).get("nombre", torneo_codigo),
                 "participants": participants_data,
                 "matches": matches_data
             })
 
-        # Guardar en archivo
-        os.makedirs("cache", exist_ok=True)
-        with open(config.CACHE_PATH, "w", encoding="utf-8") as f:
+        # Escritura atómica: se escribe en un temporal y se renombra, así un fallo a mitad no corrompe la caché
+        os.makedirs(os.path.dirname(config.CACHE_PATH) or ".", exist_ok=True)
+        tmp_path = f"{config.CACHE_PATH}.tmp"
+        with open(tmp_path, "w", encoding="utf-8") as f:
             json.dump(cache_actual, f, ensure_ascii=False, indent=2)
+        os.replace(tmp_path, config.CACHE_PATH)
 
         # --- Procesar los datos recién obtenidos (igual que antes) ---
         id_to_discord = {}
@@ -1657,20 +1757,31 @@ async def api_torneo_enfrentamientos(request):
             })
 
         response = web.json_response({"rondas": resultado})
-        response.headers['Access-Control-Allow-Origin'] = '*'
         return response
 
     except Exception as e:
         print(f"❌ Error en api_torneo_enfrentamientos: {e}")
-        return web.json_response({"error": str(e)}, status=500)
+        return _error_interno("api_torneo_enfrentamientos", status=500)
+
+async def _ha_jugado_contra(torneo_codigo: str, jugador_id: str, rival_id: str) -> bool:
+    """True si ambos jugadores se han enfrentado en alguna ronda y el resultado ya está reportado."""
+    if jugador_id == rival_id:
+        return False
+    rondas_data = await leer_rondas(_bot_instance, torneo_codigo) or {}
+    pareja = {jugador_id, rival_id}
+    for ronda in rondas_data.get("rondas", []):
+        for emp in ronda.get("emparejamientos", []):
+            if emp.get("resultado") is None:
+                continue
+            if {str(emp.get("j1")), str(emp.get("j2"))} == pareja:
+                return True
+    return False
+
 
 async def api_deck_rival(request):
-    token = request.query.get("session")
-    torneo_codigo = request.query.get("torneo")
-    rival_id = request.query.get("rival")
-
-    if not torneo_codigo or not rival_id:
-        return web.json_response({"error": "Faltan parámetros"}, status=400)
+    token = obtener_token(request)
+    torneo_codigo = v.codigo_torneo(request.query.get("torneo"))
+    rival_id = v.discord_id(request.query.get("rival"), "Rival")
 
     payload = verificar_token(token)
     if not payload:
@@ -1689,8 +1800,11 @@ async def api_deck_rival(request):
     if not torneo or str(discord_id) not in torneo.get("inscritos_ids", []):
         return web.json_response({"error": "No tienes acceso a este torneo"}, status=403)
 
-    codigo_deck = f"{torneo_codigo}_{rival_id}"
-    deck = await obtener_deck_en_canal(guild, codigo_deck)
+    # Solo se ve el deck de un rival contra el que ya se ha jugado (resultado reportado).
+    # Si no, se responde igual que "sin deck" para no revelar nada.
+    deck = None
+    if await _ha_jugado_contra(torneo_codigo, str(discord_id), str(rival_id)):
+        deck = await obtener_deck_en_canal(guild, f"{torneo_codigo}_{rival_id}")
 
     if deck:
         response_data = {
@@ -1703,15 +1817,12 @@ async def api_deck_rival(request):
         response_data = None
 
     response = web.json_response({"deck": response_data})
-    response.headers['Access-Control-Allow-Origin'] = '*'
     return response
 
 async def api_clasificacion_torneo(request):
-    torneo_codigo = request.query.get("codigo")
-    if not torneo_codigo:
-        return web.json_response({"error": "Falta el código del torneo"}, status=400)
+    torneo_codigo = v.codigo_torneo(request.query.get("codigo"))
 
-    token = request.query.get("session")
+    token = obtener_token(request)
     payload = verificar_token(token)
     if not payload:
         return web.json_response({"error": "Sesión no válida"}, status=401)
@@ -1767,30 +1878,49 @@ async def api_clasificacion_torneo(request):
             return web.json_response({"clasificacion": clasificacion_formateada})
     except Exception as e:
         print(f"❌ Error al obtener clasificación Swiss: {e}")
-        return web.json_response({"error": str(e)}, status=500)
+        return _error_interno("api_clasificacion_torneo", status=500)
 
     return web.json_response({"error": "Torneo no encontrado"}, status=404)
 
-async def api_agendar_partida(request):
-    try:
-        body = await request.json()
-    except Exception as e:
-        return web.json_response({"error": "JSON inválido"}, status=400)
+async def _son_rivales(codigo_torneo: str, j1: str, j2: str) -> bool:
+    """
+    Ambos inscritos en el torneo y, si ya hay rondas, emparejados entre sí en alguna.
+    (Antes de generar rondas basta con estar inscritos.)
+    """
+    estado = await leer_estado(_bot_instance)
+    torneo = next((t for t in estado.get("torneos", []) if t.get("codigo") == codigo_torneo), None)
+    if not torneo:
+        return False
+    inscritos = set(map(str, torneo.get("inscritos_ids", [])))
+    if j1 not in inscritos or j2 not in inscritos:
+        return False
 
-    token = body.get("session")
+    rondas = (await leer_rondas(_bot_instance, codigo_torneo) or {}).get("rondas", [])
+    if not rondas:
+        return True
+    pareja = {j1, j2}
+    return any(
+        {str(e.get("j1")), str(e.get("j2"))} == pareja
+        for r in rondas for e in r.get("emparejamientos", [])
+    )
+
+
+async def api_agendar_partida(request):
+    body = await v.leer_json(request)
+
+    token = obtener_token(request, body)
     payload = verificar_token(token)
     if not payload:
         return web.json_response({"error": "Sesión no válida"}, status=401)
 
     discord_id = int(payload["discord_id"])
-    codigo_torneo = str(body.get("codigo_torneo", "")).strip()
-    jugador1_id = body.get("jugador1_id")
-    jugador2_id = body.get("jugador2_id")
-    fecha = str(body.get("fecha", "")).strip()
-    hora = str(body.get("hora", "")).strip()
-
-    if not codigo_torneo or not jugador1_id or not jugador2_id or not fecha or not hora:
-        return web.json_response({"error": "Faltan datos"}, status=400)
+    codigo_torneo = v.codigo_torneo(body.get("codigo_torneo"))
+    j1 = v.discord_id(body.get("jugador1_id"), "Jugador 1")
+    j2 = v.discord_id(body.get("jugador2_id"), "Jugador 2")
+    fecha = v.fecha(body.get("fecha"))
+    hora = v.hora(body.get("hora"))
+    if j1 == j2:
+        return web.json_response({"error": "Los jugadores deben ser distintos"}, status=400)
 
     if _bot_instance is None:
         return web.json_response({"error": "Servicio no disponible"}, status=503)
@@ -1799,14 +1929,11 @@ async def api_agendar_partida(request):
     if not guild:
         return web.json_response({"error": "Servicio no disponible"}, status=503)
 
-    try:
-        j1 = int(jugador1_id)
-        j2 = int(jugador2_id)
-    except ValueError:
-        return web.json_response({"error": "IDs de jugador inválidos"}, status=400)
-
     if discord_id not in (j1, j2):
         return web.json_response({"error": "No tienes permiso para agendar esta partida"}, status=403)
+
+    if not await _son_rivales(codigo_torneo, str(j1), str(j2)):
+        return web.json_response({"error": "Esos jugadores no se enfrentan en este torneo"}, status=403)
 
     try:
         jugador1 = await guild.fetch_member(j1)
@@ -1821,13 +1948,16 @@ async def api_agendar_partida(request):
     if not canal:
         return web.json_response({"error": "Canal #partidos-agendados no encontrado"}, status=404)
 
-    mensaje = f"📅 [EVENTO] {fecha} {hora} | {jugador1.mention} vs {jugador2.mention} | Agendado por {payload.get('username', 'Usuario')} (vía web)"
-    await canal.send(mensaje)
+    autor = jugador1 if jugador1.id == discord_id else jugador2
+    mensaje = f"📅 [EVENTO] {fecha} {hora} | {jugador1.mention} vs {jugador2.mention} | Agendado por {autor.mention} (vía web)"
+    # Solo se notifica a los dos jugadores; nunca @everyone, @here ni roles
+    await canal.send(mensaje, allowed_mentions=discord.AllowedMentions(everyone=False, roles=False,
+                                                                     users=[jugador1, jugador2]))
 
     for j in (jugador1, jugador2):
         try:
             await j.send(f"✅ Se ha agendado una partida para el {fecha} a las {hora} entre {jugador1.mention} y {jugador2.mention}.")
-        except:
+        except discord.HTTPException:
             pass
 
     class FakeCtx:
@@ -1839,26 +1969,21 @@ async def api_agendar_partida(request):
     return web.json_response({"ok": True, "mensaje": "Partida agendada correctamente"})
 
 async def api_modificar_partida(request):
-    try:
-        body = await request.json()
-    except Exception as e:
-        return web.json_response({"error": "JSON inválido"}, status=400)
+    body = await v.leer_json(request)
 
-    token = body.get("session")
+    token = obtener_token(request, body)
     payload = verificar_token(token)
     if not payload:
         return web.json_response({"error": "Sesión no válida"}, status=401)
 
     discord_id = int(payload["discord_id"])
-    jugador1_id = body.get("jugador1_id")
-    jugador2_id = body.get("jugador2_id")
-    fecha_actual = str(body.get("fecha_actual", "")).strip()
-    hora_actual = str(body.get("hora_actual", "")).strip()
-    nueva_fecha = str(body.get("nueva_fecha", "")).strip()
-    nueva_hora = str(body.get("nueva_hora", "")).strip()
-
-    if not jugador1_id or not jugador2_id or not fecha_actual or not hora_actual:
-        return web.json_response({"error": "Faltan datos para identificar la partida"}, status=400)
+    jugador1_id = v.discord_id(body.get("jugador1_id"), "Jugador 1")
+    jugador2_id = v.discord_id(body.get("jugador2_id"), "Jugador 2")
+    # La partida actual puede ser de hoy o ya pasada: solo se valida el formato
+    fecha_actual = v.fecha(body.get("fecha_actual"), "fecha actual", futura=False)
+    hora_actual = v.hora(body.get("hora_actual"), "hora actual")
+    nueva_fecha = v.fecha(body.get("nueva_fecha"), "nueva fecha") if body.get("nueva_fecha") else ""
+    nueva_hora = v.hora(body.get("nueva_hora"), "nueva hora") if body.get("nueva_hora") else ""
 
     if not nueva_fecha and not nueva_hora:
         return web.json_response({"error": "Debes proporcionar al menos una fecha u hora nueva"}, status=400)
@@ -1946,24 +2071,18 @@ async def api_modificar_partida(request):
     return web.json_response({"ok": True, "mensaje": "Partida modificada correctamente"})
 
 async def api_eliminar_partida(request):
-    try:
-        body = await request.json()
-    except Exception as e:
-        return web.json_response({"error": "JSON inválido"}, status=400)
+    body = await v.leer_json(request)
 
-    token = body.get("session")
+    token = obtener_token(request, body)
     payload = verificar_token(token)
     if not payload:
         return web.json_response({"error": "Sesión no válida"}, status=401)
 
     discord_id = int(payload["discord_id"])
-    jugador1_id = body.get("jugador1_id")
-    jugador2_id = body.get("jugador2_id")
-    fecha = str(body.get("fecha", "")).strip()
-    hora = str(body.get("hora", "")).strip()
-
-    if not jugador1_id or not jugador2_id or not fecha or not hora:
-        return web.json_response({"error": "Faltan datos para identificar la partida"}, status=400)
+    jugador1_id = v.discord_id(body.get("jugador1_id"), "Jugador 1")
+    jugador2_id = v.discord_id(body.get("jugador2_id"), "Jugador 2")
+    fecha = v.fecha(body.get("fecha"), futura=False)
+    hora = v.hora(body.get("hora"))
 
     if _bot_instance is None:
         return web.json_response({"error": "Servicio no disponible"}, status=503)
@@ -2040,7 +2159,7 @@ async def api_eliminar_partida(request):
 # 8. SERVIDOR WEB — registro de rutas
 # ============================================================
 def crear_app():
-    app = web.Application(middlewares=[cors_middleware])
+    app = web.Application(middlewares=[cors_middleware], client_max_size=v.MAX_CUERPO_BYTES)
 
     app.router.add_get('/api/torneos', api_torneos)
     app.router.add_post('/api/solicitar-acceso', api_solicitar_acceso)
@@ -2096,7 +2215,7 @@ def crear_app():
 
 async def iniciar_servidor_web():
     app = crear_app()
-    runner = web.AppRunner(app)
+    runner = web.AppRunner(app, access_log_class=AccessLoggerSinQuery)
     await runner.setup()
     port = int(os.environ.get("PORT", 8080))
     site = web.TCPSite(runner, '0.0.0.0', port)

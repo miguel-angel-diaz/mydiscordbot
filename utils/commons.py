@@ -550,9 +550,12 @@ async def obtener_deck_en_canal(guild: discord.Guild, codigo_deck: str):
     if not canal_submitted:
         return None
 
+    # Coincidencia exacta: el código va entre backticks en la descripción ("**Código:** `torneo_id`"),
+    # así "abc_1" no casa con "abc_123..."
+    codigo_exacto = f"`{codigo_deck}`"
     async for mensaje in canal_submitted.history(limit=500):
         for embed in mensaje.embeds:
-            if embed.description and codigo_deck in embed.description:
+            if embed.description and codigo_exacto in embed.description:
                 # Extraer campos del embed
                 campos = {field.name.lower(): field.value for field in embed.fields}
 

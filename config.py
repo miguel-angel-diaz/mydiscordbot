@@ -485,7 +485,7 @@ COMANDOS_INFO = [
     {
         "comando": "iniciar-battle",
         "aliases": ["iniciar battle", "iniciar_battle"],
-        "roles_permitidos": ["socio", "second-chance-socio", "miembro", "admin", "second-chance-miembro"],
+        "roles_permitidos": ["admin"],
         "permisos_discord": ["manage_messages", "manage_roles"],
         "descripcion": "Inicia un enfrentamiento de tipo Battle Royale",
         "tutorial": [

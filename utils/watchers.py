@@ -1,313 +1,373 @@
-from discord.ext import tasks, commands
-from datetime import datetime, timedelta, time
-import discord
-import re
 import asyncio
+import re
+import traceback
+from datetime import date, datetime, time, timedelta
+from typing import Optional
+
+import discord
+from discord.ext import commands, tasks
 
 from utils.torneos_estado import leer_estado, actualizar_torneo_estado, obtener_torneo_estado
-
-from utils.torneos_api import regenerar_cache
 
 try:
     from zoneinfo import ZoneInfo
     TZ = ZoneInfo("Europe/Madrid")
 except Exception:
     TZ = None
+    print("[TAREAS] ⚠️ No se pudo cargar la zona horaria Europe/Madrid; se usará UTC/hora local.")
 
-def now():
+# -------------------------------------------------------------
+# CONFIGURACIÓN
+# -------------------------------------------------------------
+GUILD_ID_ADMISION = 1381551388907016252
+HORA_TAREAS_DIARIAS = time(hour=10, minute=15, tzinfo=TZ)
+
+CANAL_PREGUNTAS = "preguntale-a-el-barbas"
+CANAL_PARTIDOS = "partidos-agendados"
+CANAL_TORNEOS_ACTIVOS = "torneos-activos"
+CANAL_CARTELERA_PARTIDAS = "🎭-cartelera‐proximas-partidas"  # ojo: el guion de "cartelera‐" es U+2010
+CANAL_DECKS = "submitted-decks"
+
+TITULO_EMBED_SEMANAL = "📅 Partidas programadas esta semana"
+MAX_CAMPOS_EMBED = 25          # límite de Discord
+DIAS_GRACIA_TORNEO = 2         # días tras el inicio antes de borrar el torneo de #torneos-activos
+DIAS_RECORDATORIO = (3, 1)
+PAUSA_BORRADO = 0.3            # segundos entre borrados para no saturar la API
+
+PATRON_FECHA = re.compile(r"\d{2}/\d{2}/\d{4}")
+PATRON_FECHA_EVENTO = re.compile(r"\[EVENTO\]\s+(\d{2}/\d{2}/\d{4})")
+PATRON_EVENTO = re.compile(
+    r"\[EVENTO\]\s+(\d{2}/\d{2}/\d{4})\s+(\d{2}:\d{2})\s+\|\s+(.+?)\s+vs\s+(.+?)\s+\|"
+)
+PATRON_CODIGO_DECK = re.compile(r"`(.+?)`")
+
+
+# -------------------------------------------------------------
+# UTILIDADES
+# -------------------------------------------------------------
+def now() -> datetime:
     return datetime.now(TZ) if TZ else datetime.now()
 
-def hoy():
+
+def hoy() -> date:
     return now().date()
+
 
 def log(msg: str):
     print(f"[TAREAS {now().strftime('%Y-%m-%d %H:%M:%S')}] {msg}")
 
+
+def _parsear_fecha(texto: str) -> Optional[date]:
+    try:
+        return datetime.strptime(texto, "%d/%m/%Y").date()
+    except (ValueError, TypeError):
+        return None
+
+
+def _canal(guild: discord.Guild, nombre: str) -> Optional[discord.TextChannel]:
+    return discord.utils.get(guild.text_channels, name=nombre)
+
+
+async def _borrar(mensaje: discord.Message) -> bool:
+    """Borra un mensaje sin propagar errores de Discord. Devuelve True si se borró."""
+    try:
+        await mensaje.delete()
+        await asyncio.sleep(PAUSA_BORRADO)
+        return True
+    except discord.NotFound:
+        return False  # ya estaba borrado
+    except discord.Forbidden:
+        log(f"Sin permisos para borrar mensajes en #{mensaje.channel}")
+        return False
+    except discord.HTTPException as e:
+        log(f"Error borrando mensaje {mensaje.id} en #{mensaje.channel}: {e}")
+        return False
+
+
 # -------------------------------------------------------------
-# TAREAS INDIVIDUALES (sin comprobaciones de fecha)
+# TAREAS INDIVIDUALES
 # -------------------------------------------------------------
 async def limpiar_canal_diario(bot: commands.Bot):
-    guild = bot.get_guild(1381551388907016252)
-    if not guild:
-        return
-    canal = discord.utils.get(guild.text_channels, name="preguntale-a-el-barbas")
+    """Vacía #preguntale-a-el-barbas, respetando los mensajes fijados."""
+    guild = bot.get_guild(GUILD_ID_ADMISION)
+    canal = _canal(guild, CANAL_PREGUNTAS) if guild else None
     if not canal:
         return
-    borrados = 0
-    try:
-        async for mensaje in canal.history(limit=None):
-            if not mensaje.pinned:
-                await mensaje.delete()
-                borrados += 1
-                await asyncio.sleep(0.3)
-        log(f"limpiar_canal_diario: {borrados} mensajes borrados")
-    except Exception as e:
-        log(f"limpiar_canal_diario: error: {e}")
+    # purge borra en bloque los mensajes de <14 días y uno a uno los más antiguos
+    borrados = await canal.purge(limit=None, check=lambda m: not m.pinned)
+    log(f"limpiar_canal_diario: {len(borrados)} mensajes borrados")
+
 
 async def limpiar_partidos_pasados(bot: commands.Bot):
-    total_borrados = 0
+    """Borra de #partidos-agendados los eventos con fecha anterior a hoy."""
+    hoy_date = hoy()
+    total = 0
     for guild in bot.guilds:
-        canal = discord.utils.get(guild.text_channels, name="partidos-agendados")
+        canal = _canal(guild, CANAL_PARTIDOS)
         if not canal:
             continue
-        patron_fecha = re.compile(r"\[EVENTO\]\s+(\d{2}/\d{2}/\d{4})")
-        borrados = 0
         async for mensaje in canal.history(limit=300):
-            match = patron_fecha.search(mensaje.content)
-            if not match:
-                continue
-            try:
-                fecha = datetime.strptime(match.group(1), "%d/%m/%Y").date()
-                if fecha < hoy():
-                    await mensaje.delete()
-                    borrados += 1
-                    await asyncio.sleep(0.3)
-            except:
-                continue
-        total_borrados += borrados
-    log(f"limpiar_partidos_pasados: {total_borrados} partidos eliminados")
+            match = PATRON_FECHA_EVENTO.search(mensaje.content)
+            fecha = _parsear_fecha(match.group(1)) if match else None
+            if fecha and fecha < hoy_date and await _borrar(mensaje):
+                total += 1
+    log(f"limpiar_partidos_pasados: {total} partidos eliminados")
+
+
+def _fecha_inicio_torneo(contenido: str) -> Optional[date]:
+    """Fecha de inicio de un mensaje de #torneos-activos (línea 'Inicio'; si no, la primera fecha)."""
+    primera = None
+    for linea in contenido.splitlines():
+        match = PATRON_FECHA.search(linea)
+        if not match:
+            continue
+        fecha = _parsear_fecha(match.group())
+        if not fecha:
+            continue
+        if "Inicio" in linea:
+            return fecha
+        primera = primera or fecha
+    return primera
+
 
 async def limpiar_torneos_vencidos(bot: commands.Bot):
-    total_borrados = 0
+    """Borra de #torneos-activos los torneos que empezaron hace DIAS_GRACIA_TORNEO días o más."""
+    limite = hoy() - timedelta(days=DIAS_GRACIA_TORNEO)
+    total = 0
     for guild in bot.guilds:
-        canal = discord.utils.get(guild.text_channels, name="torneos-activos")
+        canal = _canal(guild, CANAL_TORNEOS_ACTIVOS)
         if not canal:
             continue
-        borrados = 0
         async for mensaje in canal.history(limit=300):
             if mensaje.pinned:
                 continue
-            for linea in mensaje.content.splitlines():
-                match = re.search(r"\d{2}/\d{2}/\d{4}", linea)
-                if match:
-                    try:
-                        fecha = datetime.strptime(match.group(), "%d/%m/%Y").date()
-                        if fecha <= hoy() - timedelta(days=2):
-                            await mensaje.delete()
-                            borrados += 1
-                            await asyncio.sleep(0.3)
-                            break
-                    except:
-                        continue
-        total_borrados += borrados
-    log(f"limpiar_torneos_vencidos: {total_borrados} torneos vencidos eliminados")
+            fecha = _fecha_inicio_torneo(mensaje.content)
+            if fecha and fecha <= limite and await _borrar(mensaje):
+                total += 1
+    log(f"limpiar_torneos_vencidos: {total} torneos vencidos eliminados")
+
+
+async def _eventos_de_la_semana(canal: discord.TextChannel, inicio: date, fin: date):
+    eventos = []
+    async for mensaje in canal.history(limit=300):
+        if not mensaje.content.startswith("📅 [EVENTO]"):
+            continue
+        match = PATRON_EVENTO.search(mensaje.content)
+        if not match:
+            continue
+        fecha_str, hora, j1, j2 = match.groups()
+        fecha = _parsear_fecha(fecha_str)
+        if fecha and inicio <= fecha <= fin:
+            eventos.append((fecha, hora, j1.strip(), j2.strip()))
+    return sorted(eventos)
+
+
+def _embed_semanal(eventos) -> discord.Embed:
+    if not eventos:
+        return discord.Embed(
+            title=TITULO_EMBED_SEMANAL,
+            description="⏳ No hay futuras partidas programadas por ahora.",
+            color=discord.Color.dark_grey(),
+        )
+
+    embed = discord.Embed(title=TITULO_EMBED_SEMANAL, color=discord.Color.blue())
+    # Si hay más eventos que campos permitidos, se reserva el último para el resumen
+    visibles = eventos if len(eventos) <= MAX_CAMPOS_EMBED else eventos[:MAX_CAMPOS_EMBED - 1]
+    for fecha, hora, j1, j2 in visibles:
+        embed.add_field(name=f"{fecha.strftime('%d/%m/%Y')} {hora}", value=f"{j1} vs {j2}", inline=False)
+    restantes = len(eventos) - len(visibles)
+    if restantes:
+        embed.add_field(
+            name="…",
+            value=f"Y {restantes} partida(s) más en `#{CANAL_PARTIDOS}`.",
+            inline=False,
+        )
+    return embed
+
 
 async def publicar_eventos_semanales(bot: commands.Bot):
+    """Crea o actualiza en la cartelera el embed con las partidas de la semana actual."""
+    hoy_date = hoy()
+    inicio_semana = hoy_date - timedelta(days=hoy_date.weekday())
+    fin_semana = inicio_semana + timedelta(days=6)
+
     for guild in bot.guilds:
-        canal_origen = discord.utils.get(guild.text_channels, name="partidos-agendados")
-        canal_proximas = discord.utils.get(guild.text_channels, name="🎭-cartelera‐proximas-partidas")
-        if not canal_origen or not canal_proximas:
-            log(f"publicar_eventos_semanales: faltan canales en {guild.name} (origen={bool(canal_origen)}, proximas={bool(canal_proximas)})")
+        canal_origen = _canal(guild, CANAL_PARTIDOS)
+        canal_cartelera = _canal(guild, CANAL_CARTELERA_PARTIDAS)
+        if not canal_origen or not canal_cartelera:
+            log(
+                f"publicar_eventos_semanales: faltan canales en {guild.name} "
+                f"(origen={bool(canal_origen)}, cartelera={bool(canal_cartelera)})"
+            )
             continue
 
-        hoy_date = hoy()
-        inicio_semana = hoy_date - timedelta(days=hoy_date.weekday())
-        fin_semana = inicio_semana + timedelta(days=6)
-        log(f"[DEBUG] {guild.name} → hoy={hoy_date} | semana: {inicio_semana} → {fin_semana}")
+        eventos = await _eventos_de_la_semana(canal_origen, inicio_semana, fin_semana)
+        embed = _embed_semanal(eventos)
 
-        eventos = []
-        patron = re.compile(r"\[EVENTO\]\s+(\d{2}/\d{2}/\d{4})\s+(\d{2}:\d{2})\s+\|\s+(.+?)\s+vs\s+(.+?)\s+\|")
+        existente = None
+        async for msg in canal_cartelera.history(limit=50):
+            if msg.author == bot.user and msg.embeds and msg.embeds[0].title == TITULO_EMBED_SEMANAL:
+                existente = msg
+                break
 
-        total_mensajes = 0
-        async for mensaje in canal_origen.history(limit=300):
-            if not mensaje.content.startswith("📅 [EVENTO]"):
-                continue
-            total_mensajes += 1
-            match = patron.search(mensaje.content)
-            if not match:
-                log(f"[DEBUG] Mensaje sin match: {mensaje.content[:80]}")
-                continue
-            fecha_str, hora_str, j1, j2 = match.groups()
-            try:
-                fecha = datetime.strptime(fecha_str, "%d/%m/%Y").date()
-            except Exception as e:
-                log(f"[DEBUG] Fecha inválida '{fecha_str}': {e}")
-                continue
-
-            en_rango = inicio_semana <= fecha <= fin_semana
-            log(f"[DEBUG] Evento detectado: {fecha} {hora_str} | {j1.strip()} vs {j2.strip()} → en_rango={en_rango}")
-
-            if en_rango:
-                eventos.append((fecha, hora_str, j1.strip(), j2.strip()))
-
-        log(f"[DEBUG] {guild.name}: {total_mensajes} mensajes [EVENTO] escaneados, {len(eventos)} dentro de la semana actual")
-
-        # Buscar mensaje existente
-        mensaje_existente = None
-        async for msg in canal_proximas.history(limit=50):
-            if msg.author == bot.user and msg.embeds:
-                if msg.embeds[0].title == "📅 Partidas programadas esta semana":
-                    mensaje_existente = msg
-                    break
-
-        # Crear o actualizar embed
-        if not eventos:
-            embed = discord.Embed(
-                title="📅 Partidas programadas esta semana",
-                description="⏳ No hay futuras partidas programadas por ahora.",
-                color=discord.Color.dark_grey()
-            )
+        if existente:
+            await existente.edit(embed=embed)
         else:
-            embed = discord.Embed(title="📅 Partidas programadas esta semana", color=discord.Color.blue())
-            for fecha_ev, hora_ev, j1, j2 in sorted(eventos):
-                embed.add_field(
-                    name=f"{fecha_ev.strftime('%d/%m/%Y')} {hora_ev}",
-                    value=f"{j1} vs {j2}",
-                    inline=False
-                )
-
-        if mensaje_existente:
-            await mensaje_existente.edit(embed=embed)
-            log(f"[DEBUG] Embed actualizado con {len(eventos)} eventos")
-        else:
-            await canal_proximas.send(embed=embed)
-            log(f"[DEBUG] Embed creado con {len(eventos)} eventos")
-
+            await canal_cartelera.send(embed=embed)
         log(f"publicar_eventos_semanales: {len(eventos)} eventos en {guild.name}")
+
 
 # ============================================================
 #   RECORDATORIOS DE DECK (3 días y 24h antes del torneo)
 # ============================================================
-
-async def _obtener_decks_subidos(guild):
+async def _obtener_decks_subidos(guild: discord.Guild) -> set:
     """Devuelve un set con los códigos de deck ya subidos (codigo_torneo_id)."""
-    canal_decks = discord.utils.get(guild.text_channels, name="submitted-decks")
-    decks_subidos = set()
-    if not canal_decks:
-        return decks_subidos
+    decks = set()
+    canal = _canal(guild, CANAL_DECKS)
+    if not canal:
+        return decks
 
-    async for msg in canal_decks.history(limit=500):
+    async for msg in canal.history(limit=500):
         for embed in msg.embeds:
-            if embed.title and "🃏 Deck" in embed.title:
-                contenido = ""
-                if embed.description:
-                    contenido += embed.description + "\n"
-                for field in embed.fields:
-                    contenido += f"{field.name}: {field.value}\n"
-
-                for linea in contenido.splitlines():
-                    if "Código:" in linea:
-                        match = re.search(r'`(.+?)`', linea)
-                        if match:
-                            decks_subidos.add(match.group(1))
-    return decks_subidos
+            if not embed.title or "🃏 Deck" not in embed.title:
+                continue
+            lineas = (embed.description or "").splitlines()
+            lineas += [f"{f.name}: {f.value}" for f in embed.fields]
+            for linea in lineas:
+                if "Código:" in linea:
+                    match = PATRON_CODIGO_DECK.search(linea)
+                    if match:
+                        decks.add(match.group(1))
+    return decks
 
 
-async def _enviar_recordatorio_a_inscritos(bot, guild, codigo, nombre, dias_restantes, decks_subidos):
-    """Envía el recordatorio a todos los inscritos que no hayan subido deck."""
-    torneo = await obtener_torneo_estado(bot, codigo)
-    if not torneo:
-        return 0
-
-    inscritos_ids = torneo.get("inscritos_ids", [])
-    if not inscritos_ids:
-        return 0
-
+def _mensaje_recordatorio(codigo: str, nombre: str, dias_restantes: int) -> str:
     if dias_restantes == 3:
-        mensaje = (
+        return (
             f"⏰ **¡Faltan 3 días para el torneo `{nombre}`!**\n\n"
             f"🏷️ Código: `{codigo}`\n"
             f"📅 Inicio: en 3 días\n\n"
             f"Recuerda subir tu deck antes del inicio con el comando:\n"
             f"`!subir-deck {codigo}`"
         )
-    else:  # 1 día
-        mensaje = (
-            f"⏰ **¡Últimas 24 horas para subir tu deck!**\n\n"
-            f"🏷️ Torneo: **{nombre}**\n"
-            f"🆔 Código: `{codigo}`\n\n"
-            f"⚠️ Todavía no has subido tu deck. Hazlo antes de que empiece con:\n"
-            f"`!subir-deck {codigo}`"
-        )
+    return (
+        f"⏰ **¡Últimas 24 horas para subir tu deck!**\n\n"
+        f"🏷️ Torneo: **{nombre}**\n"
+        f"🆔 Código: `{codigo}`\n\n"
+        f"⚠️ Todavía no has subido tu deck. Hazlo antes de que empiece con:\n"
+        f"`!subir-deck {codigo}`"
+    )
 
+
+async def _enviar_recordatorio_a_inscritos(bot, guild, codigo, nombre, dias_restantes, decks_subidos) -> int:
+    """Envía el recordatorio por DM a los inscritos que no hayan subido deck."""
+    torneo = await obtener_torneo_estado(bot, codigo)
+    inscritos_ids = (torneo or {}).get("inscritos_ids", [])
+    if not inscritos_ids:
+        return 0
+
+    mensaje = _mensaje_recordatorio(codigo, nombre, dias_restantes)
     enviados = 0
     for uid in inscritos_ids:
-        codigo_deck = f"{codigo}_{uid}"
-        if codigo_deck in decks_subidos:
+        if f"{codigo}_{uid}" in decks_subidos:
             continue  # ya subió el deck
-
         try:
-            miembro = guild.get_member(int(uid))
-            if not miembro:
-                miembro = await guild.fetch_member(int(uid))
+            miembro = guild.get_member(int(uid)) or await guild.fetch_member(int(uid))
             await miembro.send(mensaje)
             enviados += 1
         except discord.Forbidden:
-            print(f"⚠️ No se pudo enviar recordatorio a {uid} (DMs cerrados).")
-        except Exception as e:
-            print(f"⚠️ Error enviando recordatorio a {uid}: {e}")
-
+            log(f"No se pudo enviar recordatorio a {uid} (DMs cerrados).")
+        except discord.NotFound:
+            log(f"No se pudo enviar recordatorio a {uid} (ya no está en el servidor).")
+        except (discord.HTTPException, ValueError) as e:
+            log(f"Error enviando recordatorio a {uid}: {e}")
     return enviados
 
 
 async def enviar_recordatorios_deck(bot: commands.Bot):
     """
-    Revisa todos los torneos abiertos y envía recordatorios:
-      - 3 días antes del inicio
-      - 24 horas antes (1 día antes, ya que es tarea diaria)
-    Solo envía a quien NO haya subido deck y no lo haya recibido ya.
+    Revisa los torneos abiertos y envía recordatorios 3 días y 1 día antes del inicio.
+    Solo a quien NO haya subido deck, y una única vez por torneo y aviso (flag en el estado).
     """
-    guild = bot.get_guild(1381551388907016252)  # GUILD_ID_ADMISION
+    guild = bot.get_guild(GUILD_ID_ADMISION)
     if not guild:
         return
 
     estado = await leer_estado(bot)
-    hoy = hoy()
+    hoy_date = hoy()
+    decks_subidos = None  # se carga solo si algún torneo necesita recordatorio
 
     for torneo in estado.get("torneos", []):
-        # Solo torneos en estado "abierto"
-        if torneo.get("estado") != "abierto":
-            continue
-
-        fecha_str = torneo.get("fecha_inicio")
-        if not fecha_str:
-            continue
-
-        try:
-            fecha_inicio = datetime.strptime(fecha_str, "%d/%m/%Y").date()
-        except ValueError:
-            continue
-
-        dias_restantes = (fecha_inicio - hoy).days
         codigo = torneo.get("codigo")
-        nombre = torneo.get("nombre", "Torneo")
-
-        if dias_restantes not in (3, 1):
+        if not codigo or torneo.get("estado") != "abierto":
             continue
 
-        # Verificar flag para no reenviar
+        fecha_inicio = _parsear_fecha(torneo.get("fecha_inicio"))
+        if not fecha_inicio:
+            continue
+
+        dias_restantes = (fecha_inicio - hoy_date).days
+        if dias_restantes not in DIAS_RECORDATORIO:
+            continue
+
         flag = f"recordatorio_{dias_restantes}d_enviado"
         if torneo.get(flag):
             continue
 
-        # Obtener decks ya subidos
-        decks_subidos = await _obtener_decks_subidos(guild)
+        if decks_subidos is None:
+            decks_subidos = await _obtener_decks_subidos(guild)
 
-        # Enviar recordatorios
+        nombre = torneo.get("nombre", "Torneo")
         enviados = await _enviar_recordatorio_a_inscritos(
             bot, guild, codigo, nombre, dias_restantes, decks_subidos
         )
-
-        # Marcar flag
         await actualizar_torneo_estado(bot, codigo, {flag: True})
-
         log(f"Recordatorio {dias_restantes}d para '{nombre}' ({codigo}): enviado a {enviados} usuario(s).")
 
-# -------------------------------------------------------------
-# LOOP DIARIO (ejecución exacta a las 10:15)
-# -------------------------------------------------------------
-@tasks.loop(time=time(hour=10, minute=15))
-async def ejecutar_tareas_diarias(bot: commands.Bot):
-    await bot.wait_until_ready()
-    await limpiar_canal_diario(bot)
-    await limpiar_torneos_vencidos(bot)
-    await limpiar_partidos_pasados(bot)
-    await publicar_eventos_semanales(bot)
-    await enviar_recordatorios_deck(bot)
 
 # -------------------------------------------------------------
-# INICIO (llamar una vez desde on_ready)
+# LOOP DIARIO (10:15 hora de Madrid)
+# -------------------------------------------------------------
+TAREAS_DIARIAS = (
+    limpiar_canal_diario,
+    limpiar_torneos_vencidos,
+    limpiar_partidos_pasados,
+    publicar_eventos_semanales,
+    enviar_recordatorios_deck,
+)
+
+
+async def ejecutar_todas(bot: commands.Bot):
+    """Ejecuta cada tarea de forma aislada: si una falla, las demás siguen y el loop no muere."""
+    for tarea in TAREAS_DIARIAS:
+        try:
+            await tarea(bot)
+        except Exception:
+            log(f"❌ {tarea.__name__} falló:\n{traceback.format_exc()}")
+
+
+@tasks.loop(time=HORA_TAREAS_DIARIAS)
+async def ejecutar_tareas_diarias(bot: commands.Bot):
+    await ejecutar_todas(bot)
+
+
+@ejecutar_tareas_diarias.before_loop
+async def _antes_de_tareas_diarias():
+    # before_loop no recibe los argumentos de start(), así que se usa el bot guardado en cargar_tareas
+    await _bot_tareas.wait_until_ready()
+
+
+_bot_tareas: Optional[commands.Bot] = None
+
+
+# -------------------------------------------------------------
+# INICIO (seguro de llamar desde on_ready, que se repite al reconectar)
 # -------------------------------------------------------------
 def cargar_tareas(bot: commands.Bot):
-    """Inicia el bucle diario de tareas."""
+    """Inicia el bucle diario de tareas (solo la primera vez)."""
+    global _bot_tareas
+    if ejecutar_tareas_diarias.is_running():
+        return
+    _bot_tareas = bot
     ejecutar_tareas_diarias.start(bot)
+    log(f"Tareas diarias programadas a las {HORA_TAREAS_DIARIAS.strftime('%H:%M')} ({TZ or 'hora local'})")

@@ -68,6 +68,8 @@ async def inscribir_jugador(bot, codigo: str, usuario_id: int) -> Tuple[bool, st
         return False, "El torneo no existe."
     if torneo.get("tipo") != "swiss":
         return False, "Este torneo no es suizo."
+    if torneo.get("estado", "abierto") != "abierto":
+        return False, "Las inscripciones de este torneo están cerradas."
 
     inscritos = torneo.get("inscritos_ids", [])
     if str(usuario_id) in inscritos:
@@ -85,6 +87,8 @@ async def desinscribir_jugador(bot, codigo: str, usuario_id: int, guild: discord
     torneo = await obtener_torneo(bot, codigo)
     if not torneo:
         return False, "El torneo no existe."
+    if torneo.get("estado", "abierto") != "abierto":
+        return False, "El torneo ya ha empezado o ha terminado; no puedes desinscribirte. Habla con un admin."
 
     inscritos = torneo.get("inscritos_ids", [])
     if str(usuario_id) not in inscritos:

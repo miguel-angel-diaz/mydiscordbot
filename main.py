@@ -110,14 +110,58 @@ def normalize_string(s: str) -> str:
     )
     return s
 
+ROL_ADMIN = "admin"
+ROLES_SANCIONADOS = {"out", "strike"}  # bloquean los comandos aunque se tenga un rol permitido
+
+
+async def _denegar_comando(ctx, mensaje: str) -> bool:
+    try:
+        await ctx.message.delete()
+    except (discord.Forbidden, discord.NotFound, discord.HTTPException):
+        pass
+    try:
+        await ctx.author.send(mensaje)
+    except discord.Forbidden:
+        pass
+    return False
+
+
 def comando_roles_permitidos(*roles):
-    # Normalizamos los roles al definir el decorador
-    roles_normalizados = [normalize_string(r) for r in roles]
-    
-    def decorator(func):
-        setattr(func, "roles_permitidos", roles_normalizados)
-        return func
-    return decorator
+    """
+    Restringe el comando a los roles indicados (sin distinguir mayúsculas ni tildes).
+    El dueño del servidor y los admins siempre pueden usarlo; quien tenga un rol
+    de sanción (Out/Strike) no puede, aunque tenga un rol permitido.
+    """
+    roles_normalizados = {normalize_string(r) for r in roles}
+
+    async def predicate(ctx):
+        comando = f"!{ctx.command.qualified_name}"
+        if ctx.guild is None:
+            return await _denegar_comando(ctx, f"❌ El comando `{comando}` solo se puede usar en el servidor.")
+
+        autor = ctx.author
+        roles_autor = {normalize_string(r.name) for r in getattr(autor, "roles", [])}
+
+        es_admin = (
+            autor == ctx.guild.owner
+            or ROL_ADMIN in roles_autor
+            or autor.guild_permissions.administrator
+        )
+        if es_admin:
+            return True
+
+        if roles_autor & ROLES_SANCIONADOS:
+            return await _denegar_comando(ctx, f"🚫 No puedes usar `{comando}` mientras tengas una sanción activa.")
+
+        if roles_autor & roles_normalizados:
+            return True
+
+        return await _denegar_comando(
+            ctx,
+            f"❌ Necesitas uno de estos roles para usar `{comando}`: {', '.join(sorted(roles))}."
+        )
+
+    return commands.check(predicate)
 
 ################################## COMANDOS ADMINISTRADOR ###############################################
 
@@ -254,7 +298,7 @@ async def ver_inscritos(ctx, codigo=None):
 
 @bot.command(name="iniciar-battle",
     aliases=["iniciar battle", "iniciar_battle"])
-@comando_roles_permitidos("socio", "second-chance-socio", "miembro", "second-chance-miembro")
+@comando_roles_permitidos("admin")
 async def iniciar_battle(ctx, codigo_torneo: str = None, jugador1: discord.Member = None, jugador2: discord.Member = None):
     """Consulta si se puede hacer un enfrentamiento de tipo battle - !iniciar_battle_handle"""
     await iniciar_battle_handle(ctx, codigo_torneo, jugador1, jugador2)
@@ -385,10 +429,12 @@ async def nuevo_swiss(ctx):
     await swiss_nuevo_asistente_handle(ctx)
 
 @bot.command(name="inscribir-swiss", aliases=["inscribir swiss", "inscribir_swiss", "inscribirse", "inscribir"])
+@comando_roles_permitidos("socio", "second-chance-socio", "miembro", "second-chance-miembro")
 async def inscribir_swiss(ctx):
     await swiss_inscribir_asistente_handle(ctx)
 
 @bot.command(name="desinscribir-swiss", aliases=["desinscribir swiss", "desinscribir_swiss", "desinscribirse", "desinscribir"])
+@comando_roles_permitidos("socio", "second-chance-socio", "miembro", "second-chance-miembro")
 async def desinscribir_swiss(ctx):
     await swiss_desinscribir_asistente_handle(ctx)
 
@@ -403,6 +449,7 @@ async def reiniciar_swiss(ctx):
     await swiss_reiniciar_asistente_handle(ctx)
 
 @bot.command(name="reportar-swiss", aliases=["reportar resultado", "reportar_resultado", "reportar-resultado"])
+@comando_roles_permitidos("socio", "second-chance-socio", "miembro", "second-chance-miembro")
 async def reportar_swiss(ctx):
     await swiss_reportar_asistente_handle(ctx)
 
@@ -413,6 +460,7 @@ async def modificar_resultado_swiss(ctx):
     await swiss_modificar_resultado_asistente_handle(ctx)
 
 @bot.command(name="clasificacion-swiss")
+@comando_roles_permitidos("socio", "second-chance-socio", "miembro", "second-chance-miembro")
 async def clasificacion_swiss(ctx):
     await swiss_clasificacion_asistente_handle(ctx)
 

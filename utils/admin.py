@@ -4,9 +4,56 @@ from datetime import datetime
 import asyncio
 import aiohttp
 import random
+import re
 import config
 
 from utils.commons import borrar_mensaje_seguro, validar_canal_correcto, buscar_usuario_en_servidor, obtener_torneo_usuario
+
+async def _obtener_objetivo_sancion(ctx, miembro, accion: str):
+    """
+    Devuelve el miembro a sancionar (pidiéndolo por DM si no viene) o None si no se debe continuar.
+    Nunca se puede sancionar a bots, al dueño del servidor, a admins ni a uno mismo.
+    """
+    author = ctx.author
+
+    if miembro is None:
+        def dm_check(m):
+            return m.author == author and isinstance(m.channel, discord.DMChannel)
+        try:
+            await author.send(
+                f"⚠️ Vamos a aplicar un **{accion}**.\n"
+                f"¿A quién? Escribe su nombre, apodo, ID o mención tal como aparece en el servidor:"
+            )
+            respuesta = await ctx.bot.wait_for("message", check=dm_check, timeout=60)
+        except asyncio.TimeoutError:
+            await author.send(f"⏰ Tiempo agotado. Vuelve a intentarlo con `!{accion}`.")
+            return None
+        except discord.Forbidden:
+            await ctx.send("❌ No puedo enviarte mensajes privados. Activa los mensajes en tu configuración de privacidad.")
+            return None
+        texto = re.sub(r"^<@!?(\d+)>$", r"\1", respuesta.content.strip())
+        miembro = buscar_usuario_en_servidor(ctx.guild, texto)
+
+    motivo = None
+    if not isinstance(miembro, discord.Member):
+        motivo = "No encontré a ese usuario en el servidor."
+    elif miembro.bot:
+        motivo = "No se puede sancionar a un bot."
+    elif miembro == author:
+        motivo = "No puedes sancionarte a ti mismo."
+    elif miembro == ctx.guild.owner:
+        motivo = "No se puede sancionar al dueño del servidor."
+    elif miembro.guild_permissions.administrator or any(r.name.lower() == "admin" for r in miembro.roles):
+        motivo = "No se puede sancionar a un admin."
+
+    if motivo:
+        try:
+            await author.send(f"❌ {motivo}")
+        except discord.Forbidden:
+            pass
+        return None
+    return miembro
+
 
 async def aplicar_strike(ctx, miembro: discord.Member):
      # Intentar eliminar el mensaje del canal público
@@ -21,29 +68,9 @@ async def aplicar_strike(ctx, miembro: discord.Member):
     if not await moderador_permisos_handle(ctx):
       return
 
-    def dm_check(m):
-        return m.author == author and isinstance(m.channel, discord.DMChannel)
-
-    try:
-        # Si falta algún dato, inicia conversación por DM
-        if miembro is None:
-            await author.send("⚠️ Vamos a emitir un strike. Responde a las siguientes preguntas:")
-
-            if miembro is None:
-                await author.send("¿A quién quieres aplicar el strike? Escribe su nombre o apodo exacto tal como aparece en el servidor:")
-                respuesta_miembro = await ctx.bot.wait_for("message", check=dm_check, timeout=60)
-                miembro = buscar_usuario_en_servidor(ctx.guild, respuesta_miembro.content.strip())
-                if not miembro:
-                    await author.send("❌ No encontré a ese usuario en el servidor.")
-                    return
-
-    except asyncio.TimeoutError:
-        await author.send("⏰ Tiempo agotado. Vuelve a intentar con `!strike`.")
-    except discord.Forbidden:
-        await ctx.send("❌ No puedo enviarte mensajes privados. Activa los mensajes en tu configuración de privacidad.")
-    except Exception as e:
-        await author.send("❌ Ocurrió un error inesperado durante el proceso.")
-        raise e
+    miembro = await _obtener_objetivo_sancion(ctx, miembro, "strike")
+    if miembro is None:
+        return
 
     rol_strike = discord.utils.get(servidor.roles, name="Strike")
     if not rol_strike:
@@ -80,29 +107,9 @@ async def aplicar_out(ctx, miembro: discord.Member):
     if not await moderador_permisos_handle(ctx):
       return
 
-    def dm_check(m):
-        return m.author == author and isinstance(m.channel, discord.DMChannel)
-
-    try:
-        # Si falta algún dato, inicia conversación por DM
-        if miembro is None:
-            await author.send("⚠️ Vamos a emitir un strike. Responde a las siguientes preguntas:")
-
-            if miembro is None:
-                await author.send("¿A quién quieres aplicar el out? Escribe su nombre o apodo exacto tal como aparece en el servidor:")
-                respuesta_miembro = await ctx.bot.wait_for("message", check=dm_check, timeout=60)
-                miembro = buscar_usuario_en_servidor(ctx.guild, respuesta_miembro.content.strip())
-                if not miembro:
-                    await author.send("❌ No encontré a ese usuario en el servidor.")
-                    return
-
-    except asyncio.TimeoutError:
-        await author.send("⏰ Tiempo agotado. Vuelve a intentar con `!strike`.")
-    except discord.Forbidden:
-        await ctx.send("❌ No puedo enviarte mensajes privados. Activa los mensajes en tu configuración de privacidad.")
-    except Exception as e:
-        await author.send("❌ Ocurrió un error inesperado durante el proceso.")
-        raise e
+    miembro = await _obtener_objetivo_sancion(ctx, miembro, "out")
+    if miembro is None:
+        return
     
     rol_out = discord.utils.get(servidor.roles, name="Out")
     if not rol_out:
@@ -473,11 +480,22 @@ async def sorteo_torneo_handle(ctx, codigo_torneo: str, premio: str = "Premio de
 async def moderador_permisos_handle(ctx, only_check: bool = False) -> bool:
     autor = ctx.author
     servidor = ctx.guild
+    if servidor is None:
+        # Comando usado por DM: los comandos de admin solo funcionan en el servidor
+        if not only_check:
+            try:
+                await autor.send("❌ Este comando solo se puede usar en el servidor.")
+            except discord.Forbidden:
+                pass
+        return False
     es_dueno = autor == servidor.owner
     rol_moderador = discord.utils.get(servidor.roles, name="admin")
+    # Mismo criterio que comando_roles_permitidos: dueño, rol "admin" o permiso de administrador
+    permisos = getattr(autor, "guild_permissions", None)
     tiene_permiso = (
         es_dueno
         or (rol_moderador is not None and rol_moderador in autor.roles)
+        or bool(permisos and permisos.administrator)
     )
 
     if not tiene_permiso:
@@ -853,14 +871,13 @@ async def eliminar_decks_handle(ctx, codigo_torneo: str = None):
     await ctx.author.send(f"✅ Eliminados {eliminados} decks del torneo `{codigo_torneo}`.")
 
 
-async def listar_torneos_handle(ctx):
-    await ctx.author.send("🔄 Actualizando datos de la web...")
-    guild = ctx.guild
-    from utils.torneos_api import regenerar_cache  # Importación local aquí
-    payload = await regenerar_cache(guild)
-    await ctx.author.send(f"✅ Web actualizada con {len(payload['torneos'])} torneo(s).")
-
 async def actualizar_web_handle(ctx):
+    """Regenera la caché de torneos de la web. Solo admins."""
+    await borrar_mensaje_seguro(ctx)
+
+    if not await moderador_permisos_handle(ctx):
+        return
+
     await ctx.author.send("🔄 Actualizando cache de torneos...")
     guild = ctx.guild
     from utils.torneos_api import regenerar_cache  # Importación local aquí
