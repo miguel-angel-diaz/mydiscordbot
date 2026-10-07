@@ -18,8 +18,9 @@ from flask import app
 
 import config
 from utils.commons import (
+    CAMPO_EDICIONES,
+    anadir_campos_lista,
     buscar_usuario_en_servidor,
-    calcular_clasificacion_torneo,
     obtener_deck_en_canal,
     obtener_decks_por_usuario,
     validar_torneo_para_edicion,
@@ -32,13 +33,13 @@ from utils.commons import (
     editar_deck_web
 )
 
-from utils.torneos_estado import leer_estado, leer_rondas
+from utils.torneos_estado import leer_estado, leer_rondas, leer_clasificacion
 from utils.jugadores import actualizar_proximas_partidas
-from utils.swiss_core import reportar_resultado, desinscribir_jugador, publicar_clasificacion_swiss
+from utils.swiss_core import reportar_resultado, desinscribir_jugador
 from utils.swiss_core import calcular_clasificacion as calcular_clasificacion_swiss
-from utils.commons import calcular_clasificacion_torneo
+from utils.commons import clasificacion_desde_challonge
+from utils import challonge
 
-calcular_clasificacion = calcular_clasificacion_torneo
 
 CANAL_ADMIN_NOMBRE = "solicitudes-admision"
 
@@ -188,52 +189,20 @@ def _minutos_bloqueo_restantes(discord_id: str) -> int:
     return max(1, int((hasta - time.time() + 59) // 60))
 
 # ============================================================
-# 1. CHALLONGE — listar torneos finalizados
-# ============================================================
-async def obtener_torneos_finalizados():
-    url = "https://api.challonge.com/v1/tournaments.json"
-    params = {"state": "ended"}
-
-    async with aiohttp.ClientSession() as session:
-        async with session.get(
-            url,
-            params=params,
-            auth=aiohttp.BasicAuth(config.CHALLONGE_USERNAME, config.CHALLONGE_API_KEY)
-        ) as resp:
-            if resp.status != 200:
-                raise Exception(f"Error al obtener torneos ({resp.status})")
-            torneos_raw = await resp.json()
-
-    torneos = []
-    for t in torneos_raw:
-        torneo = t["tournament"]
-        torneos.append({
-            "codigo": torneo["url"],
-            "nombre": torneo["name"],
-            "fecha_inicio": torneo.get("started_at"),
-            "fecha_fin": torneo.get("completed_at"),
-            "participantes_count": torneo.get("participants_count"),
-        })
-
-    return torneos
-
-# ============================================================
 # 2. CACHÉ — evita golpear Challonge/Discord en cada visita web
 # ============================================================
 async def regenerar_cache(guild):
     try:
-        torneos = await obtener_torneos_finalizados()
+        torneos = await challonge.torneos_finalizados()
         resultado = []
         for torneo in torneos:
             try:
-                # Obtener clasificación
-                clasificacion = await calcular_clasificacion_torneo(guild, torneo["codigo"])
-                # Obtener matches (enfrentamientos)
-                matches = await obtener_matches_torneo(torneo["codigo"])  # nueva función
+                # Una sola descarga por torneo: de ella salen la clasificación y los enfrentamientos
+                participantes_raw, matches_raw = await challonge.participantes_y_partidos(torneo["codigo"])
                 resultado.append({
                     **torneo,
-                    "clasificacion": clasificacion,
-                    "matches": matches  # añadir matches
+                    "clasificacion": clasificacion_desde_challonge(guild, torneo["codigo"], participantes_raw, matches_raw),
+                    "matches": challonge.partidos_simplificados(matches_raw),
                 })
             except Exception as e:
                 print(f"Error procesando torneo {torneo['codigo']}: {e}")
@@ -244,9 +213,12 @@ async def regenerar_cache(guild):
             "torneos": resultado
         }
 
-        os.makedirs("cache", exist_ok=True)
-        with open(config.CACHE_PATH, "w", encoding="utf-8") as f:
+        # Escritura atómica: un fallo a mitad no deja la caché de la web corrupta
+        os.makedirs(os.path.dirname(config.CACHE_PATH) or ".", exist_ok=True)
+        tmp_path = f"{config.CACHE_PATH}.tmp"
+        with open(tmp_path, "w", encoding="utf-8") as f:
             json.dump(payload, f, ensure_ascii=False, indent=2)
+        os.replace(tmp_path, config.CACHE_PATH)
 
         print(f"✅ Caché regenerado con {len(resultado)} torneo(s).")
         return payload
@@ -264,6 +236,14 @@ def leer_cache():
 # ============================================================
 # 3. ENDPOINTS HTTP — Torneos
 # ============================================================
+def _fecha_iso(fecha):
+    """'01/09/2026' -> '2026-09-01' (como las fechas de Challonge), para ordenar y para que JS no la lea como mes/día."""
+    try:
+        return datetime.strptime(str(fecha).strip(), "%d/%m/%Y").date().isoformat()
+    except (ValueError, TypeError):
+        return fecha
+
+
 async def api_torneos(request):
     data = leer_cache()
     torneos_challonge = data.get("torneos", []) if data else []
@@ -282,16 +262,16 @@ async def api_torneos(request):
     for t in torneos_swiss:
         if t.get("estado") == "finalizado" and t.get("tipo") == "swiss":
             try:
-                clasificacion = await calcular_clasificacion(_bot_instance, t["codigo"])
+                # Endpoint público: se usa la clasificación ya guardada (no cambia salvo correcciones,
+                # que la recalculan y guardan). Solo se calcula si aún no existe.
+                guardada = await leer_clasificacion(_bot_instance, t["codigo"])
+                clasificacion = (guardada or {}).get("clasificacion") or \
+                    await calcular_clasificacion_swiss(_bot_instance, t["codigo"])
                 clasificacion_formateada = []
                 for p in clasificacion:
-                    try:
-                        member = await guild.fetch_member(int(p["id"]))
-                        nombre = member.display_name
-                        avatar = str(member.display_avatar.url)
-                    except:
-                        nombre = f"Usuario {p['id']}"
-                        avatar = None
+                    member = guild.get_member(int(p["id"]))   # caché de miembros: sin llamadas a la API
+                    nombre = member.display_name if member else f"Usuario {p['id']}"
+                    avatar = str(member.display_avatar.url) if member else None
                     clasificacion_formateada.append({
                         "rank": p["rk"],
                         "nombre": nombre,
@@ -307,43 +287,19 @@ async def api_torneos(request):
                     })
                 torneos_swiss_finalizados.append({
                     "codigo": t["codigo"],
-                    "nombre": t["nombre"],
-                    "fecha_fin": t.get("fecha_fin") or t.get("fecha_inicio"),
+                    "nombre": t.get("nombre", t["codigo"]),
+                    "fecha_fin": _fecha_iso(t.get("fecha_fin") or t.get("fecha_inicio")),
                     "participantes_count": len(t.get("inscritos_ids", [])),
                     "clasificacion": clasificacion_formateada
                 })
-            except Exception as e:
-                print(f"Error al procesar Swiss {t['codigo']}: {e}")
+            except Exception:
+                print(f"Error al procesar Swiss {t['codigo']}:\n{traceback.format_exc()}")
 
     todos_los_torneos = torneos_challonge + torneos_swiss_finalizados
     todos_los_torneos.sort(key=lambda x: x.get("fecha_fin") or "", reverse=True)
 
     response = web.json_response({"torneos": todos_los_torneos})
     return response
-
-async def obtener_matches_torneo(codigo_torneo):
-    """Obtiene todos los matches de un torneo de Challonge y los formatea para caché."""
-    url = f"https://api.challonge.com/v1/tournaments/{codigo_torneo}/matches.json"
-    async with aiohttp.ClientSession() as session:
-        async with session.get(url, auth=aiohttp.BasicAuth(config.CHALLONGE_USERNAME, config.CHALLONGE_API_KEY)) as resp:
-            if resp.status != 200:
-                raise Exception(f"Error al obtener matches ({resp.status})")
-            data = await resp.json()
-            # Devolvemos los matches en un formato simplificado
-            matches = []
-            for m in data:
-                match = m.get("match", {})
-                matches.append({
-                    "id": match.get("id"),
-                    "round": match.get("round"),
-                    "player1_id": match.get("player1_id"),
-                    "player2_id": match.get("player2_id"),
-                    "state": match.get("state"),
-                    "scores_csv": match.get("scores_csv"),
-                    "winner_id": match.get("winner_id"),
-                    "loser_id": match.get("loser_id"),
-                })
-            return matches
 
 # ============================================================
 # 4. ENDPOINTS HTTP — Admisión
@@ -599,14 +555,14 @@ async def obtener_ultimos_articulos(limite: int = 8):
 async def api_podcast(request):
     try:
         episodios = await obtener_ultimos_episodios()
-    except Exception as e:
+    except Exception:
         return _error_interno("api_podcast", status=503)
     return web.json_response({"episodios": episodios})
 
 async def api_articulos(request):
     try:
         articulos = await obtener_ultimos_articulos()
-    except Exception as e:
+    except Exception:
         return _error_interno("api_articulos", status=503)
     return web.json_response({"articulos": articulos})
 
@@ -670,7 +626,7 @@ async def api_mis_decks(request):
 
     try:
         decks = await obtener_decks_por_usuario(guild, discord_id, include_message=False)
-    except Exception as e:
+    except Exception:
         return _error_interno("api_mis_decks", status=500)
 
     response = web.json_response({
@@ -730,7 +686,7 @@ async def api_subir_deck(request):
     nombre_deck = v.texto(body.get("nombre_deck"), "nombre del deck", v.MAX_NOMBRE, markdown=True)
     archetype_input = v.texto(body.get("archetype"), "arquetipo", v.MAX_NOMBRE, markdown=True)
     decklist_raw = v.texto(body.get("decklist"), "decklist", v.MAX_DECKLIST, multilinea=True, markdown=True)
-    sideboard_raw = v.texto(body.get("sideboard"), "sideboard", v.MAX_DECKLIST, obligatorio=False,
+    sideboard_raw = v.texto(body.get("sideboard"), "sideboard", v.MAX_SIDEBOARD, obligatorio=False,
                             multilinea=True, markdown=True)
 
     if len(nombre_deck) > 100:
@@ -805,9 +761,9 @@ async def api_subir_deck(request):
     )
     embed_final.add_field(name="Jugador", value=f"{miembro} (ID: {discord_id})", inline=False)
     embed_final.add_field(name="Archetype", value=archetype, inline=False)
-    embed_final.add_field(name="Decklist", value=decklist[:1000], inline=False)
-    embed_final.add_field(name="Sideboard", value=sideboard[:1000], inline=False)
-    embed_final.add_field(name="edited", value="0", inline=False)
+    anadir_campos_lista(embed_final, "Decklist", decklist)
+    anadir_campos_lista(embed_final, "Sideboard", sideboard)
+    embed_final.add_field(name=CAMPO_EDICIONES, value="0/1", inline=False)
     embed_final.set_footer(text="Deck subido correctamente (vía web).")
 
     canal_submitted = discord.utils.get(guild.text_channels, name="submitted-decks")
@@ -953,7 +909,7 @@ async def api_editar_deck(request):
     nombre_deck = v.texto(body.get("nombre_deck"), "nombre del deck", v.MAX_NOMBRE, markdown=True)
     archetype_input = v.texto(body.get("archetype"), "arquetipo", v.MAX_NOMBRE, markdown=True)
     decklist_raw = v.texto(body.get("decklist"), "decklist", v.MAX_DECKLIST, multilinea=True, markdown=True)
-    sideboard_raw = v.texto(body.get("sideboard"), "sideboard", v.MAX_DECKLIST, obligatorio=False,
+    sideboard_raw = v.texto(body.get("sideboard"), "sideboard", v.MAX_SIDEBOARD, obligatorio=False,
                             multilinea=True, markdown=True)
 
     if _bot_instance is None:
@@ -1367,7 +1323,6 @@ async def api_reportar_resultado(request):
                         f"🏅 Ganador: {ganador}"
                     )
 
-                await publicar_clasificacion_swiss(_bot_instance, guild, codigo_torneo)
 
     except Exception as e:
         print(f"⚠️ Error al actualizar canales: {e}")
@@ -1635,21 +1590,11 @@ async def api_torneo_enfrentamientos(request):
             return web.json_response({"rondas": []})
 
         # 3️⃣ No estaba en caché → llamar a Challonge y guardar en caché
-        url_matches = f"https://api.challonge.com/v1/tournaments/{torneo_codigo}/matches.json"
-        url_participants = f"https://api.challonge.com/v1/tournaments/{torneo_codigo}/participants.json"
-
-        async with aiohttp.ClientSession() as session:
-            # Obtener participantes
-            async with session.get(url_participants, auth=aiohttp.BasicAuth(config.CHALLONGE_USERNAME, config.CHALLONGE_API_KEY)) as resp:
-                if resp.status != 200:
-                    return web.json_response({"error": "No se pudieron obtener los participantes"}, status=503)
-                participants_data = await resp.json()
-
-            # Obtener matches
-            async with session.get(url_matches, auth=aiohttp.BasicAuth(config.CHALLONGE_USERNAME, config.CHALLONGE_API_KEY)) as resp:
-                if resp.status != 200:
-                    return web.json_response({"error": "No se pudieron obtener los matches"}, status=503)
-                matches_data = await resp.json()
+        try:
+            participants_data, matches_data = await challonge.participantes_y_partidos(torneo_codigo)
+        except challonge.ErrorChallonge as e:
+            print(f"⚠️ torneo-enfrentamientos {torneo_codigo}: {e}")
+            return web.json_response({"error": "No se pudieron obtener los enfrentamientos"}, status=503)
 
         # --- Guardar en caché para futuras peticiones ---
         # Leer caché actual

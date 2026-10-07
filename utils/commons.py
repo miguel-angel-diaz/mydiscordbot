@@ -7,11 +7,10 @@ import json
 from functools import wraps
 from collections import Counter
 import io
-import matplotlib.pyplot as plt
 import re
 import time
 from datetime import datetime, timezone
-from typing import List, Dict
+from typing import List, Dict, Optional
 from types import SimpleNamespace
 
 from difflib import get_close_matches
@@ -19,10 +18,8 @@ from difflib import get_close_matches
 # ============================================================
 # IMPORTACIONES DESDE torneos_estado (evitar duplicación)
 # ============================================================
-from utils.torneos_estado import (
-    leer_estado,
-    guardar_estado
-)
+from utils.torneos_estado import leer_estado
+from utils import challonge
 
 # ============================================================
 # FUNCIONES DE UTILIDAD GENERAL
@@ -43,23 +40,30 @@ async def validar_canal_correcto(ctx, canal_valido: str, comando: str):
     - Elimina el mensaje del canal si es posible.
     - Retorna False para indicar que no se debe continuar.
     """
-    if ctx.channel.name != canal_valido:
-        try:
-            await ctx.author.send(
-                f"❌ El comando `{comando}` solo se puede usar en el canal `#{canal_valido}`.\n"
-                f"Usa el comando allí para que funcione correctamente. primer aviso."
-            )
-        except discord.Forbidden:
-            pass  # Usuario con DMs cerrados
+    # Nombre real del comando ejecutado (el texto fijo de cada llamada a veces era incorrecto)
+    if getattr(ctx, "command", None):
+        comando = f"!{ctx.command.qualified_name}"
 
+    # Por DM no hay canal con nombre: el comando debe usarse en el servidor
+    nombre_canal = getattr(ctx.channel, "name", None) if ctx.guild else None
+    if nombre_canal == canal_valido:
+        return True
+
+    try:
+        await ctx.author.send(
+            f"❌ El comando `{comando}` solo se puede usar en el canal `#{canal_valido}` del servidor.\n"
+            f"Usa el comando allí para que funcione correctamente."
+        )
+    except discord.HTTPException:
+        pass  # Usuario con DMs cerrados
+
+    if ctx.guild:
         try:
             await ctx.message.delete()
-        except discord.Forbidden:
-            pass  # Bot sin permisos para borrar mensajes
+        except discord.HTTPException:
+            pass  # ya borrado por borrar_mensaje_seguro (NotFound) o sin permisos
 
-        return False
-
-    return True
+    return False
 
 def enviar_ayuda_handle():
     def decorator(func):
@@ -119,9 +123,9 @@ def buscar_usuario_en_servidor(guild, nombre_busqueda):
 
 async def obtener_torneo_usuario(ctx, mensaje_inicial: str = None, complete=False):
     """
-    Devuelve el código (tournament url/slug) o una lista con varios códigos si el usuario elige 'todos'.
-    Solo muestra la opción 'todos' si complete=True.
-    Ahora incluye tanto torneos de Challonge como torneos Swiss del estado.
+    Devuelve el código del torneo elegido (o una lista si elige 'todos', solo con complete=True).
+      - complete=False: torneos suizos activos del estado.
+      - complete=True: suizos finalizados + históricos de Challonge leídos del caché de la web (sin llamar a Challonge).
     """
     # 1️⃣ Enviar mensaje inicial si existe
     if mensaje_inicial:
@@ -133,40 +137,18 @@ async def obtener_torneo_usuario(ctx, mensaje_inicial: str = None, complete=Fals
 
     # 2️⃣ Determinar si filtramos solo torneos inscritos
     comando_actual = getattr(ctx.command, "name", "").lower()
-    solo_inscritos = comando_actual not in ("ver-inscritos", "iniciar-torneo")
+    solo_inscritos = comando_actual not in ("ver-inscritos", "iniciar-torneo", "partidos-pendientes")
 
-    # --- OBTENER TORNEOS DE CHALLONGE (legacy) ---
-    url_torneos = "https://api.challonge.com/v1/tournaments.json?state=all"
+    # --- TORNEOS HISTÓRICOS DE CHALLONGE (solo consulta de resultados) ---
+    # Ya no se llama a Challonge en cada comando: los torneos terminados de Challonge se leen del caché
+    # de la web (cache/torneos.json, generado con !actualizar-web). Los torneos activos son solo los suizos.
     torneos_challonge = []
-    async with aiohttp.ClientSession() as session:
-        async with session.get(url_torneos, auth=aiohttp.BasicAuth(config.CHALLONGE_USERNAME, config.CHALLONGE_API_KEY)) as resp:
-            if resp.status == 200:
-                torneos_raw = await resp.json()
-                for entry in torneos_raw:
-                    t = entry.get("tournament", {})
-                    estado = t.get("state")
-                    tid = t.get("url") or str(t.get("id"))
-                    nombre = t.get("name") or "(sin nombre)"
-                    
-                    # Filtrar por complete si aplica
-                    if complete and estado != "complete":
-                        continue
-                    if not complete and estado == "complete":
-                        continue
-                    
-                    # Si solo queremos torneos donde el usuario está inscrito
-                    if solo_inscritos:
-                        url_participantes = f"https://api.challonge.com/v1/tournaments/{tid}/participants.json"
-                        async with session.get(url_participantes, auth=aiohttp.BasicAuth(config.CHALLONGE_USERNAME, config.CHALLONGE_API_KEY)) as p_resp:
-                            if p_resp.status != 200:
-                                continue
-                            participantes_data = await p_resp.json()
-                            inscritos = [p["participant"].get("name") for p in participantes_data]
-                            usuario_id_str = str(ctx.author.id)
-                            if usuario_id_str not in inscritos:
-                                continue
-                    
-                    torneos_challonge.append((tid, nombre, "challonge"))
+    if complete:
+        from utils.torneos_api import leer_cache   # import local: evita ciclos
+        for t in (leer_cache() or {}).get("torneos", []):
+            if solo_inscritos and not any(str(p.get("discord_id")) == str(ctx.author.id) for p in t.get("clasificacion", [])):
+                continue
+            torneos_challonge.append((t["codigo"], t.get("nombre") or t["codigo"], "challonge"))
 
     # --- OBTENER TORNEOS SWISS DEL ESTADO ---
     torneos_swiss = []
@@ -301,16 +283,119 @@ def obtener_lista_arquetipos(formato: str = "Premodern"):
 # CARTAS MÁS JUGADAS
 # ============================================================
 
+TOP_CARTAS = 20
+CARTAS_BASICAS = {"mountain", "swamp", "plains", "island", "forest", "wastes"}
+_PATRON_TORNEO_DECK = re.compile(r"Torneo:\**\s*`([^`]+)`")
+
+
+def torneo_de_embed_deck(embed) -> Optional[str]:
+    """Código EXACTO del torneo de un embed de deck ("**Torneo:** `abc`"), o None si no es un deck."""
+    if not (embed.title or "").startswith("🃏 Deck"):
+        return None
+    m = _PATRON_TORNEO_DECK.search(embed.description or "")
+    return m.group(1) if m else None
+
+
+_PATRON_CODIGO_DECK = re.compile(r"Código:\**\s*`([^`]+)`")
+
+
+async def ids_con_deck(guild, codigo_torneo: str) -> set:
+    """IDs (str) de los jugadores con deck subido en ESE torneo (código exacto)."""
+    canal = discord.utils.get(guild.text_channels, name="submitted-decks")
+    ids = set()
+    if not canal:
+        return ids
+    prefijo = f"{codigo_torneo}_"
+    async for msg in canal.history(limit=None):
+        for embed in msg.embeds:
+            if torneo_de_embed_deck(embed) != codigo_torneo:
+                continue
+            m = _PATRON_CODIGO_DECK.search(embed.description or "")
+            if m and m.group(1).startswith(prefijo):
+                ids.add(m.group(1)[len(prefijo):])
+    return ids
+
+
+async def leer_inscritos_sorteo(canal_inscritos, codigo: str) -> List[int]:
+    """
+    IDs inscritos en un sorteo, en orden de inscripción, a partir de las líneas "N | CÓDIGO | ID <@ID>"
+    de #inscritos-sorteos. Código exacto y sin repetidos; se lee el canal entero.
+    """
+    ids = []
+    async for msg in canal_inscritos.history(limit=None, oldest_first=True):
+        partes = [p.strip() for p in msg.content.split("|")]
+        if len(partes) >= 3 and partes[1] == codigo:
+            uid = partes[2].split()[0] if partes[2] else ""
+            if uid.isdigit() and int(uid) not in ids:
+                ids.append(int(uid))
+    return ids
+
+
+async def sorteo_esta_activo(canal_activos, codigo: str) -> bool:
+    """El sorteo figura en #sorteos-activos con su código EXACTO ("🎉 **Sorteo activo:** `S1`")."""
+    async for mensaje in canal_activos.history(limit=None):
+        if mensaje.content.startswith("🎉") and f"`{codigo}`" in mensaje.content:
+            return True
+    return False
+
+
+async def enviar_en_trozos(destino, texto: str, limite: int = 1900):
+    """Envía un texto largo en varios mensajes (Discord admite 2000 caracteres por mensaje), cortando entre líneas."""
+    for trozo in trocear_lista(texto, limite):
+        await destino.send(trozo)
+
+
+async def _contar_cartas_torneo(canal, torneo: str) -> Counter:
+    """Suma las cartas (sin tierras básicas) de los decks de ESE torneo (código exacto, no subcadena)."""
+    contador = Counter()
+    async for mensaje in canal.history(limit=None):
+        for embed in mensaje.embeds:
+            if torneo_de_embed_deck(embed) != torneo:
+                continue
+            campos = {field.name.lower(): field.value for field in embed.fields}
+            for linea in leer_campo_lista(campos, "decklist").splitlines():
+                try:
+                    cantidad, carta = linea.strip().split(" ", 1)
+                    if carta.strip().lower() in CARTAS_BASICAS:
+                        continue
+                    contador[carta.strip()] += int(cantidad.lower().rstrip("x"))
+                except ValueError:
+                    continue
+    return contador
+
+
+def _grafico_cartas(top: list, torneo: str) -> bytes:
+    """Gráfico donut en PNG. Usa Figure (no pyplot) para poder ejecutarse en un hilo sin bloquear el bot."""
+    from matplotlib.figure import Figure
+    fig = Figure(figsize=(6, 6))
+    ax = fig.subplots()
+    ax.pie([c for _, c in top], labels=[n for n, _ in top], autopct="%1.1f%%", startangle=90,
+           pctdistance=0.85, textprops={"fontsize": 10})
+    ax.add_artist(matplotlib_circle((0, 0), 0.70, fc="white"))
+    ax.axis("equal")
+    ax.set_title(f"Top {len(top)} cartas más jugadas\nTorneo: {torneo}", fontsize=12)
+    buf = io.BytesIO()
+    fig.savefig(buf, format="PNG")
+    return buf.getvalue()
+
+
+def matplotlib_circle(*args, **kwargs):
+    from matplotlib.patches import Circle
+    return Circle(*args, **kwargs)
+
+
 async def cartas_mas_jugadas(ctx, codigo_torneo: str = None, channel: str = None):
+    """
+    Top de cartas más jugadas de uno o varios torneos. Con `channel` publica el gráfico en ese canal
+    (informe de !reportar-torneo) y devuelve los datos del primer torneo; si no, todo va por DM.
+    """
     await borrar_mensaje_seguro(ctx)
-    if channel != None:
-        canal_submitted = discord.utils.get(ctx.guild.text_channels, name=channel)
-    # 🔹 Canal donde están los decks
+    canal_destino = discord.utils.get(ctx.guild.text_channels, name=channel) if channel else None
     canal = discord.utils.get(ctx.guild.text_channels, name="submitted-decks")
     if not canal:
-        return await ctx.send("❌ No encontré el canal `submitted-decks` en este servidor.")
+        await ctx.send("❌ No encontré el canal `submitted-decks` en este servidor.")
+        return None
 
-    # 🔹 Obtener torneo(s)
     if not codigo_torneo:
         codigo_torneo = await obtener_torneo_usuario(
             ctx,
@@ -318,97 +403,68 @@ async def cartas_mas_jugadas(ctx, codigo_torneo: str = None, channel: str = None
             complete=True
         )
         if not codigo_torneo:
-            return await ctx.send("❌ No se seleccionó ningún torneo. Operación cancelada.")
+            await ctx.send("❌ No se seleccionó ningún torneo. Operación cancelada.")
+            return None
 
-    # Si devuelve lista (varios torneos)
-    if isinstance(codigo_torneo, list):
-        torneos_a_analizar = codigo_torneo
-    else:
-        torneos_a_analizar = [codigo_torneo]
+    torneos_a_analizar = codigo_torneo if isinstance(codigo_torneo, list) else [codigo_torneo]
+    datos_informe = None
 
-    cartas_basicas = {"mountain", "swamp", "plains", "island", "forest"}
-
-    # 🔹 Recorrer cada torneo
     for torneo in torneos_a_analizar:
-        contador_cartas = Counter()
-
-        async for mensaje in canal.history(limit=None):
-            for embed in mensaje.embeds:
-                if not embed.description or torneo not in embed.description:
-                    continue
-
-                campos = {field.name.lower(): field.value for field in embed.fields}
-                decklist = campos.get("decklist", "")
-                if not decklist:
-                    continue
-
-                for linea in decklist.splitlines():
-                    if not linea.strip():
-                        continue
-                    try:
-                        cantidad, carta = linea.strip().split(" ", 1)
-                        cantidad = int(cantidad)
-                        if carta.lower() in cartas_basicas:
-                            continue
-                        contador_cartas[carta] += cantidad
-                    except ValueError:
-                        continue
-
-        if not contador_cartas:
+        contador = await _contar_cartas_torneo(canal, torneo)
+        if not contador:
             await ctx.author.send(f"📭 No se encontraron decks válidos para el torneo `{torneo}`.")
             continue
 
-        # 🔹 Top 10 cartas más jugadas
-        top = contador_cartas.most_common(20)
+        top = contador.most_common(TOP_CARTAS)
         texto = f"📊 **Cartas más jugadas en {torneo} (sin tierras básicas):**\n"
-        for idx, (carta, cant) in enumerate(top, start=1):
-            texto += f"{idx}. {carta} → {cant} veces\n"
-
+        texto += "\n".join(f"{i}. {carta} → {cant} veces" for i, (carta, cant) in enumerate(top, start=1))
         await ctx.author.send(texto)
 
-        # 🔹 Crear gráfico tipo donut
-        nombres = [carta for carta, _ in top]
-        cantidades = [cant for _, cant in top]
+        png = await asyncio.to_thread(_grafico_cartas, top, torneo)
+        archivo = discord.File(fp=io.BytesIO(png), filename=f"cartas_mas_jugadas_{torneo}.png")
+        await (canal_destino or ctx.author).send(file=archivo)
 
-        fig, ax = plt.subplots(figsize=(6, 6))
-        wedges, texts, autotexts = ax.pie(
-            cantidades,
-            labels=nombres,
-            autopct="%1.1f%%",
-            startangle=90,
-            pctdistance=0.85,
-            textprops={'fontsize': 10}
-        )
+        if datos_informe is None:
+            datos_informe = {"torneo": torneo, "top_cartas": top}
 
-        centre_circle = plt.Circle((0, 0), 0.70, fc='white')
-        fig.gca().add_artist(centre_circle)
-        ax.axis('equal')
-        plt.title(f"Top 10 cartas más jugadas\nTorneo: {torneo}", fontsize=12)
-
-        buf = io.BytesIO()
-        plt.savefig(buf, format='PNG')
-        buf.seek(0)
-        plt.close(fig)
-
-        if not canal_submitted:
-            await ctx.author.send(file=discord.File(fp=buf, filename=f"cartas_mas_jugadas_{torneo}.png"))
-        else:
-            await canal_submitted.send(file=discord.File(fp=buf, filename=f"cartas_mas_jugadas_{torneo}.png"))
-            return {
-                "torneo": torneo,
-                "top_cartas": top  # lista de (carta, cantidad)
-            }
+    return datos_informe
 
 # ============================================================
 # BEST DECKS
 # ============================================================
 
+async def _ids_clasificacion(bot, guild, codigo_torneo: str) -> List[str]:
+    """
+    IDs de Discord en orden de clasificación, desde los DATOS (no leyendo el texto del canal):
+      - suizo: la clasificación guardada en el estado (o calculada si aún no existe);
+      - Challonge (histórico): la del caché de la web o, si no está, calculada desde Challonge.
+    """
+    from utils.torneos_estado import leer_clasificacion, obtener_torneo_estado
+    guardada = await leer_clasificacion(bot, codigo_torneo)
+    if guardada and guardada.get("clasificacion"):
+        return [str(p["id"]) for p in guardada["clasificacion"]]
+
+    torneo = await obtener_torneo_estado(bot, codigo_torneo)
+    if torneo and torneo.get("tipo") == "swiss":
+        from utils.swiss_core import calcular_clasificacion
+        return [str(p["id"]) for p in await calcular_clasificacion(bot, codigo_torneo)]
+
+    from utils.torneos_api import leer_cache
+    cache = leer_cache() or {}
+    torneo_cache = next((t for t in cache.get("torneos", []) if t.get("codigo") == codigo_torneo), None)
+    clasificacion = (torneo_cache or {}).get("clasificacion") or await calcular_clasificacion_torneo(guild, codigo_torneo)
+    return [str(p["discord_id"]) for p in clasificacion if p.get("discord_id")]
+
+
 async def best_decks_handle(ctx, codigo_torneo: str = None, channel: str = None):
+    """
+    Decks del TOP 4 y del último clasificado ("cuchara de palo") de un torneo. Con `channel` se publican en
+    ese canal (informe de !reportar-torneo) y se devuelven los datos para la IA; si no, van por DM.
+    """
     await borrar_mensaje_seguro(ctx)
     author = ctx.author
-    if channel != None:
-        canal_submitted = discord.utils.get(ctx.guild.text_channels, name=channel)
-    # 🔹 Obtener código de torneo
+    canal_destino = discord.utils.get(ctx.guild.text_channels, name=channel) if channel else None
+
     if not codigo_torneo:
         codigo_torneo = await obtener_torneo_usuario(
             ctx,
@@ -417,130 +473,111 @@ async def best_decks_handle(ctx, codigo_torneo: str = None, channel: str = None)
             complete=True
         )
         if not codigo_torneo:
-            return
+            return None
+    if isinstance(codigo_torneo, list):
+        await author.send("❌ Elige un torneo concreto para ver sus mejores decks.")
+        return None
 
-    # 🔹 Canal ranking
-    canal_ranking = discord.utils.get(ctx.guild.text_channels, name="🍺-el‐ranking‐de‐la‐barra")
-    if not canal_ranking:
-        return await ctx.send("❌ No encontré el canal de ranking.")
+    try:
+        ids = await _ids_clasificacion(ctx.bot, ctx.guild, codigo_torneo)
+    except Exception as e:
+        print(f"⚠️ No se pudo obtener la clasificación de {codigo_torneo}: {e}")
+        ids = []
+    if not ids:
+        await author.send(f"❌ No encontré clasificación para `{codigo_torneo}`.")
+        return None
 
-    # 🔹 Buscar clasificación
-    mensaje_clasificacion = None
-    async for msg in canal_ranking.history(limit=100):
-        if msg.content.startswith(f"📊 **Clasificación del torneo `{codigo_torneo}`:**"):
-            mensaje_clasificacion = msg
-            break
+    hay_cuchara = len(ids) > 4
+    seleccionados = ids[:4] + ([ids[-1]] if hay_cuchara else [])
 
-    if not mensaje_clasificacion:
-        return await author.send(f"❌ No encontré clasificación para `{codigo_torneo}`.")
-
-    # 🔹 Parsear jugadores (discord_id)
-    jugadores_ordenados = []
-
-    for linea in mensaje_clasificacion.content.splitlines():
-        if "|" not in linea:
-            continue
-        if linea.strip().startswith(("Rango", "-----", "```")):
-            continue
-
-        partes = [p.strip() for p in linea.split("|")]
-        if len(partes) < 2:
-            continue
-
-        nombre = partes[1].strip("@")
-        miembro = buscar_usuario_en_servidor(ctx.guild, nombre)
-        if miembro:
-            jugadores_ordenados.append(miembro.id)
-
-    if not jugadores_ordenados:
-        return await author.send("❌ No se pudieron identificar jugadores.")
-
-    # 🔹 TOP 4 + ÚLTIMO
-    seleccionados = jugadores_ordenados[:4]
-    if len(jugadores_ordenados) > 4:
-        seleccionados.append(jugadores_ordenados[-1])
-
-    await author.send(
-        f"📊 **Best Decks – `{codigo_torneo}`**\n"
-        f"TOP 4 + Último clasificado"
-    )
+    await author.send(f"📊 **Best Decks – `{codigo_torneo}`**\nTOP 4" + (" + último clasificado" if hay_cuchara else ""))
     ranking = []
-    # 🔹 Buscar y enviar decks
     for idx, jugador_id in enumerate(seleccionados):
-        codigo_deck = f"{codigo_torneo}_{jugador_id}"
-        deck = await obtener_deck_en_canal(ctx.guild, codigo_deck)
-
+        deck = await obtener_deck_en_canal(ctx.guild, f"{codigo_torneo}_{jugador_id}")
         if not deck:
             await author.send(f"⚠️ No encontré deck para <@{jugador_id}>.")
             continue
 
-        # Determinar posición
-        if idx == len(seleccionados) - 1:
-            pos = "cuchara de palo"
-        else:
-            pos = idx + 1
+        pos = "cuchara de palo" if hay_cuchara and idx == len(seleccionados) - 1 else idx + 1
+        ranking.append({"pos": pos, "archetype": deck["archetype"] or "Desconocido"})
 
-        # Guardar ranking para IA
-        ranking.append({
-            "pos": pos,
-            "archetype": deck["archetype"] or "Desconocido"
-        })
+        miembro = ctx.guild.get_member(int(jugador_id))
+        nombre = miembro.display_name if miembro else str(jugador_id)
+        embed_final = discord.Embed(title=f"🃏 Deck – {nombre}", color=discord.Color.blue())
+        embed_final.add_field(name="Jugador", value=f"{nombre} (ID: {jugador_id})", inline=False)
+        embed_final.add_field(name="Archetype", value=deck["archetype"] or "No especificado", inline=False)
+        anadir_campos_lista(embed_final, "Decklist", deck["decklist"], vacio="Vacío")
+        anadir_campos_lista(embed_final, "Sideboard", deck["sideboard"])
+        embed_final.set_footer(text=f"Torneo {codigo_torneo} • Best Decks • Puesto: {pos}")
+        await (canal_destino or author).send(embed=embed_final)
 
-        # --- EMBED (igual que antes) ---
-        try:
-            miembro = await ctx.guild.fetch_member(jugador_id)
-            nombre = miembro.display_name
-        except:
-            nombre = str(jugador_id)
-
-        embed_final = discord.Embed(
-            title=f"🃏 Deck – {nombre}",
-            color=discord.Color.blue()
-        )
-
-        embed_final.add_field(
-            name="Jugador",
-            value=f"{nombre} (ID: {jugador_id})",
-            inline=False
-        )
-
-        embed_final.add_field(
-            name="Archetype",
-            value=deck["archetype"] or "No especificado",
-            inline=False
-        )
-
-        embed_final.add_field(
-            name="Decklist",
-            value=deck["decklist"][:1000] or "Vacío",
-            inline=False
-        )
-
-        embed_final.add_field(
-            name="Sideboard",
-            value=deck["sideboard"][:1000] or "N/A",
-            inline=False
-        )
-
-        embed_final.set_footer(
-            text=f"Torneo {codigo_torneo} • Best Decks"
-        )
-
-        await author.send(embed=embed_final)
-    if not canal_submitted:
-        await author.send(embed=embed_final)
-    else:
-        await canal_submitted.send(embed=embed_final)
-        return {
-            "torneo": codigo_torneo,
-            "ranking": ranking
-        }
-
-    await author.send("✅ Análisis de mejores decks completado.")
+    if not ranking:
+        return None
+    if not canal_destino:
+        await author.send("✅ Análisis de mejores decks completado.")
+    return {"torneo": codigo_torneo, "ranking": ranking}
 
 # ============================================================
 # OBTENER DECK EN CANAL
 # ============================================================
+# ============================================================
+# LISTAS DE CARTAS EN EMBEDS (límite de Discord: 1024 caracteres por campo)
+# ============================================================
+LIMITE_CAMPO_EMBED = 1024
+
+
+def trocear_lista(texto: str, limite: int = LIMITE_CAMPO_EMBED) -> List[str]:
+    """Parte una lista en trozos de como máximo `limite` caracteres, cortando siempre entre líneas."""
+    trozos, actual = [], ""
+    for linea in (texto or "").splitlines():
+        while len(linea) > limite:                      # una línea imposible de encajar: se corta a la fuerza
+            trozos.append(linea[:limite]); linea = linea[limite:]
+        candidato = f"{actual}\n{linea}" if actual else linea
+        if len(candidato) > limite:
+            trozos.append(actual); actual = linea
+        else:
+            actual = candidato
+    if actual:
+        trozos.append(actual)
+    return trozos
+
+
+def anadir_campos_lista(embed: discord.Embed, nombre: str, texto: str, vacio: str = "N/A"):
+    """Añade la lista completa al embed, en varios campos ("Decklist", "Decklist (2)"...) si no cabe en uno."""
+    trozos = trocear_lista(texto) or [vacio]
+    for i, trozo in enumerate(trozos):
+        embed.add_field(name=nombre if i == 0 else f"{nombre} ({i + 1})", value=trozo, inline=False)
+
+
+def leer_campo_lista(campos: dict, nombre: str) -> str:
+    """Une los trozos de una lista ("Decklist", "Decklist (2)"...) a partir de {nombre_campo: valor}, sin importar mayúsculas."""
+    patron = re.compile(rf"^{re.escape(nombre)}(?: \((\d+)\))?$", re.IGNORECASE)
+    trozos = []
+    for clave, valor in campos.items():
+        m = patron.match(str(clave).strip())
+        if m:
+            trozos.append((int(m.group(1) or 1), valor))
+    return "\n".join(v for _, v in sorted(trozos, key=lambda t: t[0]))
+
+
+# Nombre único del contador de ediciones en el embed del deck. Al leer se aceptan también los nombres
+# antiguos ("edited", "Ediciones post-inicio") para que los decks ya subidos sigan funcionando.
+CAMPO_EDICIONES = "Ediciones"
+_NOMBRES_CAMPO_EDICIONES = ("ediciones", "ediciones post-inicio", "edited")
+
+
+def leer_ediciones(campos: dict) -> int:
+    """Número de ediciones usadas a partir de los campos del embed ({nombre: valor}); acepta "1" y "1/1"."""
+    por_nombre = {str(k).strip().lower(): v for k, v in campos.items()}
+    for nombre in _NOMBRES_CAMPO_EDICIONES:
+        if nombre in por_nombre:
+            try:
+                return int(str(por_nombre[nombre]).split("/")[0].strip())
+            except ValueError:
+                return 0
+    return 0
+
+
 async def obtener_deck_en_canal(guild: discord.Guild, codigo_deck: str):
     """
     Busca en el canal 'submitted-decks' un deck con el código dado.
@@ -573,21 +610,7 @@ async def obtener_deck_en_canal(guild: discord.Guild, codigo_deck: str):
 
                 id_torneo, jugador_id = partes
 
-                # ✅ Extraer el campo "edited" buscando las distintas variantes de etiqueta
-                # Soportamos: "ediciones", "ediciones post-inicio", "edited"
-                edited = 0
-                for field_name in ["ediciones", "ediciones post-inicio", "edited"]:
-                    if field_name in campos:
-                        try:
-                            valor = campos[field_name]
-                            # Si es formato "1/1", tomar el primer número
-                            if "/" in valor:
-                                edited = int(valor.split("/")[0])
-                            else:
-                                edited = int(valor)
-                            break
-                        except (ValueError, IndexError):
-                            edited = 0
+                edited = leer_ediciones(campos)
 
                 return {
                     "mensaje": mensaje,
@@ -596,8 +619,8 @@ async def obtener_deck_en_canal(guild: discord.Guild, codigo_deck: str):
                     "jugador_id": int(jugador_id),
                     "edited": edited,
                     "archetype": campos.get("archetype", ""),
-                    "decklist": campos.get("decklist", ""),
-                    "sideboard": campos.get("sideboard", "N/A")
+                    "decklist": leer_campo_lista(campos, "decklist"),
+                    "sideboard": leer_campo_lista(campos, "sideboard") or "N/A"
                 }
 
     return None
@@ -725,144 +748,80 @@ def dividir_texto_inteligente(texto, limite=1000):
 
 DECK_ID_REGEX = re.compile(r"\(ID:\s*(\d+)\)")
 
+def _resultado_challonge(scores_csv: str):
+    """'2-1' -> (2, 1); varias partidas '1-0,0-1,1-0' -> (2, 1). None si no se puede leer."""
+    a = b = 0
+    try:
+        for parte in (scores_csv or "").replace(" ", "").split(","):
+            s1, s2 = parte.split("-")
+            a, b = a + int(s1), b + int(s2)
+    except ValueError:
+        return None
+    return a, b
+
+
+def rondas_desde_challonge(matches_raw: list) -> List[dict]:
+    """Convierte los partidos completados de Challonge al formato de rondas del suizo."""
+    por_ronda = {}
+    for m in matches_raw:
+        match = m.get("match", {})
+        if match.get("state") != "complete":
+            continue
+        p1, p2 = match.get("player1_id"), match.get("player2_id")
+        emps = por_ronda.setdefault(match.get("round"), [])
+        if p1 and not p2 or p2 and not p1:                       # BYE
+            emps.append({"j1": str(p1 or p2), "j2": None, "resultado": "BYE"})
+            continue
+        res = _resultado_challonge(match.get("scores_csv"))
+        if res is None:
+            continue
+        emps.append({"j1": str(p1), "j2": str(p2), "resultado": f"{res[0]}-{res[1]}"})
+    return [{"numero": r, "emparejamientos": e} for r, e in sorted(por_ronda.items(), key=lambda x: (x[0] is None, x[0]))]
+
+
 async def calcular_clasificacion_torneo(guild, codigo_torneo: str):
     """
-    Calcula la clasificación completa de un torneo de Challonge,
-    cruzando los IDs de Discord guardados en Challonge con los
-    miembros reales del servidor.
+    Clasificación de un torneo de Challonge (solo consulta de resultados), con las MISMAS reglas que el
+    suizo propio (calcular_estadisticas: MTR, mínimo 33 %, BYE como ronda y no como rival) para que la web
+    muestre todas las clasificaciones igual. El nombre de cada participante en Challonge es su ID de Discord.
+    Lanza challonge.ErrorChallonge si Challonge no responde.
     """
-    url_participants = f"https://api.challonge.com/v1/tournaments/{codigo_torneo}/participants.json"
-    url_matches = f"https://api.challonge.com/v1/tournaments/{codigo_torneo}/matches.json"
+    participantes_raw, matches_raw = await challonge.participantes_y_partidos(codigo_torneo)
+    return clasificacion_desde_challonge(guild, codigo_torneo, participantes_raw, matches_raw)
 
-    async with aiohttp.ClientSession() as session:
-        async with session.get(url_participants, auth=aiohttp.BasicAuth(config.CHALLONGE_USERNAME, config.CHALLONGE_API_KEY)) as resp:
-            if resp.status != 200:
-                raise Exception("Error al obtener participantes.")
-            participantes_raw = await resp.json()
 
-        async with session.get(url_matches, auth=aiohttp.BasicAuth(config.CHALLONGE_USERNAME, config.CHALLONGE_API_KEY)) as resp:
-            if resp.status != 200:
-                raise Exception("Error al obtener emparejamientos.")
-            matches_raw = await resp.json()
+def clasificacion_desde_challonge(guild, codigo_torneo: str, participantes_raw: list, matches_raw: list):
+    """Clasificación a partir de los datos ya descargados de Challonge (sin llamadas a la API)."""
+    from utils.swiss_core import calcular_estadisticas, _desempate_final   # import local: evita ciclos
 
-    jugadores = {}
-    for p in participantes_raw:
-        part = p["participant"]
-        jugadores[part["id"]] = {
-            "name": part["name"],
-            "mp": 0,
-            "games_won": 0,
-            "games_played": 0,
-            "wins": 0,
-            "losses": 0,
-            "draws": 0,
-            "opponents": []
-        }
-
-    for m in matches_raw:
-        match = m["match"]
-        if match["state"] != "complete":
-            continue
-
-        p1, p2 = match["player1_id"], match["player2_id"]
-        scores = match.get("scores_csv", "").strip()
-
-        if p1 and not p2 and p1 in jugadores:
-            jugadores[p1]["mp"] += 3
-            jugadores[p1]["wins"] += 1
-            continue
-        if p2 and not p1 and p2 in jugadores:
-            jugadores[p2]["mp"] += 3
-            jugadores[p2]["wins"] += 1
-            continue
-
-        try:
-            s1, s2 = map(int, scores.split("-"))
-        except Exception:
-            continue
-
-        if p1 not in jugadores or p2 not in jugadores:
-            continue
-
-        jugadores[p1]["opponents"].append(p2)
-        jugadores[p2]["opponents"].append(p1)
-        jugadores[p1]["games_won"] += s1
-        jugadores[p1]["games_played"] += s1 + s2
-        jugadores[p2]["games_won"] += s2
-        jugadores[p2]["games_played"] += s1 + s2
-
-        if s1 > s2:
-            jugadores[p1]["mp"] += 3
-            jugadores[p1]["wins"] += 1
-            jugadores[p2]["losses"] += 1
-        elif s2 > s1:
-            jugadores[p2]["mp"] += 3
-            jugadores[p2]["wins"] += 1
-            jugadores[p1]["losses"] += 1
-        else:
-            jugadores[p1]["mp"] += 1
-            jugadores[p2]["mp"] += 1
-            jugadores[p1]["draws"] += 1
-            jugadores[p2]["draws"] += 1
+    nombres = {str(p["participant"]["id"]): p["participant"].get("name", "") for p in participantes_raw}
+    stats = calcular_estadisticas(rondas_desde_challonge(matches_raw), list(nombres))
 
     clasificacion = []
-    for pid, datos in jugadores.items():
-        omw = 0.0
-        for o in datos["opponents"]:
-            opp = jugadores.get(o)
-            if not opp:
-                continue
-            total_matches = opp["wins"] + opp["losses"] + opp["draws"]
-            if total_matches == 0:
-                continue
-            omw += opp["mp"] / (total_matches * 3)
-        omw = omw / len(datos["opponents"]) if datos["opponents"] else 0.0
-
-        buchholz_scores = []
-        for o in datos["opponents"]:
-            opp = jugadores.get(o)
-            if not opp:
-                continue
-            total_matches = opp["wins"] + opp["losses"] + opp["draws"]
-            if total_matches == 0:
-                continue
-            buchholz_scores.append(opp["mp"] / (total_matches * 3))
-        if buchholz_scores:
-            buchholz_scores_sorted = sorted(buchholz_scores)[1:-1] if len(buchholz_scores) > 2 else buchholz_scores
-            buchholz = sum(buchholz_scores_sorted) / len(buchholz_scores_sorted)
-        else:
-            buchholz = 0.0
-
-        diff = datos["games_won"] - (datos["games_played"] - datos["games_won"])
-
-        nombre = datos["name"]
-        avatar = None
-        try:
-            miembro = await guild.fetch_member(int(datos["name"]))
-            nombre = miembro.display_name
-            avatar = str(miembro.display_avatar.url)
-            discord_id_resuelto = str(miembro.id)
-        except (ValueError, discord.NotFound, AttributeError):
-            pass
-
+    for pid, datos in stats.items():
+        if pid not in nombres:
+            continue
+        nombre_challonge = nombres[pid]
+        miembro = guild.get_member(int(nombre_challonge)) if str(nombre_challonge).isdigit() else None
         clasificacion.append({
-            "nombre": nombre,
-            "avatar": avatar,
+            "nombre": miembro.display_name if miembro else nombre_challonge,
+            "avatar": str(miembro.display_avatar.url) if miembro else None,
+            "discord_id": str(miembro.id) if miembro else None,     # nunca se arrastra el de otro jugador
             "mp": datos["mp"],
-            "omw": round(omw, 3),
-            "discord_id": discord_id_resuelto,
-            "buchholz": round(buchholz, 5),
-            "diff": diff,
-            "wins": datos["wins"],
-            "losses": datos["losses"],
-            "draws": datos["draws"]
+            "omw": round(datos["omw"], 3),
+            "buchholz": round(datos["bch"], 5),
+            "diff": datos["dif"],
+            "wins": datos["w"],
+            "losses": datos["l"],
+            "draws": datos["dw"],
+            "_pid": pid,
         })
 
-    clasificacion.sort(key=lambda x: (-x["mp"], -x["omw"], -x["diff"], -x["buchholz"]))
-
+    clasificacion.sort(key=lambda x: (-x["mp"], -x["omw"], -x["diff"], -x["buchholz"],
+                                      _desempate_final(codigo_torneo, x["_pid"])))
     for i, p in enumerate(clasificacion, 1):
         p["rank"] = i
-
+        del p["_pid"]
     return clasificacion
 
 # ============================================================
@@ -970,77 +929,105 @@ async def obtener_torneos_swiss_disponibles_canal(guild):
     torneos.sort(key=lambda x: datetime.strptime(x["fecha_inicio"], "%d/%m/%Y"))
     return torneos
 
+_PATRONES_INFO_TORNEO = {
+    # Aceptan "📅 Inicio: 10/10/2026" y "📅 **Inicio:** 10/10/2026" (los mensajes usan ambos formatos)
+    "fecha_inicio": re.compile(r"Inicio:\**\s*(\d{1,2}/\d{1,2}/\d{4})"),
+    "nivel": re.compile(r"Nivel:\**\s*(.+)"),
+    "total_maximo": re.compile(r"Jugadores:\**\s*(\d+)"),
+}
+
+
 async def obtener_info_torneo_canal(guild, codigo_torneo):
     """
-    Busca en #torneos-activos el mensaje del torneo y devuelve información
-    (fecha_inicio, nivel, total_maximo) sin llamar a Challonge.
+    Busca en #torneos-activos el mensaje del torneo (por su código EXACTO, entre backticks)
+    y devuelve {fecha_inicio, nivel, total_maximo} con lo que encuentre, sin llamar a Challonge.
     """
     canal = discord.utils.get(guild.text_channels, name="torneos-activos")
     if not canal:
         return None
+    codigo_exacto = f"`{codigo_torneo}`"
     async for msg in canal.history(limit=100):
-        if codigo_torneo in msg.content:
-            lineas = msg.content.splitlines()
-            info = {}
-            for linea in lineas:
-                if "📅 Inicio:" in linea:
-                    info["fecha_inicio"] = linea.split("📅 Inicio:")[1].strip()
-                elif "🎯 Nivel:" in linea:
-                    info["nivel"] = linea.split("🎯 Nivel:")[1].strip()
-                elif "👥 Jugadores:" in linea:
-                    try:
-                        info["total_maximo"] = int(linea.split("👥 **Jugadores:**")[1].strip())
-                    except:
-                        pass
-            return info
+        if codigo_exacto not in msg.content:
+            continue
+        info = {}
+        for linea in msg.content.splitlines():
+            for clave, patron in _PATRONES_INFO_TORNEO.items():
+                if clave not in info:
+                    m = patron.search(linea)
+                    if m:
+                        info[clave] = int(m.group(1)) if clave == "total_maximo" else m.group(1).strip()
+        return info
     return None
 
 # ============================================================
 # VALIDACIÓN DE TORNEO PARA EDICIÓN DE DECK
 # ============================================================
 
-async def validar_torneo_para_edicion(codigo_torneo: str, author: discord.Member, bot=None):
+def _inicio_torneo(fecha_str: str):
+    """Medianoche (hora de Madrid) del día de inicio, o None si la fecha no es válida."""
+    try:
+        from zoneinfo import ZoneInfo
+        tz = ZoneInfo("Europe/Madrid")
+    except Exception:
+        tz = timezone.utc
+    try:
+        return datetime.strptime(fecha_str.strip(), "%d/%m/%Y").replace(tzinfo=tz)
+    except (ValueError, AttributeError):
+        return None
+
+
+# Motivos que devuelve comprobar_edicion_deck
+EDICION_NO_EXISTE = "no_existe"
+EDICION_NO_INSCRITO = "no_inscrito"
+EDICION_FINALIZADO = "finalizado"
+EDICION_EMPEZADO = "empezado"
+EDICION_ABIERTO = "abierto"
+
+
+async def comprobar_edicion_deck(codigo_torneo: str, author: discord.Member, bot=None):
     """
-    Valida que el usuario pueda editar su deck en el torneo.
-    Usa el estado y el canal #torneos-activos, sin llamar a Challonge.
-    Retorna: (ok: bool, mensaje: str)
+    Situación del torneo para subir/editar un deck. Devuelve (motivo, mensaje), con motivo uno de
+    EDICION_NO_EXISTE, EDICION_NO_INSCRITO, EDICION_FINALIZADO, EDICION_EMPEZADO o EDICION_ABIERTO.
+    Fuente principal: el estado del bot (estado y fecha_inicio); el canal #torneos-activos solo si falta la fecha.
     """
     if bot is None:
         bot = author._state._get_client()
 
-    guild = author.guild
-
-    # 1. Verificar inscripción desde el estado
     estado = await leer_estado(bot)
     torneo_estado = next((t for t in estado.get("torneos", []) if t.get("codigo") == codigo_torneo), None)
     if not torneo_estado:
-        return False, f"❌ El torneo `{codigo_torneo}` no está activo o no existe en el estado."
+        return EDICION_NO_EXISTE, f"❌ El torneo `{codigo_torneo}` no está activo o no existe en el estado."
 
-    inscritos_ids = torneo_estado.get("inscritos_ids", [])
-    if str(author.id) not in inscritos_ids:
-        return False, f"❌ No estás inscrito en el torneo `{codigo_torneo}`."
+    if str(author.id) not in torneo_estado.get("inscritos_ids", []):
+        return EDICION_NO_INSCRITO, f"❌ No estás inscrito en el torneo `{codigo_torneo}`."
 
-    # 2. Verificar fecha de inicio desde el canal #torneos-activos
-    info_canal = await obtener_info_torneo_canal(guild, codigo_torneo)
-    if not info_canal:
-        return True, "✅ Torneo encontrado en el estado, pero sin fecha de inicio en el canal. Edición permitida."
+    if torneo_estado.get("estado") == "finalizado":
+        return EDICION_FINALIZADO, "❌ El torneo ya ha finalizado."
+    if torneo_estado.get("estado") == "en desarrollo":
+        return EDICION_EMPEZADO, "❌ El torneo ya comenzó."
 
-    fecha_inicio_str = info_canal.get("fecha_inicio")
+    fecha_inicio_str = torneo_estado.get("fecha_inicio")
     if not fecha_inicio_str:
-        return True, "✅ Sin fecha de inicio configurada. Edición permitida."
+        info_canal = await obtener_info_torneo_canal(author.guild, codigo_torneo)
+        fecha_inicio_str = (info_canal or {}).get("fecha_inicio")
+    if not fecha_inicio_str:
+        return EDICION_ABIERTO, "✅ Sin fecha de inicio configurada. Edición permitida."
 
-    try:
-        fecha_inicio_dt = datetime.strptime(fecha_inicio_str, "%d/%m/%Y")
-        timestamp_inicio = fecha_inicio_dt.replace(tzinfo=timezone.utc).timestamp()
-        timestamp_ahora = time.time()
-        if timestamp_ahora >= timestamp_inicio:
-            return False, f"❌ El torneo ya comenzó (inicio: {fecha_inicio_str})."
-        else:
-            horas_restantes = (timestamp_inicio - timestamp_ahora) / 3600
-            return True, f"✅ El torneo comienza en {horas_restantes:.1f} horas."
-    except Exception as e:
-        print(f"Error parseando fecha: {e}")
-        return True, "⚠️ No se pudo verificar la fecha de inicio. Edición permitida con precaución."
+    inicio = _inicio_torneo(fecha_inicio_str)
+    if inicio is None:
+        print(f"⚠️ Fecha de inicio no válida en {codigo_torneo}: {fecha_inicio_str!r}")
+        return EDICION_ABIERTO, "⚠️ No se pudo verificar la fecha de inicio. Edición permitida con precaución."
+
+    segundos_restantes = inicio.timestamp() - time.time()
+    if segundos_restantes <= 0:
+        return EDICION_EMPEZADO, f"❌ El torneo ya comenzó (inicio: {fecha_inicio_str})."
+    return EDICION_ABIERTO, f"✅ El torneo comienza en {segundos_restantes / 3600:.1f} horas."
+
+
+async def validar_torneo_para_edicion(codigo_torneo: str, author: discord.Member, bot=None):
+    """(True, mensaje) solo si está inscrito y el torneo aún no ha empezado; si no, (False, mensaje)."""
+    motivo, mensaje = await comprobar_edicion_deck(codigo_torneo, author, bot)
+    return motivo == EDICION_ABIERTO, mensaje
 
 # ============================================================
 # DECKS: LIMPIEZA Y CONTEO
@@ -1169,9 +1156,7 @@ async def obtener_decks_por_usuario(guild, discord_id: str, limite: int = 500, i
 # ============================================================
 
 async def inscribir_usuario_web(guild, member: discord.Member, codigo_torneo: str):
-    """
-    Inscribe al usuario en un torneo. Soporta torneos Swiss (desde el estado) y Challonge (legacy).
-    """
+    """Inscribe al usuario desde la web en un torneo suizo (la gestión por Challonge ya no existe)."""
     from utils.swiss_core import inscribir_jugador  # Import local para evitar ciclo
 
     bot = guild._state._get_client()
@@ -1180,46 +1165,10 @@ async def inscribir_usuario_web(guild, member: discord.Member, codigo_torneo: st
 
     if not torneo:
         return False, "Ese torneo no está activo o no se encontró en el estado."
+    if torneo.get("tipo") != "swiss":
+        return False, "Las inscripciones de este torneo no se gestionan desde la web."
 
-    # === CASO SWISS ===
-    if torneo.get("tipo") == "swiss":
-        ok, mensaje = await inscribir_jugador(bot, codigo_torneo, member.id)
-        return ok, mensaje
-
-    # === CASO CHALLONGE (legacy) ===
-    nivel = torneo.get("nivel", "todos").lower()
-    roles_permitidos = config.ROLES_SOCIOS if nivel == "socios" else config.ROLES_TODOS
-    if not tiene_rol_permitido(member, roles_permitidos):
-        return False, "No tienes los roles necesarios para inscribirte a este torneo."
-
-    async with aiohttp.ClientSession() as session:
-        url_get = f"https://api.challonge.com/v1/tournaments/{codigo_torneo}/participants.json"
-        async with session.get(url_get, auth=aiohttp.BasicAuth(config.CHALLONGE_USERNAME, config.CHALLONGE_API_KEY)) as resp:
-            if resp.status != 200:
-                return False, "No se pudo comprobar los inscritos actuales."
-            participantes = await resp.json()
-
-        if str(member.id) in [p["participant"].get("name") for p in participantes]:
-            return False, "Ya estás inscrito en este torneo."
-
-        if torneo.get("total_maximo") and len(participantes) >= torneo["total_maximo"]:
-            return False, "No quedan plazas disponibles."
-
-        payload = {
-            "api_key": config.CHALLONGE_API_KEY,
-            "participant": {"name": str(member.id)}
-        }
-        url_post = f"https://api.challonge.com/v1/tournaments/{codigo_torneo}/participants.json"
-        async with session.post(url_post, json=payload, auth=aiohttp.BasicAuth(config.CHALLONGE_USERNAME, config.CHALLONGE_API_KEY)) as resp:
-            if resp.status not in (200, 201):
-                return False, "Error al inscribirte en Challonge."
-
-        # Actualizar estado con la nueva lista de inscritos
-        inscritos_actuales = [str(p["participant"]["name"]) for p in participantes] + [str(member.id)]
-        torneo["inscritos_ids"] = inscritos_actuales
-        await guardar_estado(bot, estado)
-
-    return True, f"Te has inscrito correctamente en `{codigo_torneo}`."
+    return await inscribir_jugador(bot, codigo_torneo, member.id, miembro=member)
 
 def tiene_rol_permitido(member: discord.Member, roles_permitidos: set):
     return any(role.name in roles_permitidos for role in member.roles)
@@ -1229,70 +1178,6 @@ def tiene_rol_permitido(member: discord.Member, roles_permitidos: set):
 # ============================================================
 
 # utils/commons.py
-
-def _parsear_embed_deck(embed: discord.Embed) -> dict | None:
-    campos = {f.name: f.value for f in embed.fields}
-
-    jugador_raw = campos.get("Jugador", "")
-    match_id = DECK_ID_REGEX.search(jugador_raw)
-    if not match_id:
-        return None
-
-    discord_id = match_id.group(1)
-
-    titulo = embed.title or ""
-    nombre_deck = re.sub(r"^🃏\s*Deck (Subido|Actualizado):\s*", "", titulo).strip()
-    if not nombre_deck:
-        nombre_deck = titulo
-
-    descripcion = embed.description or ""
-
-    # 🔥 CORRECCIÓN: Buscar explícitamente el formato con negritas y backticks
-    codigo_deck = None
-    # Buscar "**Código:** `codigo`"
-    match_codigo = re.search(r"\*\*Código:\*\*\s*`([^`]+)`", descripcion, re.IGNORECASE)
-    if match_codigo:
-        codigo_deck = match_codigo.group(1).strip()
-    else:
-        # Fallback: buscar sin negritas
-        match_codigo = re.search(r"Código:\s*`([^`]+)`", descripcion, re.IGNORECASE)
-        if match_codigo:
-            codigo_deck = match_codigo.group(1).strip()
-        else:
-            print(f"   ❌ No se encontró Código en la descripción")
-
-    # Buscar "**Torneo:** `codigo`"
-    codigo_torneo = None
-    match_torneo = re.search(r"\*\*Torneo:\*\*\s*`([^`]+)`", descripcion, re.IGNORECASE)
-    if match_torneo:
-        codigo_torneo = match_torneo.group(1).strip()
-    else:
-        match_torneo = re.search(r"Torneo:\s*`([^`]+)`", descripcion, re.IGNORECASE)
-        if match_torneo:
-            codigo_torneo = match_torneo.group(1).strip()
-        else:
-            print(f"   ❌ No se encontró Torneo en la descripción")
-
-    # Si no se encontró torneo, extraerlo del código
-    if not codigo_torneo and codigo_deck:
-        partes = codigo_deck.split("_")
-        if len(partes) >= 2:
-            codigo_torneo = partes[0]
-    try:
-        edited = int(campos.get("Ediciones post-inicio", campos.get("edited", "0")).split("/")[0])
-    except (ValueError, AttributeError):
-        edited = 0
-
-    return {
-        "nombre_deck": nombre_deck,
-        "codigo_deck": codigo_deck,
-        "codigo_torneo": codigo_torneo,
-        "discord_id": discord_id,
-        "archetype": campos.get("Archetype", "Desconocido"),
-        "decklist": campos.get("Decklist", ""),
-        "sideboard": campos.get("Sideboard", ""),
-        "edited": edited,
-    }
 
 def _parsear_embed_deck(embed: discord.Embed) -> dict | None:
     campos = {f.name: f.value for f in embed.fields}
@@ -1332,10 +1217,7 @@ def _parsear_embed_deck(embed: discord.Embed) -> dict | None:
         if len(partes) >= 2:
             codigo_torneo = partes[0]
 
-    try:
-        edited = int(campos.get("Ediciones post-inicio", campos.get("edited", "0")).split("/")[0])
-    except (ValueError, AttributeError):
-        edited = 0
+    edited = leer_ediciones(campos)
 
     return {
         "nombre_deck": nombre_deck,
@@ -1343,21 +1225,35 @@ def _parsear_embed_deck(embed: discord.Embed) -> dict | None:
         "codigo_torneo": codigo_torneo,
         "discord_id": discord_id,
         "archetype": campos.get("Archetype", "Desconocido"),
-        "decklist": campos.get("Decklist", ""),
-        "sideboard": campos.get("Sideboard", ""),
+        "decklist": leer_campo_lista(campos, "Decklist"),
+        "sideboard": leer_campo_lista(campos, "Sideboard"),
         "formato": formato or "Premodern",  # ⬅️ NUEVO
         "edited": edited,
     }
 
+_locks_edicion_deck = {}   # codigo_deck -> asyncio.Lock (evita dos ediciones simultáneas del mismo deck)
+
+
 async def editar_deck_web(guild, member: discord.Member, codigo_torneo: str, formato: str,
                           nombre_deck: str, archetype: str, decklist: str, sideboard: str):
     codigo_deck = f"{codigo_torneo}_{member.id}"
+    lock = _locks_edicion_deck.setdefault(codigo_deck, asyncio.Lock())
+    async with lock:
+        return await _editar_deck_web(guild, member, codigo_torneo, codigo_deck, formato,
+                                      nombre_deck, archetype, decklist, sideboard)
+
+
+async def _editar_deck_web(guild, member, codigo_torneo, codigo_deck, formato,
+                           nombre_deck, archetype, decklist, sideboard):
+    # Misma regla que !editar-deck: una única edición, también con el torneo empezado,
+    # pero nunca sin estar inscrito ni en un torneo inexistente o finalizado
+    motivo, mensaje_validacion = await comprobar_edicion_deck(codigo_torneo, member)
+    if motivo in (EDICION_NO_EXISTE, EDICION_NO_INSCRITO, EDICION_FINALIZADO):
+        return False, mensaje_validacion.lstrip("❌ ")
 
     deck_actual = await obtener_deck_en_canal(guild, codigo_deck)
     if not deck_actual:
         return False, "No se encontró tu deck para este torneo. Debes subirlo primero."
-
-    ok_validacion, mensaje_validacion = await validar_torneo_para_edicion(codigo_torneo, member)
 
     edited_actual = deck_actual.get("edited", 0)
 
@@ -1385,9 +1281,9 @@ async def editar_deck_web(guild, member: discord.Member, codigo_torneo: str, for
     )
     embed_final.add_field(name="Jugador", value=f"{member.mention} (ID: {member.id})", inline=False)
     embed_final.add_field(name="Archetype", value=archetype, inline=False)
-    embed_final.add_field(name="Decklist", value=decklist[:1000], inline=False)
-    embed_final.add_field(name="Sideboard", value=sideboard[:1000], inline=False)
-    embed_final.add_field(name="Ediciones", value=f"{nuevo_edited}/1", inline=False)
+    anadir_campos_lista(embed_final, "Decklist", decklist)
+    anadir_campos_lista(embed_final, "Sideboard", sideboard)
+    embed_final.add_field(name=CAMPO_EDICIONES, value=f"{nuevo_edited}/1", inline=False)
 
     fecha_legible = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     embed_final.set_footer(text=f"Última edición: {fecha_legible} (vía web)")

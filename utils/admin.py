@@ -2,12 +2,26 @@
 import discord
 from datetime import datetime
 import asyncio
-import aiohttp
 import random
 import re
-import config
 
-from utils.commons import borrar_mensaje_seguro, validar_canal_correcto, buscar_usuario_en_servidor, obtener_torneo_usuario
+from utils.commons import borrar_mensaje_seguro, validar_canal_correcto, buscar_usuario_en_servidor, obtener_torneo_usuario, leer_campo_lista, torneo_de_embed_deck, enviar_en_trozos, leer_inscritos_sorteo
+
+# Canal de anuncios: por ID y, si no, por nombre (con el guion especial U+2010 o con guion normal)
+CANAL_ANUNCIOS_ID = 1387389356464934993
+CANAL_ANUNCIOS_NOMBRES = ("📰-tablon‐anuncios", "📰-tablon-anuncios")
+
+
+def obtener_canal_anuncios(guild):
+    canal = guild.get_channel(CANAL_ANUNCIOS_ID)
+    if canal:
+        return canal
+    for nombre in CANAL_ANUNCIOS_NOMBRES:
+        canal = discord.utils.get(guild.text_channels, name=nombre)
+        if canal:
+            return canal
+    return None
+
 
 async def _obtener_objetivo_sancion(ctx, miembro, accion: str):
     """
@@ -62,7 +76,6 @@ async def aplicar_strike(ctx, miembro: discord.Member):
         return
 
     servidor = ctx.guild
-    author = ctx.author
 
     # Verificar permisos
     if not await moderador_permisos_handle(ctx):
@@ -101,7 +114,6 @@ async def aplicar_out(ctx, miembro: discord.Member):
         return
         
     servidor = ctx.guild
-    author = ctx.author
     
     # Verificar permisos
     if not await moderador_permisos_handle(ctx):
@@ -160,6 +172,7 @@ async def aplicar_out(ctx, miembro: discord.Member):
     # await canal_anuncios.send(f"⚠️ Hemos invitado a abandonar el servidor a {miembro.mention}, ya no podra volver a entrar a The Klub.")
 
 async def eliminar_mensajes(ctx, canal: discord.TextChannel = None, cantidad: int = None, orden: str = None, incluir_fijados: bool = None):
+    await borrar_mensaje_seguro(ctx)
     if not await moderador_permisos_handle(ctx):
         return
 
@@ -207,26 +220,27 @@ async def eliminar_mensajes(ctx, canal: discord.TextChannel = None, cantidad: in
         if cantidad <= 0 or cantidad > 1000:
             await author.send("⚠️ La cantidad debe estar entre 1 y 1000.")
             return
+        if orden not in ("recientes", "antiguos"):
+            orden = "recientes"
 
-        mensajes_borrados = []
+        # Confirmación antes de borrar (es irreversible)
+        await author.send(
+            f"⚠️ Vas a borrar hasta **{cantidad}** mensajes de {canal.mention} "
+            f"({'los más recientes' if orden == 'recientes' else 'los más antiguos'}, "
+            f"{'incluidos' if incluir_fijados else 'sin'} los fijados). Esta acción no se puede deshacer. ¿Confirmas? (sí/no)"
+        )
+        confirmacion = await ctx.bot.wait_for("message", check=dm_check, timeout=60)
+        if confirmacion.content.strip().lower() not in ("sí", "si", "yes", "y"):
+            await author.send("❌ Operación cancelada. No se ha borrado nada.")
+            return
 
-        if orden == "recientes":
-            mensajes_borrados = await canal.purge(
-                limit=cantidad,
-                check=lambda m: incluir_fijados or not m.pinned
-            )
-
-        elif orden == "antiguos":
-            mensajes = [msg async for msg in canal.history(limit=cantidad, oldest_first=True)]
-            for msg in mensajes:
-                if not incluir_fijados and msg.pinned:
-                    continue
-                try:
-                    await msg.delete()
-                    mensajes_borrados.append(msg)
-                    await asyncio.sleep(0.5)
-                except discord.HTTPException:
-                    continue
+        # purge borra en bloques de 100 los mensajes de menos de 14 días (y uno a uno los más antiguos);
+        # con oldest_first también vale para "antiguos" (antes: uno a uno con 0,5 s de pausa, ~8 min para 1000)
+        mensajes_borrados = await canal.purge(
+            limit=cantidad,
+            check=lambda m: incluir_fijados or not m.pinned,
+            oldest_first=(orden == "antiguos"),
+        )
 
         # ✅ Confirmación en el canal donde se lanzó el comando
         await ctx.send(
@@ -259,13 +273,23 @@ async def eliminar_mensajes(ctx, canal: discord.TextChannel = None, cantidad: in
             await log_channel.send(embed=embed)
 
     except asyncio.TimeoutError:
-        await author.send("⏰ Tiempo agotado. Vuelve a intentar con `!eliminar-mensajes`.")
+        await _avisar_admin(ctx, "⏰ Tiempo agotado. Vuelve a intentar con `!eliminar-mensajes`.")
     except discord.Forbidden:
-        await author.send("❌ No tengo permisos para borrar mensajes en ese canal.")
+        # Puede ser falta de permisos en el canal o DMs del admin cerrados: se avisa por donde se pueda
+        await _avisar_admin(ctx, "❌ No tengo permisos para borrar mensajes en ese canal, o no puedo escribirte por DM.")
     except discord.HTTPException as e:
-        await author.send(f"⚠️ Ocurrió un error al intentar borrar mensajes: {e}")
-    except discord.Forbidden:
-        await ctx.send("❌ No puedo enviarte mensajes por privado. Activa los DMs o vuelve a intentarlo en el canal.")
+        await _avisar_admin(ctx, f"⚠️ Ocurrió un error al intentar borrar mensajes: {e}")
+
+
+async def _avisar_admin(ctx, texto: str):
+    """Avisa al admin por DM y, si tiene los DMs cerrados, en el canal (se borra a los 15 s)."""
+    try:
+        await ctx.author.send(texto)
+    except discord.HTTPException:
+        try:
+            await ctx.send(texto, delete_after=15)
+        except discord.HTTPException:
+            pass
 
 async def asignar_strike_automatico(ctx):
     autor = ctx.author
@@ -336,6 +360,10 @@ async def cerrar_peticion_handle(ctx, codigo: str = None, respuesta: str = None)
         await ctx.send("❌ No puedo enviarte mensajes por privado. Activa los DMs o vuelve a intentarlo desde el canal.")
         return
 
+    if not codigo or not respuesta:
+        await author.send("❌ El código y la respuesta no pueden estar vacíos. Cancelado.")
+        return
+
     # Buscar mensaje original en #peticiones-de-usuarios
     canal_peticiones = discord.utils.get(ctx.guild.text_channels, name="peticiones-de-usuarios")
     canal_resolucion = discord.utils.get(ctx.guild.text_channels, name="resolucion-de-peticiones")
@@ -347,60 +375,67 @@ async def cerrar_peticion_handle(ctx, codigo: str = None, respuesta: str = None)
     mensaje_objetivo = None
     autor_id = None
     contenido_peticion = "Sin descripción disponible"
+    codigo_exacto = f"`{codigo}`"
 
     async for mensaje in canal_peticiones.history(limit=100):
-        if mensaje.embeds:
-            embed = mensaje.embeds[0]
-            if f"`{codigo}`" in embed.description or any(f"`{codigo}`" in field.value for field in embed.fields):
-                mensaje_objetivo = mensaje
-                if embed.footer and embed.footer.text.isdigit():
-                    autor_id = int(embed.footer.text)
-                contenido_peticion = embed.description
-                break
+        if not mensaje.embeds:
+            continue
+        embed = mensaje.embeds[0]
+        # description, footer y valores pueden faltar (None): no deben romper la búsqueda
+        textos = [embed.description or ""] + [f.value or "" for f in embed.fields]
+        if any(codigo_exacto in t for t in textos):
+            mensaje_objetivo = mensaje
+            pie = (embed.footer.text or "").strip() if embed.footer else ""
+            autor_id = int(pie) if pie.isdigit() else None
+            contenido_peticion = embed.description or contenido_peticion
+            break
 
-    if not mensaje_objetivo or not autor_id:
-        await ctx.send("⚠️ No se pudo identificar al autor de la petición.")
+    if not mensaje_objetivo:
+        await author.send(f"⚠️ No encontré ninguna petición abierta con el código `{codigo}`.")
         return
 
-    miembro = ctx.guild.get_member(autor_id)
+    # Avisar al usuario si es posible; la petición se cierra igualmente (antes quedaba abierta para siempre)
+    miembro = ctx.guild.get_member(autor_id) if autor_id else None
+    aviso_usuario = "✅ Respuesta enviada al usuario por DM."
     if not miembro:
-        await ctx.send("⚠️ No se encontró al miembro en el servidor.")
-        return
-
-    try:
-        await miembro.send(
-            f"📬 Tu petición con código `{codigo}` ha sido **cerrada**.\n"
-            f"💬 Respuesta del equipo:\n>>> {respuesta}"
-        )
-    except discord.Forbidden:
-        await ctx.send("⚠️ No se pudo enviar mensaje privado al autor (DMs desactivados).")
-        return
+        aviso_usuario = "⚠️ El autor ya no está en el servidor (o no se pudo identificar): no se le ha podido avisar."
+    else:
+        try:
+            await miembro.send(
+                f"📬 Tu petición con código `{codigo}` ha sido **cerrada**.\n"
+                f"💬 Respuesta del equipo:\n>>> {respuesta}"
+            )
+        except discord.HTTPException:
+            aviso_usuario = "⚠️ El autor tiene los DMs cerrados: no se le ha podido enviar la respuesta."
 
     try:
         await mensaje_objetivo.delete()
+    except discord.NotFound:
+        pass
     except discord.Forbidden:
-        await ctx.send("⚠️ No tengo permisos para eliminar mensajes en `#peticiones-de-usuarios`.")
+        await author.send("⚠️ No tengo permisos para eliminar mensajes en `#peticiones-de-usuarios`.")
         return
 
-    await ctx.send(f"✅ Petición `{codigo}` cerrada y respuesta enviada al usuario.")
-
     # 📦 Publicar resumen en #resolucion-de-peticiones
-    embed_resolucion = discord.Embed(
-        title="📌 Petición Resuelta",
-        color=discord.Color.green()
-    )
-    embed_resolucion.add_field(name="🔢 Código de solicitud", value=f"`{codigo}`", inline=False)
-    embed_resolucion.add_field(name="👤 Usuario solicitante", value=miembro.mention, inline=True)
+    embed_resolucion = discord.Embed(title="📌 Petición Resuelta", color=discord.Color.green())
+    embed_resolucion.add_field(name="🔢 Código de solicitud", value=codigo_exacto, inline=False)
+    embed_resolucion.add_field(name="👤 Usuario solicitante",
+                               value=miembro.mention if miembro else (f"<@{autor_id}>" if autor_id else "Desconocido"),
+                               inline=True)
     embed_resolucion.add_field(name="🔧 Cerrada por", value=ctx.author.mention, inline=True)
     embed_resolucion.add_field(name="📝 Contenido original", value=contenido_peticion[:1024], inline=False)
     embed_resolucion.add_field(name="✅ Resolución", value=respuesta[:1024], inline=False)
-    embed_resolucion.set_footer(text=f"ID del solicitante: {miembro.id}")
-
+    if autor_id:
+        embed_resolucion.set_footer(text=f"ID del solicitante: {autor_id}")
     await canal_resolucion.send(embed=embed_resolucion)
+
+    await author.send(f"✅ Petición `{codigo}` cerrada y registrada en #resolucion-de-peticiones.\n{aviso_usuario}")
 
 async def sorteo_torneo_handle(ctx, codigo_torneo: str, premio: str = "Premio del sorteo"):
     await borrar_mensaje_seguro(ctx)
     if not await validar_canal_correcto(ctx, "preguntale-a-el-barbas", "!sorteo-torneo"):
+        return
+    if not await moderador_permisos_handle(ctx):
         return
     
     if codigo_torneo is None:
@@ -427,32 +462,16 @@ async def sorteo_torneo_handle(ctx, codigo_torneo: str, premio: str = "Premio de
             await ctx.send("❌ No puedo enviarte mensajes privados. Activa los DMs para continuar.")
             return
 
-    if not await moderador_permisos_handle(ctx):
-      return
-
-    url_get = f"https://api.challonge.com/v1/tournaments/{codigo_torneo}/participants.json"
-
-    async with aiohttp.ClientSession() as session:
-        async with session.get(url_get, auth=aiohttp.BasicAuth(config.CHALLONGE_USERNAME, config.CHALLONGE_API_KEY)) as resp:
-            if resp.status != 200:
-                error_text = await resp.text()
-                await ctx.send(f"❌ Error al obtener inscritos: {error_text}")
-                return
-            data = await resp.json()
-
-    # Extraer IDs y resolver miembros
-    candidatos = []
-    for p in data:
-        participante = p.get("participant", {})
-        discord_id = participante.get("name")
-        try:
-            miembro = await ctx.guild.fetch_member(int(discord_id))
-            candidatos.append(miembro)
-        except (ValueError, discord.NotFound):
-            continue  # Saltamos si no es un ID válido o no está en el servidor
+    # Participantes: inscritos del torneo en el estado del bot (ya no se consulta Challonge)
+    from utils.torneos_estado import obtener_torneo_estado
+    torneo = await obtener_torneo_estado(ctx.bot, codigo_torneo)
+    if not torneo:
+        await ctx.author.send(f"❌ El torneo `{codigo_torneo}` no existe.")
+        return
+    candidatos = [m for m in (ctx.guild.get_member(int(uid)) for uid in torneo.get("inscritos_ids", [])) if m]
 
     if not candidatos:
-        await ctx.send("⚠️ No hay participantes válidos para el sorteo.")
+        await ctx.author.send("⚠️ No hay participantes válidos (inscritos que sigan en el servidor) para el sorteo.")
         return
 
     # Elegir ganador aleatorio
@@ -555,11 +574,11 @@ async def nuevo_sorteo_handle(ctx, *, args: str = None):
     )
     embed.set_footer(text="¡Participa antes de que finalice el sorteo!")
 
-    canal_anuncios = discord.utils.get(ctx.guild.text_channels, name="📰-tablon-anuncios")
+    canal_anuncios = obtener_canal_anuncios(ctx.guild)
     if canal_anuncios:
         await canal_anuncios.send(embed=embed)
     else:
-        await author.send("⚠️ No encontré el canal `#anuncios`.")
+        await author.send("⚠️ No encontré el canal de anuncios (`#📰-tablon‐anuncios`).")
 
     canal_sorteos_activos = discord.utils.get(ctx.guild.text_channels, name="sorteos-activos")
     if canal_sorteos_activos:
@@ -603,28 +622,18 @@ async def realizar_sorteo_handle(ctx, codigo: str):
 
     canal_inscritos = discord.utils.get(ctx.guild.text_channels, name="inscritos-sorteos")
     canal_sorteos_activos = discord.utils.get(ctx.guild.text_channels, name="sorteos-activos")
-    canal_publicacion = ctx.guild.get_channel(1387389356464934993)
+    canal_publicacion = obtener_canal_anuncios(ctx.guild)
 
-    if not canal_inscritos or not canal_sorteos_activos:
-        await ctx.send("❌ No se encontraron los canales `#inscritos-sorteos` o `#sorteos-activos`.")
+    # Todos los canales se comprueban ANTES de notificar al ganador o borrar nada
+    if not canal_inscritos or not canal_sorteos_activos or not canal_publicacion:
+        await ctx.author.send(
+            "❌ Faltan canales para realizar el sorteo (`#inscritos-sorteos`, `#sorteos-activos` "
+            "o el de anuncios). No se ha hecho nada."
+        )
         return
 
-    # Buscar inscritos válidos al sorteo
-    mensajes = [msg async for msg in canal_inscritos.history(limit=200)]
-    inscritos = []
-
-    for msg in mensajes:
-        partes = msg.content.split("|")
-        if len(partes) >= 3:
-            codigo_msg = partes[1].strip()
-            user_id_str = partes[2].strip().split()[0]
-
-            if codigo_msg == codigo:
-                try:
-                    user = await ctx.guild.fetch_member(int(user_id_str))
-                    inscritos.append(user)
-                except (discord.NotFound, ValueError):
-                    continue
+    # Inscritos válidos (misma lectura que !inscribirse-sorteo; solo quien sigue en el servidor)
+    inscritos = [m for m in (ctx.guild.get_member(uid) for uid in await leer_inscritos_sorteo(canal_inscritos, codigo)) if m]
 
     if not inscritos:
         await ctx.send(f"❌ No hay inscritos para el sorteo `{codigo}`.")
@@ -642,7 +651,7 @@ async def realizar_sorteo_handle(ctx, codigo: str):
 
     # Eliminar todos los inscritos de ese sorteo con purge()
     eliminados_msgs = await canal_inscritos.purge(
-        limit=200,
+        limit=None,
         check=lambda m: f"| {codigo} |" in m.content  # asegura que el código esté en el mensaje
     )
     eliminados = len(eliminados_msgs)
@@ -650,82 +659,22 @@ async def realizar_sorteo_handle(ctx, codigo: str):
     # Eliminar el sorteo del canal de sorteos activos
     await canal_sorteos_activos.purge(
         limit=100,
-        check=lambda m: m.content.startswith("🎉") and codigo in m.content
+        check=lambda m: m.content.startswith("🎉") and f"`{codigo}`" in m.content   # código exacto: "S1" no borra "S10"
     )
 
     await canal_publicacion.send(f"✅ Sorteo `{codigo}` finalizado. {eliminados} inscritos eliminados y sorteo activo eliminado.\n🏆 ✅ El ganador del sorteo `{codigo}` es {ganador_user.mention}.")
 
 
-
-async def listar_torneos_handle(ctx):
-    """Lista los torneos disponibles en la caché para eliminar."""
-    await borrar_mensaje_seguro(ctx)
-
-    if not await moderador_permisos_handle(ctx):
-        return
-
-    from utils.torneos_api import leer_cache
-
-    cache = leer_cache()
-    if not cache or not cache.get("torneos"):
-        await ctx.author.send("❌ No hay torneos en la caché. Usa `!actualizar-web` para generarla.")
-        return
-
-    torneos = cache["torneos"]
-    if not torneos:
-        await ctx.author.send("❌ No hay torneos finalizados en la caché.")
-        return
-
-    mensaje = "📋 **Torneos disponibles para eliminar:**\n"
-    for i, t in enumerate(torneos, 1):
-        mensaje += f"{i}. {t['nombre']} (Código: {t['codigo']}) - {t.get('fecha_fin', 'Sin fecha')}\n"
-
-    mensaje += "\n✏️ Escribe el número del torneo que deseas eliminar:"
-    await ctx.author.send(mensaje)
-
-    def dm_check(m):
-        return m.author == ctx.author and isinstance(m.channel, discord.DMChannel)
-
-    try:
-        respuesta = await ctx.bot.wait_for("message", check=dm_check, timeout=90.0)
-        seleccion = respuesta.content.strip()
-        if not seleccion.isdigit() or int(seleccion) < 1 or int(seleccion) > len(torneos):
-            await ctx.author.send("❌ Selección inválida. Cancelando.")
-            return
-        torneo_elegido = torneos[int(seleccion) - 1]
-    except asyncio.TimeoutError:
-        await ctx.author.send("⏰ Tiempo agotado. Cancelando operación.")
-        return
-
-    # Confirmar eliminación
-    await ctx.author.send(f"⚠️ Estás a punto de eliminar el torneo `{torneo_elegido['nombre']}` (Código: {torneo_elegido['codigo']}). ¿Confirmas? (sí/no)")
-    try:
-        confirmacion = await ctx.bot.wait_for("message", check=dm_check, timeout=60.0)
-        if confirmacion.content.lower() not in ["sí", "si", "s"]:
-            await ctx.author.send("❌ Operación cancelada.")
-            return
-    except asyncio.TimeoutError:
-        await ctx.author.send("⏰ Tiempo agotado. Cancelando operación.")
-        return
-
-    # Eliminar torneo en Challonge (usando el código)
-    async with aiohttp.ClientSession() as session:
-        url_delete = f"https://api.challonge.com/v1/tournaments/{torneo_elegido['codigo']}.json"
-        async with session.delete(url_delete, auth=aiohttp.BasicAuth(config.CHALLONGE_USERNAME, config.CHALLONGE_API_KEY)) as resp:
-            if resp.status == 200:
-                await ctx.author.send(f"✅ Torneo `{torneo_elegido['nombre']}` eliminado correctamente.")
-                # Opcional: regenerar caché tras eliminar
-                from utils.torneos_api import regenerar_cache
-                await regenerar_cache(ctx.guild)
-            else:
-                await ctx.author.send(f"❌ Error al eliminar el torneo. Status: {resp.status}")
 async def nuevo_comunicado_handle(ctx, mensaje: str = None):
     await borrar_mensaje_seguro(ctx)
     
     if not await moderador_permisos_handle(ctx):
         return
 
-    canal = ctx.guild.get_channel(1387389356464934993)
+    canal = obtener_canal_anuncios(ctx.guild)
+    if not canal:
+        await ctx.author.send("❌ No encontré el canal de anuncios (`#📰-tablon‐anuncios`). No se ha enviado nada.")
+        return
 
     # Si no hay mensaje, pedimos por DM
     if not mensaje:
@@ -788,11 +737,8 @@ async def eliminar_decks_handle(ctx, codigo_torneo: str = None):
 
     async for message in channel.history(limit=None):
         for embed in message.embeds:
-            if not embed.description:
-                continue
-
-            # Buscar el código de torneo en el description
-            if codigo_torneo not in embed.description:
+            # Código de torneo EXACTO (antes "abc" también encontraba los decks de "abc2")
+            if torneo_de_embed_deck(embed) != codigo_torneo:
                 continue
 
             # Extraer campos de los fields
@@ -814,8 +760,8 @@ async def eliminar_decks_handle(ctx, codigo_torneo: str = None):
                 "jugador": jugador_field,
                 "jugador_id": jugador_id,
                 "archetype": campos.get("archetype", "Desconocido"),
-                "decklist": campos.get("decklist", ""),
-                "sideboard": campos.get("sideboard", "N/A")
+                "decklist": leer_campo_lista(campos, "decklist"),
+                "sideboard": leer_campo_lista(campos, "sideboard") or "N/A"
             })
 
     if not decks_encontrados:
@@ -827,7 +773,7 @@ async def eliminar_decks_handle(ctx, codigo_torneo: str = None):
         texto += f"{idx}. {deck['nombre_deck']} → {deck['archetype']} (Jugador: {deck['jugador']})\n"
 
     try:
-        await ctx.author.send(texto)
+        await enviar_en_trozos(ctx.author, texto)
     except discord.Forbidden:
         return await ctx.send("❌ No puedo enviarte mensajes privados. Activa los DMs para continuar.")
 
@@ -848,16 +794,28 @@ async def eliminar_decks_handle(ctx, codigo_torneo: str = None):
             # Seleccionar todos los decks
             to_delete = [deck["mensaje"] for deck in decks_encontrados]
         else:
-            # Selección por números separados por coma
-            indices = [int(x.strip())-1 for x in contenido.split(",")]
+            # Selección por números separados por coma (sin repetidos: no se borra dos veces el mismo)
+            indices = sorted({int(x.strip()) - 1 for x in contenido.split(",") if x.strip()})
             to_delete = [decks_encontrados[i]["mensaje"] for i in indices if 0 <= i < len(decks_encontrados)]
+
+        if not to_delete:
+            return await ctx.author.send("❌ Ningún número corresponde a un deck de la lista. Operación cancelada.")
+
+        # 6️⃣ Confirmar antes de borrar
+        await ctx.author.send(
+            f"⚠️ Vas a eliminar **{len(to_delete)}** deck(s) del torneo `{codigo_torneo}`. "
+            "Esta acción no se puede deshacer. ¿Confirmas? (sí/no)"
+        )
+        confirmacion = await ctx.bot.wait_for("message", check=dm_check, timeout=60)
+        if confirmacion.content.strip().lower() not in ("sí", "si", "yes", "y"):
+            return await ctx.author.send("❌ Operación cancelada. No se ha eliminado ningún deck.")
 
     except ValueError:
         return await ctx.author.send("❌ Entrada inválida. Debes poner números separados por coma o 'todos'.")
     except asyncio.TimeoutError:
         return await ctx.author.send("⏰ Tiempo agotado. Operación cancelada.")
 
-    # 6️⃣ Confirmar borrado
+    # 7️⃣ Borrar
     eliminados = 0
     for msg in to_delete:
         try:

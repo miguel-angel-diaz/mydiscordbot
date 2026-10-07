@@ -89,7 +89,6 @@ if not JWT_SECRET:
         "Define JWT_SECRET en las variables de entorno o en config_token.py."
     )
 SESSION_EXPIRATION_SECONDS = 7 * 24 * 3600  
-CHALLONGE_API_URL = "https://api.challonge.com/v1/tournaments.json"
 ROLES_TODOS = {"miembro", "socio", "second-chance-socio", "second-chance-miembro", "admin"}
 ROLES_BORRADOS = {"miembro", "socio", "second-chance-socio", "second-chance-miembro"}
 CANALES_EXCLUIDOS = {"preguntale-a-el-barbas", "🍺-el‐ranking‐de‐la‐barra"}
@@ -266,31 +265,8 @@ COMANDOS_INFO = [
     },
 
     # ============================================================
-    # ADMIN - CHALLONGE (legacy)
+    # ADMIN - INFORMES Y WEB (consulta de resultados)
     # ============================================================
-    {
-        "comando": "actualizar-clasificacion",
-        "aliases": ["actualizar clasificacion", "actualizar_clasificacion"],
-        "roles_permitidos": ["admin"],
-        "permisos_discord": ["manage_messages", "manage_roles"],
-        "descripcion": "Actualiza la clasificación de un torneo y la publica",
-        "tutorial": [
-            "Escribe `!actualizar-clasificacion <código_torneo>` en `#preguntale-a-el-barbas`.",
-            "El bot calcula OMW%, Buchholz y diferencia de games, y publica la tabla en `#🍺-el-ranking-de-la-barra`."
-        ]
-    },
-    {
-        "comando": "forzar-ronda",
-        "aliases": ["forzar ronda", "forzar_ronda"],
-        "roles_permitidos": ["admin"],
-        "permisos_discord": ["manage_messages", "manage_roles"],
-        "descripcion": "Termina la ronda actual con empates y comienza la siguiente",
-        "tutorial": [
-            "Escribe `!forzar-ronda <código_torneo>` en `#preguntale-a-el-barbas`.",
-            "Todas las partidas pendientes se marcan como empate `0-0`.",
-            "Se genera la siguiente ronda automáticamente."
-        ]
-    },
     {
         "comando": "reportar-torneo",
         "aliases": ["reportar torneo", "reportar_torneo"],

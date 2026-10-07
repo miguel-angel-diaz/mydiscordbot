@@ -2,7 +2,6 @@
 
 import discord
 from discord.ext import commands
-import asyncio
 import logging
 import os
 import unicodedata
@@ -18,7 +17,6 @@ from utils.admin import (
   sorteo_torneo_handle, 
   nuevo_sorteo_handle, 
   realizar_sorteo_handle,
-  listar_torneos_handle,
   nuevo_comunicado_handle,
   eliminar_decks_handle, 
   actualizar_web_handle
@@ -29,11 +27,7 @@ from utils.jugadores import (
     modificar_partida_agendada_handle,
     eventos_hoy_handle,
     nueva_peticion_handle,
-    inscribirse_handler,
-    desinscribirse_handler,
     ver_inscritos_handler,
-    reportar_resultado_handle,
-    modificar_resultado_handle,
     inscribirse_sorteo_handle,
     mis_comandos_handle,
     submitted_deck_handle,
@@ -44,12 +38,6 @@ from utils.jugadores import (
 )
 
 from utils.torneos import (
-  iniciar_torneo_handle, 
-  actualizar_clasificacion_handle, 
-  partidos_pendientes_handle, 
-  forzar_ronda_handle, 
-  new_tournament_assistance_handle,
-  iniciar_torneo_battle_handle,
   actualizar_clasificacion_battle_handle,
   tournament_report_handle
 )
@@ -77,7 +65,8 @@ from utils.swiss_handle import (
     swiss_lista_inscritos_asistente_handle,
     swiss_reiniciar_asistente_handle,
     swiss_eliminar_ronda_asistente_handle,
-    swiss_finalizar_asistente_handle
+    swiss_finalizar_asistente_handle,
+    swiss_partidos_pendientes_handle
 )
 
 from utils.watchers import cargar_tareas;
@@ -222,17 +211,17 @@ async def realizar_sorteo(ctx, codigo: str = None):
     aliases=["nuevo_comunicado"]
 )
 @comando_roles_permitidos("admin")
-async def forzar_ronda(ctx, *, mensaje: str = None):
+async def nuevo_comunicado(ctx, *, mensaje: str = None):
     """
     Envía un comunicado al canal 📰-tablon‐anuncios
     Uso: !nuevo-comunicado <mensaje>
     """
     await nuevo_comunicado_handle(ctx, mensaje)
 
+
 #########################################################################################################
 
 ######################################### COMANDOS JUGADORES ############################################
-
 
 
 @bot.command(name="agendar-partida",
@@ -263,17 +252,6 @@ async def nueva_peticion(ctx, *, descripcion: str = None):
     """Crea una nueva petición - !nueva-peticion"""
     await nueva_peticion_handle(ctx, descripcion)
 
-# @bot.command(name="inscribirse")
-# @comando_roles_permitidos("socio", "second-chance-socio", "miembro", "second-chance-miembro")
-# async def inscribirse(ctx, codigo: str = None, usuario: discord.Member = None):
-#     """Inscribe a un usuario en un torneo - !inscribirse"""
-#     await inscribirse_handler(ctx, codigo, usuario)
-
-# @bot.command(name="desinscribirse")
-# @comando_roles_permitidos("socio", "second-chance-socio", "miembro", "second-chance-miembro")
-# async def desinscribirse(ctx, codigo: str = None, usuario: discord.Member = None):
-#     """Desinscribe a un usuario de un torneo - !desinscribirse"""
-#     await desinscribirse_handler(ctx, codigo, usuario)
 
 @bot.command(name="ver-inscritos",
     aliases=["ver inscritos", "ver_inscritos"])
@@ -282,19 +260,6 @@ async def ver_inscritos(ctx, codigo=None):
     """Muestra los inscritos en un torneo - !ver-inscritos"""
     await ver_inscritos_handler(ctx, codigo)
 
-# @bot.command(name="reportar-resultado",
-#     aliases=["reportar resultado", "reportar_resultado"])
-# @comando_roles_permitidos("socio", "second-chance-socio", "miembro", "second-chance-miembro")
-# async def reportar_resultado(ctx, codigo_torneo: str = None, jugador1: discord.Member = None, resultado: str = None, jugador2: discord.Member = None):
-#     """Reporta el resultado de un partido de un torneo - !reportar-resultado"""
-#     await reportar_resultado_handle(ctx, codigo_torneo, jugador1, resultado, jugador2)
-
-# @bot.command(name="modificar-resultado",
-#     aliases=["modificar resultado", "modificar_resultado"])
-# @comando_roles_permitidos("socio", "second-chance-socio", "miembro", "second-chance-miembro")
-# async def modificar_resultado(ctx, codigo: str = None):
-#     """Permite cambiar el resultado de un encuentro mientras la ronda siga en juego - !modificar-resultado"""
-#     await modificar_resultado_handle(ctx, codigo)
 
 @bot.command(name="iniciar-battle",
     aliases=["iniciar battle", "iniciar_battle"])
@@ -313,9 +278,9 @@ async def reportar_resultado_battle(ctx, codigo_torneo: str = None, jugador1: di
 @bot.command(name="partidos-pendientes",
     aliases=["partidos pendientes", "partidos_pendientes"])
 @comando_roles_permitidos("socio", "second-chance-socio", "miembro", "second-chance-miembro")
-async def partidos_pendientes(ctx, codigo_torneo: str = None , type='user'):
-    """Muestra los partidos pendientes de esa ronda de un torneo - !partidos-pendientes <código_torneo>"""
-    await partidos_pendientes_handle(ctx, codigo_torneo, type)
+async def partidos_pendientes(ctx, codigo_torneo: str = None):
+    """Muestra las partidas sin resultado de la ronda actual de un torneo suizo - !partidos-pendientes <código_torneo>"""
+    await swiss_partidos_pendientes_handle(ctx, codigo_torneo)
 
 @bot.command(name="inscribirse-sorteo",
     aliases=["inscribirse sorteo", "inscribirse_sorteo"])
@@ -356,35 +321,6 @@ async def best_decks(ctx, codigo_torneo: str = None):
 ######################################### COMANDOS TORNEOS ##############################################
 
 
-# @bot.command(name="nuevo-torneo",
-#     aliases=["nuevo torneo", "nuevo_torneo"])
-# @comando_roles_permitidos("admin")
-# async def new_tournament(ctx, *, args=None):
-#     """Crea un nuevo torneo en Challonge -!nuevo-torneo Nombre | Formato | tipo | Jugadores | Fecha | Roles_permitidos | DeckURL"""
-#     await new_tournament_assistance_handle(ctx, args=args)
-
-# @bot.command(name="iniciar-torneo",
-#     aliases=["iniciar torneo", "iniciar_torneo"])
-# @comando_roles_permitidos("admin")
-# async def iniciar_torneo(ctx, codigo_torneo: str = None):
-#     """Inicia un torneo con el código proporcionado - !iniciar-torneo <código_torneo>"""
-#     await iniciar_torneo_handle(ctx, codigo_torneo)
-
-# @bot.command(name="iniciar-torneo-battle",
-#     aliases=["iniciar torneo battle", "iniciar_torneo_battle"])
-# @comando_roles_permitidos("admin")
-# async def iniciar_torneo_battle(ctx, codigo_torneo: str = None):
-#     """Inicia un torneo de tipo battle con el código proporcionado - !iniciar-torneo-battle <código_torneo>"""
-#     await iniciar_torneo_battle_handle(ctx, codigo_torneo)
-
-
-@bot.command(name="actualizar-clasificacion",
-    aliases=["actualizar clasificacion", "actualizar_clasificacion"])
-@comando_roles_permitidos("admin")
-async def actualizar_clasificacion(ctx, codigo_torneo: str = None):
-    """Actualiza la clasificación con criterios estilo MTG y la publica en #🍺-el‐ranking‐de‐la‐barra - !actualizar-clasificacion <código_torneo>"""
-    await actualizar_clasificacion_handle(ctx, codigo_torneo)
-
 @bot.command(name="actualizar-clasificacion-battle",
     aliases=["actualizar clasificacion battle", "actualizar_clasificacion_battle"])
 @comando_roles_permitidos("admin")
@@ -392,18 +328,6 @@ async def actualizar_clasificacion_battle(ctx, codigo_torneo: str = None):
     """Actualiza la clasificación con criterios estilo MTG y la publica en #🍺-el‐ranking‐de‐la‐barra - !actualizar-clasificacion-battle <código_torneo>"""
     await actualizar_clasificacion_battle_handle(ctx, codigo_torneo)
 
-@bot.command(name="forzar-ronda",
-    aliases=["forzar ronda", "forzar_ronda"])
-@comando_roles_permitidos("admin")
-async def forzar_ronda(ctx, codigo_torneo: str = None):
-    """Se termina la rondar actual con empate de las partidas no jugadas y se inicia la siguiente - !forzar-ronda <código_torneo>"""
-    await forzar_ronda_handle(ctx, codigo_torneo)
-
-# @bot.command(name="eliminar-torneo",
-#     aliases=["eliminar torneo", "eliminar_torneo"])
-# @comando_roles_permitidos("admin")
-# async def listar_torneos(ctx):
-#         await listar_torneos_handle(ctx)
 
 @bot.command(name="reportar-torneo",
     aliases=["reportar torneo", "reportar_torneo"])
@@ -495,9 +419,14 @@ async def mis_comandos(ctx):
 
 @bot.event
 async def on_ready():
+    # Se repite en cada reconexión a Discord: aquí no se arranca nada (eso va en setup_hook)
     print(f"✅ Bot conectado como {bot.user}")
-    cargar_tareas(bot)
-    asyncio.create_task(iniciar_servidor_web())
+
+
+async def _arranque_unico():
+    """setup_hook: se ejecuta UNA sola vez al arrancar, antes de conectar (on_ready se repite al reconectar)."""
+    await iniciar_servidor_web()          # con await: si falla (p. ej. puerto ocupado) se ve en el arranque
+    cargar_tareas(bot)                    # el bucle espera a wait_until_ready antes de su primera ejecución
 
     # Cargar caché de torneos si existe (sin regenerar)
     from utils.torneos_api import leer_cache
@@ -506,6 +435,8 @@ async def on_ready():
         print(f"✅ Caché de torneos cargada: {len(cache.get('torneos', []))} torneos")
     else:
         print("⚠️ No hay caché de torneos. Usa !actualizar-web para generarla.")
+
+bot.setup_hook = _arranque_unico
 
 
 @bot.event
@@ -541,21 +472,46 @@ async def on_command(ctx):
 
 @bot.event
 async def on_command_error(ctx, error):
+    original = getattr(error, "original", error)
+    uso = f"`!{ctx.command.qualified_name} {ctx.command.signature}`".replace(" `", "`") if ctx.command else ""
+
     if isinstance(error, commands.CommandNotFound):
         tipo = "no_encontrado"
-    elif isinstance(error, commands.MissingRequiredArgument):
+    elif isinstance(error, (commands.MissingRequiredArgument, commands.BadArgument)):
         tipo = "argumento_faltante"
+        await _avisar_usuario(ctx, f"⚠️ Faltan datos o no son válidos ({error}).\nUso: {uso}")
+    elif isinstance(error, commands.NoPrivateMessage):
+        tipo = "error"
+        await _avisar_usuario(ctx, "❌ Este comando solo se puede usar en el servidor.")
+    elif isinstance(error, commands.MissingPermissions):
+        tipo = "error"
+        await _avisar_usuario(ctx, "❌ Necesitas permisos de administrador para usar este comando.")
+    elif isinstance(error, commands.CheckFailure):
+        tipo = "error"   # comando_roles_permitidos ya avisó al usuario por DM
     else:
         tipo = "error"
+        nombre = ctx.command.qualified_name if ctx.command else ctx.message.content
+        logger.error("Error ejecutando %s", nombre, exc_info=(type(original), original, original.__traceback__))
+        await _avisar_usuario(ctx, "❌ Ha ocurrido un error inesperado al ejecutar el comando. Ya ha quedado registrado.")
 
-    await log_comando_handle(
-        bot,
-        usuario=ctx.author,
-        comando=ctx.message.content,
-        tipo=tipo,
-        error=error,
-        fecha=ctx.message.created_at
-    )
+    try:
+        await log_comando_handle(
+            bot,
+            usuario=ctx.author,
+            comando=ctx.message.content,
+            tipo=tipo,
+            error=original,
+            fecha=ctx.message.created_at
+        )
+    except Exception:
+        logger.exception("No se pudo registrar el error del comando en el canal de logs")
+
+
+async def _avisar_usuario(ctx, texto: str):
+    try:
+        await ctx.author.send(texto)
+    except discord.HTTPException:
+        pass
 
 @bot.event
 async def on_voice_state_update(member, before, after):

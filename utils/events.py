@@ -34,13 +34,13 @@ async def registrar_mensaje_borrado_handle(message: discord.Message):
         if message.content:
             embed.add_field(
                 name="Contenido borrado",
-                value=discord.utils.escape_markdown(message.content),
+                value=_recortar(discord.utils.escape_markdown(message.content)),
                 inline=False
             )
 
         if message.attachments:
             urls = "\n".join([att.url for att in message.attachments])
-            embed.add_field(name="Adjuntos", value=urls, inline=False)
+            embed.add_field(name="Adjuntos", value=_recortar(urls), inline=False)
 
         await canal_log.send(embed=embed)
 
@@ -69,48 +69,25 @@ async def bienvenida_y_comandos_handle(message: discord.Message):
     if not {"Accept Welcome", "Accept Rules"}.issubset(roles_usuario):
         return  # Si no tiene ambos roles, no sigue
 
-    # 1️⃣ Quitar roles de bienvenida
-    roles_a_quitar = [r for r in (rol_welcome, rol_rules) if r in member.roles]
-    if roles_a_quitar:
-        try:
-            await member.remove_roles(*roles_a_quitar, reason="Ya obtuvo el rol 'miembro'")
-            print(f"[INFO] Roles de bienvenida quitados a {member.display_name}")
-        except discord.Forbidden:
-            print(f"[WARN] No tengo permisos para quitar roles a {member.display_name}")
-            return
+    roles_bienvenida = [r for r in (rol_welcome, rol_rules) if r in member.roles]
 
-    # 2️⃣ Comprobar si está en la blacklist
-    if member.id in config.BLACKLIST_USERS:
+    # 1️⃣ Blacklist / expulsados: se comprueba ANTES de tocar ningún rol
+    if await _esta_vetado(member, guild):
         await castigar_usuario(member)
+        await _quitar_roles(member, roles_bienvenida, "Vetado: no pasa a miembro")
         return
 
-    canal_logs = discord.utils.get(guild.text_channels, name="usuarios-que-nos-dejaron")
-    if canal_logs:
-        async for mensaje in canal_logs.history(limit=200):
-            # Caso 1: mensaje normal con el ID en el contenido
-            if str(member.id) in mensaje.content or member.mention in mensaje.content:
-                await castigar_usuario(member)
-                return
-
-            # Caso 2: mensaje con embed (lo más probable en tu caso)
-            for embed in mensaje.embeds:
-                if embed.description and str(member.id) in embed.description:
-                    await castigar_usuario(member)
-                    return
-                if embed.fields:
-                    for field in embed.fields:
-                        if str(member.id) in field.value or str(member.id) in field.name:
-                            await castigar_usuario(member)
-                            return
-
-    # 4️⃣ Asignar rol definitivo de miembro
+    # 2️⃣ Asignar 'miembro' ANTES de quitar los de bienvenida: si falla, el usuario no se queda sin roles
     if rol_miembro and rol_miembro not in member.roles:
         try:
             await member.add_roles(rol_miembro, reason="Aceptó reglas y bienvenida")
             print(f"[INFO] Rol 'miembro' asignado a {member.display_name}")
-        except discord.Forbidden:
-            print(f"[WARN] No tengo permisos para asignar rol 'miembro' a {member.display_name}")
+        except discord.HTTPException as e:
+            print(f"[WARN] No pude asignar el rol 'miembro' a {member.display_name}: {e}")
             return
+
+    # 3️⃣ Quitar roles de bienvenida
+    await _quitar_roles(member, roles_bienvenida, "Ya obtuvo el rol 'miembro'")
      # Simula que tiene el rol definitivo
     roles_simulados = roles_usuario | {"miembro"}
 
@@ -140,39 +117,35 @@ async def bienvenida_y_comandos_handle(message: discord.Message):
                 continue
             sorteos_activos.append(msg.content)
 
-    # ✅ Enviar bienvenida
-    try:
-        await member.send(f"👋 ¡Bienvenido/a al servidor, {member.display_name}! 🎉")
-    except discord.Forbidden:
-        print(f"[INFO] No pude enviar bienvenida a {member}")
-        return
+    # ✅ Enviar bienvenida (si tiene los DMs cerrados se sigue: el registro se hace igualmente)
+    dms_abiertos = await _dm(member, f"👋 ¡Bienvenido/a al servidor, {member.display_name}! 🎉")
 
     # ✅ Enviar comandos
-    if comandos_disponibles:
+    if dms_abiertos and comandos_disponibles:
         embed_comandos = discord.Embed(
             title="📋 Tus comandos disponibles",
-            description="\n".join(comandos_disponibles),
+            description=_recortar("\n".join(comandos_disponibles), 4096),
             color=discord.Color.green()
         )
-        await member.send(embed=embed_comandos)
+        await _dm(member, embed=embed_comandos)
 
     # ✅ Enviar torneos
-    if torneos_activos:
+    if dms_abiertos and torneos_activos:
         embed_torneos = discord.Embed(
             title="🎮 Torneos activos",
-            description="\n\n".join(torneos_activos[:5]),  # los primeros 5
+            description=_recortar("\n\n".join(torneos_activos[:5]), 4096),  # los primeros 5
             color=discord.Color.blue()
         )
-        await member.send(embed=embed_torneos)
+        await _dm(member, embed=embed_torneos)
 
     # ✅ Enviar sorteos
-    if sorteos_activos:
+    if dms_abiertos and sorteos_activos:
         embed_sorteos = discord.Embed(
             title="🎁 Sorteos activos",
-            description="\n\n".join(sorteos_activos[:5]),  # los primeros 5
+            description=_recortar("\n\n".join(sorteos_activos[:5]), 4096),  # los primeros 5
             color=discord.Color.purple()
         )
-        await member.send(embed=embed_sorteos)
+        await _dm(member, embed=embed_sorteos)
 
     # 5️⃣ Registrar en canal #registro-de-usuarios
     canal_registro = discord.utils.get(message.guild.text_channels, name="registro-de-usuarios")
@@ -184,13 +157,18 @@ async def bienvenida_y_comandos_handle(message: discord.Message):
         embed_registro.set_thumbnail(url=member.display_avatar.url)
         embed_registro.add_field(name="Usuario", value=f"{member} (ID: {member.id})", inline=False)
         embed_registro.add_field(name="Apodo en servidor", value=member.display_name, inline=False)
-        embed_registro.add_field(name="Roles asignados", value=", ".join(roles_usuario) or "Sin roles", inline=False)
+        embed_registro.add_field(name="Roles asignados", value=_recortar(", ".join(roles_usuario) or "Sin roles"), inline=False)
         embed_registro.add_field(name="Cuenta creada", value=member.created_at.strftime("%d/%m/%Y %H:%M:%S"), inline=False)
-        embed_registro.add_field(name="Se unió al servidor", value=member.joined_at.strftime("%d/%m/%Y %H:%M:%S"), inline=False)
-        embed_registro.add_field(name="Mensaje de presentación", value=message.content[:1000], inline=False)
+        embed_registro.add_field(name="Se unió al servidor", value=member.joined_at.strftime("%d/%m/%Y %H:%M:%S") if member.joined_at else "Desconocida", inline=False)
+        embed_registro.add_field(name="DMs", value="✅ Bienvenida enviada" if dms_abiertos else "⚠️ DMs cerrados: no recibió la bienvenida", inline=False)
+        embed_registro.add_field(name="Mensaje de presentación", value=_recortar(message.content or "(sin texto: solo adjuntos)"), inline=False)
 
-        await canal_registro.send(embed=embed_registro)
-        
+        try:
+            await canal_registro.send(embed=embed_registro)
+        except discord.HTTPException as e:
+            print(f"[WARN] No pude registrar a {member} en #registro-de-usuarios: {e}")
+
+
 async def reconocer_comando_handle(bot: commands.Bot, message: discord.Message):
     if not message.content.startswith("!"):
         return False  # No es comando, seguimos
@@ -282,6 +260,14 @@ async def evento_socio_handle(before: discord.Member, after: discord.Member):
             print(f"[WARN] No pude enviar mensaje privado a {after}")
          
 async def usuario_salio_handle(bot: commands.Bot, member: discord.Member):
+    # Retirarlo de sus torneos (suizos) y borrar sus partidas agendadas
+    from utils.abandonos import gestionar_abandono_torneos  # import local: evita ciclos al cargar
+    try:
+        resumen_torneos = await gestionar_abandono_torneos(bot, member)
+    except Exception as e:
+        print(f"❌ Error gestionando torneos de {member.id} al salir: {e}")
+        resumen_torneos = ["❌ Error al revisar sus torneos, revisar a mano."]
+
     # Canal donde se detallará la info del usuario que se fue
     canal_info = discord.utils.get(member.guild.text_channels, name="usuarios-que-nos-dejaron")
     if canal_info:
@@ -293,6 +279,9 @@ async def usuario_salio_handle(bot: commands.Bot, member: discord.Member):
         embed.add_field(name="ID", value=member.id, inline=True)
         embed.add_field(name="Fecha de creación", value=member.created_at.strftime("%d/%m/%Y %H:%M:%S"), inline=False)
         embed.add_field(name="Fecha de unión", value=member.joined_at.strftime("%d/%m/%Y %H:%M:%S") if member.joined_at else "Desconocida", inline=False)
+        if resumen_torneos:
+            texto = "\n".join(resumen_torneos)
+            embed.add_field(name="Torneos", value=_recortar(texto), inline=False)
         embed.set_thumbnail(url=member.display_avatar.url)
         await canal_info.send(embed=embed)
 
@@ -302,21 +291,60 @@ async def usuario_salio_handle(bot: commands.Bot, member: discord.Member):
     # if canal_anuncios:
     #     await canal_anuncios.send(f"📢 El usuario **{member.display_name}** ha abandonado **The Klub**.")
 
-async def castigar_usuario(member: discord.Member):
+async def _dm(member, contenido=None, **kwargs) -> bool:
+    """Envía un DM sin romper el flujo si el usuario los tiene cerrados. Devuelve si se pudo enviar."""
     try:
-        # Mensaje privado
-        await member.send(
-            "Lo siento pero no eres el perfil que buscamos, agradecemos tú interés pero no todo el mundo vale para The Klub,"
-            "estar aquí no es un derecho, es un privilegio."
-            "Buena suerte en tu camino y que vaya bien."
-        )
-    except discord.Forbidden:
-        print(f"No se pudo enviar DM a {member.name}")
+        await member.send(contenido, **kwargs)
+        return True
+    except discord.HTTPException:
+        print(f"[INFO] No pude enviar DM a {member}")
+        return False
 
-    # Asignar rol Out
+
+async def _quitar_roles(member, roles, motivo: str):
+    if not roles:
+        return
+    try:
+        await member.remove_roles(*roles, reason=motivo)
+    except discord.HTTPException as e:
+        print(f"[WARN] No pude quitar roles a {member.display_name}: {e}")
+
+
+async def _esta_vetado(member, guild) -> bool:
+    """
+    Solo NO pueden volver los expulsados (decisión del usuario):
+      - los de la lista manual config.BLACKLIST_USERS;
+      - los expulsados con !out, que quedan registrados en #blacklist (campo "ID" exacto).
+    Quien se fue por su cuenta (#usuarios-que-nos-dejaron) puede volver con normalidad.
+    """
+    if member.id in config.BLACKLIST_USERS:
+        return True
+    canal_blacklist = discord.utils.get(guild.text_channels, name="blacklist")
+    if not canal_blacklist:
+        return False
+    uid = str(member.id)
+    async for mensaje in canal_blacklist.history(limit=None):
+        for embed in mensaje.embeds:
+            if any((f.name or "").strip().upper() == "ID" and str(f.value).strip() == uid for f in embed.fields):
+                return True
+    return False
+
+
+async def castigar_usuario(member: discord.Member):
+    await _dm(
+        member,
+        "Lo siento pero no eres el perfil que buscamos, agradecemos tú interés pero no todo el mundo vale para The Klub,"
+        "estar aquí no es un derecho, es un privilegio."
+        "Buena suerte en tu camino y que vaya bien."
+    )
+
+    # Asignar rol Out (sin dejar escapar el error si faltan permisos)
     rol_out = discord.utils.get(member.guild.roles, name="Out")
     if rol_out:
-        await member.add_roles(rol_out, reason="Usuario en blacklist o expulsado previamente")
+        try:
+            await member.add_roles(rol_out, reason="Usuario en blacklist o expulsado previamente")
+        except discord.HTTPException as e:
+            print(f"[WARN] No pude asignar el rol 'Out' a {member}: {e}")
 
 async def log_comando_handle(bot, usuario, comando, tipo, error=None, fecha=None):
     canal_log = bot.get_channel(1413079518440198206)
@@ -342,12 +370,21 @@ async def log_comando_handle(bot, usuario, comando, tipo, error=None, fecha=None
         color=color,
         timestamp=fecha
     )
-    embed.add_field(name="Usuario", value=f"{usuario} (ID: {usuario.id})", inline=False)
-    embed.add_field(name="Comando", value=f"{comando}", inline=False)
+    embed.add_field(name="Usuario", value=_recortar(f"{usuario} (ID: {usuario.id})"), inline=False)
+    embed.add_field(name="Comando", value=_recortar(comando), inline=False)
     if error:
-        embed.add_field(name="Error", value=str(error), inline=False)
+        embed.add_field(name="Error", value=_recortar(f"{type(error).__name__}: {error}"), inline=False)
 
-    await canal_log.send(embed=embed)
+    try:
+        await canal_log.send(embed=embed)
+    except discord.HTTPException as e:
+        print(f"⚠️ No se pudo enviar el log del comando: {e}")
+
+
+def _recortar(texto, limite: int = 1024) -> str:
+    """Valor apto para un campo de embed: nunca vacío y como máximo `limite` caracteres."""
+    texto = str(texto) if texto not in (None, "") else "—"
+    return texto if len(texto) <= limite else texto[:limite - 1] + "…"
 
 async def member_join_handle(member, before, after):
     # Usuario entra a un canal de voz
@@ -380,7 +417,7 @@ async def member_join_handle(member, before, after):
                         )
                         embed.add_field(name="Canal", value=before.channel.name, inline=True)
                         embed.add_field(name="Duración", value=f"{minutos}m {segundos}s", inline=True)
-                        embed.add_field(name="Con quién estuvo", value=companeros_txt, inline=False)
+                        embed.add_field(name="Con quién estuvo", value=_recortar(companeros_txt), inline=False)
                         embed.set_footer(text=f"ID Usuario: {member.id}", icon_url=member.display_avatar.url)
 
                         await canal_registro.send(embed=embed)
@@ -412,7 +449,7 @@ async def member_join_handle(member, before, after):
                     )
                     embed.add_field(name="Canal anterior", value=before.channel.name, inline=True)
                     embed.add_field(name="Tiempo en canal", value=f"{minutos}m {segundos}s", inline=True)
-                    embed.add_field(name="Con quién estuvo", value=companeros_txt, inline=False)
+                    embed.add_field(name="Con quién estuvo", value=_recortar(companeros_txt), inline=False)
                     embed.set_footer(text=f"ID Usuario: {member.id}", icon_url=member.display_avatar.url)
 
                     await canal_registro.send(embed=embed)

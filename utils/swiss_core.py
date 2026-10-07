@@ -1,7 +1,9 @@
 import discord
 import asyncio
+import hashlib
 import math
-from typing import List, Dict, Optional, Tuple
+import random
+from typing import List, Dict, Optional, Set, Tuple
 from collections import defaultdict
 import config
 
@@ -11,12 +13,12 @@ from utils.torneos_estado import (
     obtener_torneo_estado,
     leer_rondas,
     guardar_rondas,
-    leer_clasificacion,
     guardar_clasificacion,
     leer_estado,
     slugify_challonge,
     generar_codigo_unico
 )
+from utils.validacion_web import EntradaInvalida, resultado as validar_resultado
 
 # ============================================================
 # GESTIÓN DE TORNEOS
@@ -62,7 +64,11 @@ async def obtener_torneo(bot, codigo: str) -> Optional[Dict]:
 # INSCRIPCIONES
 # ============================================================
 
-async def inscribir_jugador(bot, codigo: str, usuario_id: int) -> Tuple[bool, str]:
+async def inscribir_jugador(bot, codigo: str, usuario_id: int, miembro=None, forzar: bool = False) -> Tuple[bool, str]:
+    """
+    Inscribe en un torneo suizo abierto. Si el torneo es de nivel "socios", `miembro` debe tener un rol
+    de config.ROLES_SOCIOS; `forzar=True` (un admin inscribiendo a otra persona) permite saltarse el nivel.
+    """
     torneo = await obtener_torneo(bot, codigo)
     if not torneo:
         return False, "El torneo no existe."
@@ -70,6 +76,10 @@ async def inscribir_jugador(bot, codigo: str, usuario_id: int) -> Tuple[bool, st
         return False, "Este torneo no es suizo."
     if torneo.get("estado", "abierto") != "abierto":
         return False, "Las inscripciones de este torneo están cerradas."
+    if not forzar and str(torneo.get("nivel", "todos")).lower() == "socios":
+        roles = {r.name.lower() for r in getattr(miembro, "roles", [])}
+        if not roles & {r.lower() for r in config.ROLES_SOCIOS}:
+            return False, "Este torneo es solo para socios."
 
     inscritos = torneo.get("inscritos_ids", [])
     if str(usuario_id) in inscritos:
@@ -97,48 +107,21 @@ async def desinscribir_jugador(bot, codigo: str, usuario_id: int, guild: discord
     inscritos.remove(str(usuario_id))
     await actualizar_torneo_estado(bot, codigo, {"inscritos_ids": inscritos})
 
-    # 🔹 Eliminar deck del usuario en submitted-decks
+    # 🔹 Eliminar su deck de #submitted-decks (coincidencia EXACTA del código: no toca decks de otros)
+    from utils.commons import obtener_deck_en_canal  # import local: evita ciclos al cargar
     if guild is None:
-        # Intentar obtener el guild a partir del bot y el GUILD_ID_ADMISION
         guild = bot.get_guild(config.GUILD_ID_ADMISION)
-        if not guild:
-            return True, "Desinscripción completada, pero no se pudo eliminar el deck (guild no encontrado)."
+    if not guild:
+        return True, "Desinscripción completada, pero no se pudo eliminar el deck (servidor no encontrado)."
 
-    canal_submitted = discord.utils.get(guild.text_channels, name="submitted-decks")
-    if canal_submitted:
-        codigo_deck = f"{codigo}_{usuario_id}"
-        async for mensaje in canal_submitted.history(limit=200):
-            if not mensaje.embeds:
-                continue
-            eliminado = False
-            for embed in mensaje.embeds:
-                # Buscar en título, descripción y campos
-                titulo = embed.title or ""
-                descripcion = embed.description or ""
-                if codigo_deck in titulo or codigo_deck in descripcion:
-                    try:
-                        await mensaje.delete()
-                        eliminado = True
-                        break
-                    except discord.Forbidden:
-                        print(f"⚠️ No tengo permisos para eliminar el deck `{codigo_deck}`.")
-                    except discord.HTTPException as e:
-                        print(f"⚠️ Error al eliminar el deck `{codigo_deck}`: {e}")
-                # Buscar en campos
-                for field in embed.fields:
-                    if codigo_deck in field.value or codigo_deck in field.name:
-                        try:
-                            await mensaje.delete()
-                            eliminado = True
-                            break
-                        except discord.Forbidden:
-                            print(f"⚠️ No tengo permisos para eliminar el deck `{codigo_deck}`.")
-                        except discord.HTTPException as e:
-                            print(f"⚠️ Error al eliminar el deck `{codigo_deck}`: {e}")
-                if eliminado:
-                    break
-            if eliminado:
-                break
+    deck = await obtener_deck_en_canal(guild, f"{codigo}_{usuario_id}")
+    if deck and deck.get("mensaje"):
+        try:
+            await deck["mensaje"].delete()
+            return True, f"Desinscripción completada. Se ha eliminado tu deck `{deck.get('nombre_deck', '')}`."
+        except discord.HTTPException as e:
+            print(f"⚠️ No se pudo eliminar el deck {codigo}_{usuario_id}: {e}")
+            return True, "Desinscripción completada, pero no se pudo eliminar tu deck. Avisa a un admin."
 
     return True, "Desinscripción completada."
 
@@ -161,61 +144,48 @@ async def generar_ronda(bot, codigo: str) -> Tuple[bool, str]:
     if not torneo:
         return False, "El torneo no existe."
 
-    participantes = torneo.get("inscritos_ids", [])
+    if torneo.get("estado") == "finalizado":
+        return False, "El torneo ya ha finalizado."
+
+    inscritos = torneo.get("inscritos_ids", [])
+    # Los retirados (p. ej. salieron del servidor) conservan sus resultados pero no se emparejan más
+    retirados = set(torneo.get("retirados", []))
+    participantes = [p for p in inscritos if p not in retirados]
     if len(participantes) < 2:
         return False, "Se necesitan al menos 2 jugadores."
 
     rondas_data = await leer_rondas(bot, codigo)
     rondas = rondas_data.get("rondas", []) if rondas_data else []
 
-    stats = await _calcular_stats_completos(bot, codigo, participantes, rondas)
+    # No se genera una ronda nueva dejando partidas sin resultado en la anterior
+    if rondas:
+        pendientes = sum(1 for e in rondas[-1].get("emparejamientos", []) if e.get("resultado") is None)
+        if pendientes:
+            return False, f"La ronda {rondas[-1].get('numero')} tiene {pendientes} partida(s) sin resultado."
+
+    total = rondas_necesarias(len(inscritos))
+    if torneo.get("ronda_actual", 0) >= total:
+        return False, f"Ya se han jugado las {total} rondas del torneo. Usa `!finalizar-swiss`."
+
+    stats = await _calcular_stats_completos(bot, codigo, inscritos, rondas)
+    if not rondas:
+        random.shuffle(participantes)
     historial = _cargar_historial_emparejamientos(rondas)
     jugadores_con_bye = _jugadores_con_bye(rondas)
 
-    # ============================================================
-    # AGRUPAR POR PUNTOS
-    # ============================================================
-    grupos: Dict[float, List[str]] = {}
-    for pid in participantes:
-        mp = stats[pid]["mp"]
-        grupos.setdefault(mp, []).append(pid)
-
-    puntos_ordenados = sorted(grupos.keys(), reverse=True)
-
-    emparejamientos: List[dict] = []
-    usados: Set[str] = set()
-    flotantes: List[str] = []
-
-    # ============================================================
-    # EMPAREJAR GRUPO POR GRUPO (con floating)
-    # ============================================================
-    for mp in puntos_ordenados:
-        pool = flotantes + grupos[mp]
-        flotantes = []
-
-        emparejados, sobrantes = _emparejar_pool(
-            pool, historial, stats, jugadores_con_bye
+    # Orden de emparejamiento: clasificación actual (en la ronda 1, el orden sorteado)
+    if rondas:
+        orden = sorted(
+            participantes,
+            key=lambda p: (-stats[p]["mp"], -stats[p]["omw"], -stats[p]["dif"], _desempate_final(codigo, p)),
         )
+    else:
+        orden = list(participantes)
 
-        for j1, j2 in emparejados:
-            emparejamientos.append({"j1": j1, "j2": j2, "resultado": None})
-            usados.add(j1)
-            usados.add(j2)
-
-        flotantes = sobrantes
-
-    # ============================================================
-    # SI QUEDAN FLOTANTES AL FINAL → BYE
-    # ============================================================
-    for pid in flotantes:
-        emparejamientos.append({"j1": pid, "j2": None, "resultado": "BYE"})
-        usados.add(pid)
-
-    # Seguridad: cualquier jugador no emparejado recibe BYE
-    for pid in participantes:
-        if pid not in usados:
-            emparejamientos.append({"j1": pid, "j2": None, "resultado": "BYE"})
-            usados.add(pid)
+    parejas, bye = _emparejar_ronda(orden, historial, jugadores_con_bye)
+    emparejamientos: List[dict] = [{"j1": a, "j2": b, "resultado": None} for a, b in parejas]
+    if bye:
+        emparejamientos.append({"j1": bye, "j2": None, "resultado": "BYE"})
 
     # ============================================================
     # GUARDAR RONDA
@@ -236,68 +206,95 @@ async def generar_ronda(bot, codigo: str) -> Tuple[bool, str]:
 # CALCULAR ESTADÍSTICAS
 # ============================================================
 
-async def _calcular_stats_completos(bot, codigo: str, participantes: List[str], rondas: List[dict]) -> dict:
-    stats = {pid: {"mp": 0.0, "omw": 0.0, "opponents": [], "games_won": 0, "games_played": 0} for pid in participantes}
+MWP_MINIMO = 1 / 3   # MTR (Apéndice C): el % de victorias de cada rival se cuenta como mínimo 33 %
+
+
+def calcular_estadisticas(rondas: List[dict], jugadores: List[str]) -> Dict[str, dict]:
+    """
+    Única fuente de estadísticas del suizo (emparejamientos y clasificación usan esta función).
+      - mp: 3 por victoria o BYE, 1 por empate.
+      - mwp: mp / (3 · rondas jugadas, BYE incluido), con mínimo del 33 %.
+      - omw: media del mwp de los rivales (el BYE no cuenta como rival). Siempre entre 0,33 y 1.
+      - bch: media recortada (sin el mejor ni el peor) del mwp de los rivales.
+      - dif: juegos ganados - juegos perdidos.
+    Un jugador que aparece en las rondas pero no en `jugadores` se crea igualmente (sin KeyError).
+    """
+    stats = defaultdict(lambda: {"mp": 0.0, "w": 0, "l": 0, "dw": 0, "rondas": 0, "opponents": [],
+                                 "games_won": 0, "games_played": 0, "mwp": MWP_MINIMO,
+                                 "omw": 0.0, "bch": 0.0, "dif": 0})
+    for pid in jugadores:
+        stats[pid]
 
     for ronda in rondas:
         for emp in ronda.get("emparejamientos", []):
-            if emp.get("resultado") == "BYE":
-                stats[emp["j1"]]["mp"] += 3.0
+            j1, j2, res = emp.get("j1"), emp.get("j2"), emp.get("resultado")
+            if res is None or j1 is None:
                 continue
-            if emp.get("resultado") is None:
+            if res == "BYE" or j2 is None:
+                stats[j1]["mp"] += 3.0
+                stats[j1]["w"] += 1
+                stats[j1]["rondas"] += 1
                 continue
-            j1 = emp["j1"]
-            j2 = emp["j2"]
-            res = emp["resultado"]
             try:
                 s1, s2 = map(int, res.split("-"))
-            except:
+            except (ValueError, AttributeError):
                 continue
-            stats[j1]["opponents"].append(j2)
-            stats[j2]["opponents"].append(j1)
-            stats[j1]["games_won"] += s1
-            stats[j1]["games_played"] += s1 + s2
-            stats[j2]["games_won"] += s2
-            stats[j2]["games_played"] += s1 + s2
+            a, b = stats[j1], stats[j2]
+            a["opponents"].append(j2)
+            b["opponents"].append(j1)
+            a["rondas"] += 1
+            b["rondas"] += 1
+            a["games_won"] += s1
+            b["games_won"] += s2
+            a["games_played"] += s1 + s2
+            b["games_played"] += s1 + s2
             if s1 > s2:
-                stats[j1]["mp"] += 3.0
+                a["mp"] += 3.0; a["w"] += 1; b["l"] += 1
             elif s2 > s1:
-                stats[j2]["mp"] += 3.0
+                b["mp"] += 3.0; b["w"] += 1; a["l"] += 1
             else:
-                stats[j1]["mp"] += 1.0
-                stats[j2]["mp"] += 1.0
+                a["mp"] += 1.0; b["mp"] += 1.0; a["dw"] += 1; b["dw"] += 1
 
-    for pid, data in stats.items():
-        if not data["opponents"]:
-            data["omw"] = 0.0
-        else:
-            total_omw = 0.0
-            for opp in data["opponents"]:
-                opp_data = stats.get(opp)
-                if opp_data:
-                    opp_matches = len(opp_data["opponents"])
-                    if opp_matches > 0:
-                        total_omw += opp_data["mp"] / (opp_matches * 3)
-            data["omw"] = total_omw / len(data["opponents"])
+    for data in stats.values():
+        if data["rondas"]:
+            data["mwp"] = max(MWP_MINIMO, data["mp"] / (3 * data["rondas"]))
         data["dif"] = data["games_won"] - (data["games_played"] - data["games_won"])
-    return stats
 
-def _cargar_historial_emparejamientos(rondas: List[dict]) -> Dict[str, Dict[str, int]]:
-    historial = defaultdict(lambda: defaultdict(int))
-    for ronda in rondas:
-        for emp in ronda.get("emparejamientos", []):
-            j1 = emp["j1"]
-            j2 = emp["j2"]
-            if j2 is not None:
-                historial[j1][j2] += 1
-                historial[j2][j1] += 1
-    return historial
+    for data in stats.values():
+        mwps = [stats[o]["mwp"] for o in data["opponents"]]
+        data["omw"] = sum(mwps) / len(mwps) if mwps else 0.0
+        recortados = sorted(mwps)[1:-1] if len(mwps) > 2 else mwps
+        data["bch"] = sum(recortados) / len(recortados) if recortados else 0.0
+
+    return dict(stats)
+
+
+def _desempate_final(codigo: str, pid: str) -> str:
+    """Orden pseudoaleatorio fijo por torneo: reproducible y sin favorecer IDs antiguos o nuevos."""
+    return hashlib.sha256(f"{codigo}:{pid}".encode()).hexdigest()
+
+
+async def _calcular_stats_completos(bot, codigo: str, participantes: List[str], rondas: List[dict]) -> dict:
+    return calcular_estadisticas(rondas, participantes)
+
 
 # ============================================================
 # REPORTAR RESULTADO
 # ============================================================
 
-async def reportar_resultado(bot, codigo: str, jugador1_id: int, resultado: str, jugador2_id: int, guild: discord.Guild = None) -> Tuple[bool, str, dict, int]:
+async def reportar_resultado(bot, codigo: str, jugador1_id: int, resultado: str, jugador2_id: int,
+                             guild: discord.Guild = None, publicar: bool = True) -> Tuple[bool, str, dict, int]:
+    """
+    Registra un resultado. Es el único responsable de publicar la clasificación tras reportar:
+    si se completa la ronda lo hace _siguiente_ronda_automatica; si no, se publica aquí
+    (publicar=False lo evita, p. ej. al cerrar varias partidas seguidas).
+    """
+    # Última barrera: ningún camino (Discord, web, abandonos) puede guardar un resultado inválido
+    try:
+        resultado = validar_resultado(resultado)
+    except EntradaInvalida as e:
+        return False, e.mensaje, None, -1
+
     torneo = await obtener_torneo(bot, codigo)
     if not torneo:
         return False, "El torneo no existe.", None, -1
@@ -352,8 +349,59 @@ async def reportar_resultado(bot, codigo: str, jugador1_id: int, resultado: str,
     if todos_reportados:
         await _siguiente_ronda_automatica(bot, codigo, guild)
         return True, "Resultado reportado y ronda completada. Siguiente ronda generada o torneo finalizado.", emp_encontrado, emp_index
-    else:
-        return True, "Resultado reportado.", emp_encontrado, emp_index
+
+    if guild and publicar:
+        await publicar_clasificacion_swiss(bot, guild, codigo)
+    return True, "Resultado reportado.", emp_encontrado, emp_index
+
+# ============================================================
+# RETIRADA POR ABANDONO (el jugador sale del servidor)
+# ============================================================
+
+async def retirar_por_abandono(bot, codigo: str, usuario_id, guild: discord.Guild = None) -> Tuple[bool, str, Optional[str]]:
+    """
+    Retira a un jugador que ha dejado el servidor.
+      - Torneo abierto: se le desinscribe (y se borra su deck).
+      - Torneo en desarrollo: queda como "retirado" (conserva resultados, no se le empareja más)
+        y su partida pendiente de la ronda actual se da como victoria 2-0 a su rival.
+    Devuelve (ok, mensaje, id_del_rival_beneficiado o None).
+    """
+    torneo = await obtener_torneo(bot, codigo)
+    uid = str(usuario_id)
+    if not torneo or torneo.get("tipo") != "swiss" or uid not in torneo.get("inscritos_ids", []):
+        return False, "No está inscrito en este torneo suizo.", None
+
+    estado = torneo.get("estado", "abierto")
+    if estado == "abierto":
+        ok, msg = await desinscribir_jugador(bot, codigo, usuario_id, guild)
+        return ok, msg, None
+    if estado == "finalizado":
+        return False, "El torneo ya ha finalizado; no se modifica.", None
+
+    retirados = list(torneo.get("retirados", []))
+    if uid not in retirados:
+        retirados.append(uid)
+        await actualizar_torneo_estado(bot, codigo, {"retirados": retirados})
+
+    rondas_data = await leer_rondas(bot, codigo)
+    rondas = rondas_data.get("rondas", []) if rondas_data else []
+    if rondas and not rondas[-1].get("completa", False):
+        for emp in rondas[-1].get("emparejamientos", []):
+            if emp.get("resultado") is not None or uid not in (emp.get("j1"), emp.get("j2")):
+                continue
+            rival = emp["j2"] if emp.get("j1") == uid else emp.get("j1")
+            if rival is None:
+                continue
+            # Si el rival también se ha retirado, la partida queda en empate
+            resultado = "1-1" if rival in retirados else "2-0"
+            ok, msg, _, _ = await reportar_resultado(bot, codigo, rival, resultado, uid, guild)
+            if ok:
+                if resultado == "2-0":
+                    return True, f"Retirado. Su partida pendiente se da como victoria 2-0 para <@{rival}>.", rival
+                return True, "Retirado. Su partida pendiente queda en empate (el rival también se retiró).", None
+            return True, f"Retirado, pero no se pudo cerrar su partida pendiente: {msg}", None
+
+    return True, "Retirado. No tenía partidas pendientes en la ronda actual.", None
 
 # ============================================================
 # SIGUIENTE RONDA AUTOMÁTICA (CON CÁLCULO DE RONDAS NECESARIAS)
@@ -425,9 +473,11 @@ async def _siguiente_ronda_automatica(bot, codigo: str, guild: discord.Guild = N
                     await canal_citas.send(mensaje_citas)
 
     # Actualizar clasificación
-    await calcular_clasificacion(bot, codigo)
+    # publicar_clasificacion_swiss ya recalcula; sin guild solo se calcula y guarda
     if guild:
         await publicar_clasificacion_swiss(bot, guild, codigo)
+    else:
+        await calcular_clasificacion(bot, codigo)
 # ============================================================
 # CALCULAR CLASIFICACIÓN
 # ============================================================
@@ -440,82 +490,15 @@ async def calcular_clasificacion(bot, codigo: str) -> List[Dict]:
     if not inscritos_ids:
         return []
 
-    inscritos_ids = torneo.get("inscritos_ids", [])
-    stats = defaultdict(lambda: {
-        "mp": 0.0,
-        "w": 0,
-        "l": 0,
-        "dw": 0,
-        "opponents": [],
-        "games_won": 0,
-        "games_played": 0,
-        "omw": 0.0,
-        "bch": 0.0,
-        "dif": 0
-    })
-
-    for pid in inscritos_ids:
-        stats[pid]
-
     rondas_data = await leer_rondas(bot, codigo)
     rondas = rondas_data.get("rondas", []) if rondas_data else []
+    stats = calcular_estadisticas(rondas, inscritos_ids)
 
-    for ronda in rondas:
-        for emp in ronda.get("emparejamientos", []):
-            if emp.get("resultado") == "BYE":
-                j1 = emp["j1"]
-                stats[j1]["mp"] += 3.0
-                stats[j1]["w"] += 1
-                continue
-            if emp.get("resultado") is None:
-                continue
-            j1 = emp["j1"]
-            j2 = emp["j2"]
-            res = emp["resultado"]
-            try:
-                s1, s2 = map(int, res.split("-"))
-            except:
-                continue
-            stats[j1]["opponents"].append(j2)
-            stats[j2]["opponents"].append(j1)
-            stats[j1]["games_won"] += s1
-            stats[j1]["games_played"] += s1 + s2
-            stats[j2]["games_won"] += s2
-            stats[j2]["games_played"] += s1 + s2
-            if s1 > s2:
-                stats[j1]["mp"] += 3.0
-                stats[j1]["w"] += 1
-                stats[j2]["l"] += 1
-            elif s2 > s1:
-                stats[j2]["mp"] += 3.0
-                stats[j2]["w"] += 1
-                stats[j1]["l"] += 1
-            else:
-                stats[j1]["mp"] += 1.0
-                stats[j2]["mp"] += 1.0
-                stats[j1]["dw"] += 1
-                stats[j2]["dw"] += 1
-
-    for pid, data in stats.items():
-        omw = 0.0
-        buch = []
-        for opp in data["opponents"]:
-            opp_data = stats.get(opp)
-            if opp_data:
-                total_matches = opp_data["w"] + opp_data["l"] + opp_data["dw"]
-                if total_matches > 0:
-                    omw += opp_data["mp"] / (total_matches * 3)
-                    buch.append(opp_data["mp"] / (total_matches * 3))
-        data["omw"] = omw / len(data["opponents"]) if data["opponents"] else 0.0
-        if buch:
-            buch.sort()
-            buch = buch[1:-1] if len(buch) > 2 else buch
-            data["bch"] = sum(buch) / len(buch) if buch else 0.0
-        else:
-            data["bch"] = 0.0
-        data["dif"] = data["games_won"] - (data["games_played"] - data["games_won"])
-
-    ranking = sorted(stats.items(), key=lambda x: (-x[1]["mp"], -x[1]["omw"], -x[1]["dif"], -x[1]["bch"]))
+    # Puntos, OMW%, diferencia de juegos, Buchholz y, si todo empata, un orden fijo por torneo
+    ranking = sorted(
+        stats.items(),
+        key=lambda x: (-x[1]["mp"], -x[1]["omw"], -x[1]["dif"], -x[1]["bch"], _desempate_final(codigo, x[0])),
+    )
 
     clasificacion = []
     for i, (pid, data) in enumerate(ranking, 1):
@@ -560,17 +543,28 @@ async def eliminar_ronda_swiss(bot, codigo: str, ronda_num: int, guild: discord.
     if idx == -1:
         return False, f"La ronda {ronda_num} no existe."
 
+    # Solo la última: borrar una intermedia dejaría las posteriores emparejadas con datos
+    # que ya no existen y rompería la numeración
+    if idx != len(rondas) - 1:
+        return False, (
+            f"Solo se puede eliminar la última ronda (Ronda {rondas[-1].get('numero')}). "
+            f"Para corregir una anterior usa `!modificar-resultado-swiss`."
+        )
+
     rondas.pop(idx)
 
-    if ronda_num == torneo.get("ronda_actual", 0):
-        if rondas:
-            nueva_ronda_actual = rondas[-1]["numero"]
-        else:
-            nueva_ronda_actual = 0
-        await actualizar_torneo_estado(bot, codigo, {"ronda_actual": nueva_ronda_actual})
+    # El torneo vuelve a la ronda anterior y, si estaba finalizado, se reabre para poder continuar
+    cambios = {"ronda_actual": rondas[-1]["numero"] if rondas else 0}
+    if torneo.get("estado") == "finalizado":
+        cambios["estado"] = "en desarrollo"
+    await actualizar_torneo_estado(bot, codigo, cambios)
 
     await guardar_rondas(bot, codigo, {"codigo": codigo, "rondas": rondas})
-    await calcular_clasificacion(bot, codigo)
+    # publicar_clasificacion_swiss ya recalcula; sin guild solo se calcula y guarda
+    if guild:
+        await publicar_clasificacion_swiss(bot, guild, codigo)
+    else:
+        await calcular_clasificacion(bot, codigo)
 
     if guild:
         canal_citas = discord.utils.get(guild.text_channels, name="🍸-citas‐a‐ciegas")
@@ -580,7 +574,8 @@ async def eliminar_ronda_swiss(bot, codigo: str, ronda_num: int, guild: discord.
                     await msg.delete()
                     break
 
-    return True, f"Ronda {ronda_num} eliminada correctamente."
+    reabierto = " El torneo estaba finalizado y se ha reabierto." if "estado" in cambios else ""
+    return True, f"Ronda {ronda_num} eliminada correctamente.{reabierto}"
 
 # ============================================================
 # PUBLICAR CLASIFICACIÓN (sin dependencia de ctx)
@@ -595,32 +590,8 @@ async def publicar_clasificacion_swiss(bot, guild, codigo: str):
     if not torneo:
         return
 
-    clasificacion_data = await leer_clasificacion(bot, codigo)
-    if not clasificacion_data:
-        await calcular_clasificacion(bot, codigo)
-        clasificacion_data = await leer_clasificacion(bot, codigo)
-
-    clasificacion = clasificacion_data.get("clasificacion", []) if clasificacion_data else []
-
-    if not clasificacion:
-        inscritos = torneo.get("inscritos_ids", [])
-        for uid in inscritos:
-            try:
-                member = await guild.fetch_member(int(uid))
-                nombre = member.display_name
-            except:
-                nombre = f"<@{uid}>"
-            clasificacion.append({
-                "id": uid,
-                "rk": len(clasificacion) + 1,
-                "mp": 0,
-                "w": 0,
-                "l": 0,
-                "dw": 0,
-                "omw": 0.0,
-                "bch": 0.0,
-                "dif": 0
-            })
+    # Siempre se recalcula: así la clasificación publicada incluye la última ronda jugada
+    clasificacion = await calcular_clasificacion(bot, codigo)
 
     lines = [f"📊 **Clasificación del torneo `{codigo}`:**"]
     lines.append("```markdown")
@@ -647,11 +618,13 @@ async def publicar_clasificacion_swiss(bot, guild, codigo: str):
     lines.append("```")
     mensaje_completo = "\n".join(lines)
 
-    async for msg in canal_ranking.history(limit=50):
-        if msg.author == bot.user and not msg.embeds:
-            if msg.content.startswith(f"📊 **Clasificación del torneo `{codigo}`:**"):
+    # Borrar TODOS los mensajes anteriores de este torneo (las clasificaciones largas van en varios trozos)
+    async for msg in canal_ranking.history(limit=100):
+        if msg.author == bot.user and not msg.embeds and msg.content.startswith(f"📊 **Clasificación del torneo `{codigo}`:**"):
+            try:
                 await msg.delete()
-                break
+            except discord.HTTPException:
+                pass
 
     if len(mensaje_completo) <= 1900:
         await canal_ranking.send(mensaje_completo)
@@ -666,8 +639,7 @@ async def publicar_clasificacion_swiss(bot, guild, codigo: str):
         for chunk in chunks:
             await canal_ranking.send(chunk)
 
-from typing import List, Dict, Tuple, Optional, Set
-from collections import defaultdict
+LIMITE_PASOS_EMPAREJAMIENTO = 200_000   # salvaguarda: con torneos normales sobra con creces
 
 
 def _cargar_historial_emparejamientos(rondas: List[dict]) -> Dict[str, Dict[str, int]]:
@@ -675,9 +647,8 @@ def _cargar_historial_emparejamientos(rondas: List[dict]) -> Dict[str, Dict[str,
     historial = defaultdict(lambda: defaultdict(int))
     for ronda in rondas:
         for emp in ronda.get("emparejamientos", []):
-            j1 = emp["j1"]
-            j2 = emp.get("j2")
-            if j2 is not None:
+            j1, j2 = emp.get("j1"), emp.get("j2")
+            if j1 is not None and j2 is not None:
                 historial[j1][j2] += 1
                 historial[j2][j1] += 1
     return historial
@@ -688,129 +659,67 @@ def _jugadores_con_bye(rondas: List[dict]) -> Set[str]:
     byes = set()
     for ronda in rondas:
         for emp in ronda.get("emparejamientos", []):
-            if emp.get("j2") is None:
+            if emp.get("j2") is None and emp.get("j1") is not None:
                 byes.add(emp["j1"])
     return byes
 
 
-def _buscar_emparejamiento(
-    jugadores: List[str],
-    historial: Dict[str, Dict[str, int]],
-    permitir_rematch: bool = False,
-    memo: Optional[Dict] = None,
-) -> Optional[List[Tuple[str, str]]]:
+def _emparejar(orden: List[str], historial, permitir_revanchas: bool) -> Optional[List[Tuple[str, str]]]:
     """
-    Backtracking con memoización para encontrar un emparejamiento completo
-    que evite rematches (o los permita como último recurso).
-
-    - Prueba a emparejar `jugadores[0]` con cada uno de los siguientes, en orden
-      de ranking (el orden de la lista importa: los mejores primero).
-    - Si `permitir_rematch=False`, solo acepta rivales sin historial previo.
-    - Si `permitir_rematch=True`, acepta cualquier rival (fallback).
-    - Memoiza por conjunto de jugadores restantes (frozenset) para evitar
-      recalcular subproblemas idénticos.
-
-    Devuelve lista de tuplas (j1, j2) o None si no hay solución.
+    Empareja a todos (número par) respetando el orden de clasificación: el primero libre juega
+    contra el más cercano posible; si eso deja a alguien sin rival, se retrocede (backtracking).
+    Sin revanchas devuelve None si no existe solución; con revanchas, prefiere las menos repetidas.
     """
-    if memo is None:
-        memo = {}
+    fallidos = set()
+    pasos = [0]
 
-    # Casos base
-    if len(jugadores) == 0:
-        return []
-    if len(jugadores) % 2 != 0:
-        return None  # Impar → no se puede emparejar
+    def buscar(restantes: Tuple[str, ...]):
+        if not restantes:
+            return []
+        if restantes in fallidos or pasos[0] > LIMITE_PASOS_EMPAREJAMIENTO:
+            return None
+        pasos[0] += 1
+        a = restantes[0]
+        candidatos = list(restantes[1:])
+        if permitir_revanchas:
+            candidatos.sort(key=lambda b: historial[a][b])   # estable: a igual nº de cruces, el más cercano
+        for b in candidatos:
+            if not permitir_revanchas and historial[a][b]:
+                continue
+            sub = buscar(tuple(x for x in restantes if x != a and x != b))
+            if sub is not None:
+                return [(a, b)] + sub
+        fallidos.add(restantes)
+        return None
 
-    # Clave de memoización: el conjunto de jugadores restantes
-    clave = frozenset(jugadores)
-    if clave in memo:
-        return memo[clave]
-
-    j1 = jugadores[0]
-    resto = jugadores[1:]
-
-    for i, j2 in enumerate(resto):
-        ya_jugaron = historial.get(j1, {}).get(j2, 0) > 0
-
-        if ya_jugaron and not permitir_rematch:
-            continue
-
-        nuevos_restantes = resto[:i] + resto[i + 1:]
-        sub = _buscar_emparejamiento(
-            nuevos_restantes, historial, permitir_rematch, memo
-        )
-
-        if sub is not None:
-            resultado = [(j1, j2)] + sub
-            memo[clave] = resultado
-            return resultado
-
-    # Sin solución desde este estado
-    memo[clave] = None
-    return None
+    return buscar(tuple(orden))
 
 
-def _emparejar_pool(
-    pool: List[str],
-    historial: Dict[str, Dict[str, int]],
-    stats: Dict[str, dict],
-    jugadores_con_bye: Set[str],
-) -> Tuple[List[Tuple[str, str]], List[str]]:
+def _emparejar_ronda(orden: List[str], historial, jugadores_con_bye: Set[str]):
     """
-    Empareja un pool de jugadores evitando rematches si es posible.
-    Devuelve (emparejamientos, sobrantes).
-
-    - Si el pool es impar, uno flota. Se elige al jugador de menor ranking
-      que NO haya tenido BYE previamente. Si todos han tenido, se elige al
-      de menor ranking.
-    - Primero intenta emparejamiento sin rematch (backtracking).
-    - Si falla, permite rematch (backtracking con permitir_rematch=True).
-    - Si aún falla (imposible matemáticamente), hace un emparejamiento
-      de emergencia adyacente.
+    Emparejamiento de una ronda (MTR). Prioridades, de mayor a menor:
+      1. Con número impar, el BYE va a quien aún no lo haya tenido (el peor clasificado posible).
+      2. Sin revanchas: se prueba cada candidato a BYE hasta que el resto se pueda emparejar sin ellas.
+      3. Revanchas solo si no hay otro reparto; un BYE repetido solo si todos lo han tenido ya.
+    Devuelve (parejas, id_con_bye o None).
     """
-    if not pool:
-        return [], []
-
-    # Ordenar por ranking: mejor primero
-    pool_ordenado = sorted(
-        pool,
-        key=lambda pid: (
-            -stats[pid]["mp"],
-            -stats[pid]["omw"],
-            -stats[pid].get("dif", 0),
-        ),
-    )
-
-    # Si es impar, elegir quién flota
-    if len(pool_ordenado) % 2 == 1:
-        flotante = None
-        # Preferir al de menor ranking que no haya tenido BYE
-        for pid in reversed(pool_ordenado):
-            if pid not in jugadores_con_bye:
-                flotante = pid
-                break
-        # Si todos han tenido BYE, flotar al de menor ranking
-        if flotante is None:
-            flotante = pool_ordenado[-1]
-
-        a_emparejar = [p for p in pool_ordenado if p != flotante]
+    if len(orden) % 2 == 0:
+        grupos_bye = [[None]]
     else:
-        flotante = None
-        a_emparejar = pool_ordenado
+        sin_bye = [p for p in reversed(orden) if p not in jugadores_con_bye]
+        con_bye = [p for p in reversed(orden) if p in jugadores_con_bye]
+        # No repetir BYE tiene prioridad sobre evitar revanchas (el BYE son 3 puntos gratis)
+        grupos_bye = [g for g in (sin_bye, con_bye) if g]
 
-    # Intento 1: sin rematch
-    resultado = _buscar_emparejamiento(a_emparejar, historial, permitir_rematch=False)
+    for candidatos_bye in grupos_bye:
+        for permitir_revanchas in (False, True):
+            for bye in candidatos_bye:
+                resto = [p for p in orden if p != bye]
+                parejas = _emparejar(resto, historial, permitir_revanchas)
+                if parejas is not None:
+                    return parejas, bye
 
-    # Intento 2: permitir rematch como último recurso
-    if resultado is None:
-        resultado = _buscar_emparejamiento(a_emparejar, historial, permitir_rematch=True)
-
-    # Fallback extremo (no debería llegar aquí)
-    if resultado is None:
-        resultado = [
-            (a_emparejar[i], a_emparejar[i + 1])
-            for i in range(0, len(a_emparejar), 2)
-        ]
-
-    sobrantes = [flotante] if flotante else []
-    return resultado, sobrantes
+    # Salvaguarda (no debería ocurrir): parejas consecutivas
+    bye = grupos_bye[0][0]
+    resto = [p for p in orden if p != bye]
+    return [(resto[i], resto[i + 1]) for i in range(0, len(resto) - 1, 2)], bye

@@ -26,7 +26,10 @@ MAX_CUERPO_BYTES = 64 * 1024        # una decklist completa ocupa ~3 KB
 MAX_NOMBRE = 100
 MAX_EMAIL = 254
 MAX_COMENTARIO = 1000
-MAX_DECKLIST = 4000
+# Main + sideboard + resto de campos deben caber en un embed de Discord (6000 caracteres en total).
+# 60 cartas distintas con nombres largos ocupan ~2800; 15 de banquillo, ~700.
+MAX_DECKLIST = 3500
+MAX_SIDEBOARD = 1200
 MAX_CODIGO_ACCESO = 32
 DIAS_MAX_AGENDA = 365
 
