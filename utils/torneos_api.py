@@ -813,6 +813,8 @@ async def api_estado_torneos(request):
 
             if t.get("estado") not in ("abierto", "en desarrollo"):
                 continue
+            if t.get("tipo") != "swiss":            # p. ej. Battle Royale: sin inscripción ni decks por la web
+                continue
 
             nivel = t.get("nivel", "todos").lower()
             roles_permitidos = config.ROLES_SOCIOS if nivel == "socios" else config.ROLES_TODOS
@@ -1583,6 +1585,10 @@ async def api_torneo_enfrentamientos(request):
 
             response = web.json_response({"rondas": resultado})
             return response
+
+        # Un torneo propio que no es suizo (Battle Royale) no tiene rondas que mostrar ni está en Challonge
+        if torneo is not None and torneo.get("tipo") not in (None, "challonge"):
+            return web.json_response({"rondas": []})
 
         # Solo se consulta Challonge para torneos nuestros (en el estado del bot o ya en caché);
         # cualquier otro código devuelve vacío y no se escribe nada en la caché

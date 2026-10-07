@@ -265,6 +265,68 @@ COMANDOS_INFO = [
     },
 
     # ============================================================
+    # ADMIN - BATTLE ROYALE
+    # ============================================================
+    {
+        "comando": "nuevo-battle",
+        "aliases": ["nuevo battle", "nuevo_battle"],
+        "roles_permitidos": ["admin"],
+        "permisos_discord": ["manage_messages", "manage_roles"],
+        "descripcion": "Crea un Battle Royale (sistema propio, sin Challonge)",
+        "tutorial": [
+            "Escribe `!nuevo-battle` (o `!nuevo-battle <nombre>`).",
+            "Por DM indica el nombre y el formato (Premodern / Pauper).",
+            "El bot te da el código del battle y lo anuncia en la cartelera."
+        ]
+    },
+    {
+        "comando": "iniciar-battle",
+        "aliases": ["iniciar battle", "iniciar_battle"],
+        "roles_permitidos": ["admin"],
+        "permisos_discord": ["manage_messages", "manage_roles"],
+        "descripcion": "Apunta un enfrentamiento en un Battle Royale",
+        "tutorial": [
+            "Escribe `!iniciar-battle <código> @jugador1 @jugador2` (o solo `!iniciar-battle` y responde por DM).",
+            "Una misma pareja puede enfrentarse como máximo 2 veces por battle.",
+            "Los dos jugadores reciben un DM con el enfrentamiento."
+        ]
+    },
+    {
+        "comando": "modificar-resultado-battle",
+        "aliases": ["modificar resultado battle", "modificar_resultado_battle"],
+        "roles_permitidos": ["admin"],
+        "permisos_discord": ["manage_messages", "manage_roles"],
+        "descripcion": "Corrige el resultado de un enfrentamiento de un Battle Royale",
+        "tutorial": [
+            "Escribe `!modificar-resultado-battle <código>`.",
+            "Elige el enfrentamiento de la lista e introduce el resultado `X-Y`.",
+            "También funciona con battles ya finalizados; la clasificación se vuelve a publicar."
+        ]
+    },
+    {
+        "comando": "actualizar-clasificacion-battle",
+        "aliases": ["actualizar clasificacion battle", "actualizar_clasificacion_battle"],
+        "roles_permitidos": ["admin"],
+        "permisos_discord": ["manage_messages", "manage_roles"],
+        "descripcion": "Vuelve a publicar la clasificación de un Battle Royale",
+        "tutorial": [
+            "Escribe `!actualizar-clasificacion-battle <código>`.",
+            "La clasificación se publica en `#🍺-el‐ranking‐de‐la‐barra` (se actualiza sola al reportar)."
+        ]
+    },
+    {
+        "comando": "finalizar-battle",
+        "aliases": ["finalizar battle", "finalizar_battle"],
+        "roles_permitidos": ["admin"],
+        "permisos_discord": ["manage_messages", "manage_roles"],
+        "descripcion": "Cierra un Battle Royale y publica la clasificación final",
+        "tutorial": [
+            "Escribe `!finalizar-battle <código>` y confirma con `si` por DM.",
+            "Los enfrentamientos sin resultado se anulan y no puntúan."
+        ]
+    },
+
+    # ============================================================
     # ADMIN - INFORMES Y WEB (consulta de resultados)
     # ============================================================
     {
@@ -459,18 +521,6 @@ COMANDOS_INFO = [
     # JUGADOR - BATTLE ROYALE
     # ============================================================
     {
-        "comando": "iniciar-battle",
-        "aliases": ["iniciar battle", "iniciar_battle"],
-        "roles_permitidos": ["admin"],
-        "permisos_discord": ["manage_messages", "manage_roles"],
-        "descripcion": "Inicia un enfrentamiento de tipo Battle Royale",
-        "tutorial": [
-            "Escribe `!iniciar-battle` en `#preguntale-a-el-barbas`.",
-            "Elige el torneo Battle y los dos jugadores.",
-            "El bot comprueba que no hayan jugado ya 2 veces y registra la batalla en `#batallas-iniciadas`."
-        ]
-    },
-    {
         "comando": "reportar-resultado-battle",
         "aliases": ["reportar resultado battle", "reportar_resultado_battle"],
         "roles_permitidos": ["socio", "second-chance-socio", "miembro", "admin", "second-chance-miembro"],
@@ -478,8 +528,9 @@ COMANDOS_INFO = [
         "descripcion": "Reporta el resultado de un enfrentamiento Battle Royale",
         "tutorial": [
             "Escribe `!reportar-resultado-battle` en `#preguntale-a-el-barbas`.",
-            "Elige el torneo, los jugadores y el resultado (X-Y).",
-            "El bot actualiza la clasificación del Battle."
+            "Por DM elige tu enfrentamiento pendiente e indica el resultado (X-Y, p. ej. `2-1`).",
+            "Solo pueden reportar los dos jugadores o un admin, y cada enfrentamiento una sola vez.",
+            "El bot avisa a los jugadores y actualiza la clasificación del battle."
         ]
     },
 

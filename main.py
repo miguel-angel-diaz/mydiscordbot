@@ -32,14 +32,18 @@ from utils.jugadores import (
     mis_comandos_handle,
     submitted_deck_handle,
     editar_deck_handle,
-    cartas_mas_jugadas_handle,
-    iniciar_battle_handle,
-    reportar_resultado_battle_handle
+    cartas_mas_jugadas_handle
 )
 
-from utils.torneos import (
-  actualizar_clasificacion_battle_handle,
-  tournament_report_handle
+from utils.torneos import tournament_report_handle
+
+from utils.battle import (
+    nuevo_battle_handle,
+    iniciar_battle_handle,
+    reportar_resultado_battle_handle,
+    modificar_resultado_battle_handle,
+    actualizar_clasificacion_battle_handle,
+    finalizar_battle_handle
 )
 
 from utils.events import (
@@ -265,14 +269,14 @@ async def ver_inscritos(ctx, codigo=None):
     aliases=["iniciar battle", "iniciar_battle"])
 @comando_roles_permitidos("admin")
 async def iniciar_battle(ctx, codigo_torneo: str = None, jugador1: discord.Member = None, jugador2: discord.Member = None):
-    """Consulta si se puede hacer un enfrentamiento de tipo battle - !iniciar_battle_handle"""
+    """Apunta un enfrentamiento en un Battle Royale (máximo 2 por pareja) - !iniciar-battle <código> @j1 @j2"""
     await iniciar_battle_handle(ctx, codigo_torneo, jugador1, jugador2)
 
 @bot.command(name="reportar-resultado-battle",
     aliases=["reportar resultado battle", "reportar_resultado_battle"])
 @comando_roles_permitidos("socio", "second-chance-socio", "miembro", "second-chance-miembro")
 async def reportar_resultado_battle(ctx, codigo_torneo: str = None, jugador1: discord.Member = None, resultado: str = None, jugador2: discord.Member = None):
-    """Reporta el resultado de un partido de un torneo de tipo battle - !reportar-resultado-battle"""
+    """Reporta el resultado de un enfrentamiento pendiente de un Battle Royale - !reportar-resultado-battle"""
     await reportar_resultado_battle_handle(ctx, codigo_torneo, jugador1, resultado, jugador2)
 
 @bot.command(name="partidos-pendientes",
@@ -325,8 +329,32 @@ async def best_decks(ctx, codigo_torneo: str = None):
     aliases=["actualizar clasificacion battle", "actualizar_clasificacion_battle"])
 @comando_roles_permitidos("admin")
 async def actualizar_clasificacion_battle(ctx, codigo_torneo: str = None):
-    """Actualiza la clasificación con criterios estilo MTG y la publica en #🍺-el‐ranking‐de‐la‐barra - !actualizar-clasificacion-battle <código_torneo>"""
+    """Vuelve a publicar la clasificación de un battle en #🍺-el‐ranking‐de‐la‐barra - !actualizar-clasificacion-battle <código>"""
     await actualizar_clasificacion_battle_handle(ctx, codigo_torneo)
+
+
+@bot.command(name="nuevo-battle",
+    aliases=["nuevo battle", "nuevo_battle"])
+@comando_roles_permitidos("admin")
+async def nuevo_battle(ctx, *, nombre: str = None):
+    """Crea un Battle Royale (sin Challonge) - !nuevo-battle [nombre]"""
+    await nuevo_battle_handle(ctx, nombre)
+
+
+@bot.command(name="finalizar-battle",
+    aliases=["finalizar battle", "finalizar_battle"])
+@comando_roles_permitidos("admin")
+async def finalizar_battle(ctx, codigo_torneo: str = None):
+    """Cierra un Battle Royale y publica la clasificación final - !finalizar-battle <código>"""
+    await finalizar_battle_handle(ctx, codigo_torneo)
+
+
+@bot.command(name="modificar-resultado-battle",
+    aliases=["modificar resultado battle", "modificar_resultado_battle"])
+@comando_roles_permitidos("admin")
+async def modificar_resultado_battle(ctx, codigo_torneo: str = None):
+    """Corrige el resultado de un enfrentamiento de un Battle Royale - !modificar-resultado-battle <código>"""
+    await modificar_resultado_battle_handle(ctx, codigo_torneo)
 
 
 @bot.command(name="reportar-torneo",

@@ -448,6 +448,9 @@ async def _ids_clasificacion(bot, guild, codigo_torneo: str) -> List[str]:
     if torneo and torneo.get("tipo") == "swiss":
         from utils.swiss_core import calcular_clasificacion
         return [str(p["id"]) for p in await calcular_clasificacion(bot, codigo_torneo)]
+    if torneo and torneo.get("tipo") == "battle":
+        from utils.battle import calcular_clasificacion_battle, leer_enfrentamientos
+        return [p["id"] for p in calcular_clasificacion_battle(codigo_torneo, await leer_enfrentamientos(bot, codigo_torneo))]
 
     from utils.torneos_api import leer_cache
     cache = leer_cache() or {}

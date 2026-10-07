@@ -5,7 +5,8 @@ Qué hacer con los torneos cuando un jugador abandona el servidor.
 - Suizo en desarrollo: queda "retirado" (sigue en la clasificación, no se le empareja más)
   y su partida pendiente se da como victoria 2-0 a su rival.
 - Partidas agendadas con él: se borran de #partidos-agendados y se actualiza la cartelera.
-- Torneos de otro tipo (Challonge / Battle Royale): no se tocan, se avisa para revisión manual.
+- Battle Royale en curso: sus enfrentamientos pendientes se anulan (los jugados se mantienen).
+- Torneos de otro tipo (Challonge): no se tocan, se avisa para revisión manual.
 """
 import asyncio
 import traceback
@@ -16,6 +17,7 @@ import discord
 from utils.torneos_estado import leer_estado
 from utils.swiss_core import retirar_por_abandono  # reportar_resultado ya publica la clasificación
 from utils.jugadores import actualizar_proximas_partidas
+from utils import battle
 
 CANAL_RESULTADOS = "🍺-quién‐se‐lleva‐la‐ronda"
 CANAL_CITAS = "🍸-citas‐a‐ciegas"
@@ -32,6 +34,9 @@ async def gestionar_abandono_torneos(bot, member: discord.Member) -> List[str]:
 
     estado = await leer_estado(bot)
     for torneo in estado.get("torneos", []):
+        if torneo.get("tipo") == battle.TIPO:
+            await _abandono_battle(bot, guild, torneo, uid, resumen)
+            continue
         if uid not in torneo.get("inscritos_ids", []):
             continue
         codigo = torneo.get("codigo")
@@ -55,6 +60,20 @@ async def gestionar_abandono_torneos(bot, member: discord.Member) -> List[str]:
     if borradas:
         resumen.append(f"🗓️ {borradas} partida(s) agendada(s) eliminada(s).")
     return resumen
+
+
+async def _abandono_battle(bot, guild, torneo: dict, uid: str, resumen: List[str]):
+    """En un battle no hay inscritos: solo se anulan sus enfrentamientos pendientes."""
+    codigo = torneo.get("codigo")
+    if torneo.get("estado") != battle.EN_CURSO:
+        return
+    try:
+        anulados = await battle.anular_pendientes_jugador(bot, codigo, uid)
+        if anulados:
+            resumen.append(f"`{codigo}` (battle): {anulados} enfrentamiento(s) pendiente(s) anulado(s).")
+    except Exception:
+        print(f"❌ Error anulando enfrentamientos de {uid} en {codigo}:\n{traceback.format_exc()}")
+        resumen.append(f"❌ `{codigo}` (battle): error al anular sus enfrentamientos, revisar a mano.")
 
 
 async def _anunciar_retirada(bot, guild, codigo: str, uid: str, msg: str, rival):
