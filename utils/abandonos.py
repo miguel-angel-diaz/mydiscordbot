@@ -18,6 +18,7 @@ from utils.torneos_estado import leer_estado
 from utils.swiss_core import retirar_por_abandono  # reportar_resultado ya publica la clasificación
 from utils.jugadores import actualizar_proximas_partidas
 from utils import battle
+from utils.commons import es_mensaje_emparejamientos
 
 CANAL_RESULTADOS = "🍺-quién‐se‐lleva‐la‐ronda"
 CANAL_CITAS = "🍸-citas‐a‐ciegas"
@@ -89,7 +90,7 @@ async def _anunciar_retirada(bot, guild, codigo: str, uid: str, msg: str, rival)
         canal_citas = discord.utils.get(guild.text_channels, name=CANAL_CITAS)
         if canal_citas:
             async for m in canal_citas.history(limit=100):
-                if m.author != bot.user or f"Torneo {codigo}" not in m.content or "Emparejamientos Ronda" not in m.content:
+                if m.author != bot.user or not es_mensaje_emparejamientos(m.content, codigo):
                     continue
                 lineas = m.content.splitlines()
                 restantes = [l for l in lineas[1:] if not (f"<@{uid}>" in l and f"<@{rival}>" in l)]

@@ -237,4 +237,7 @@ def comprobar_limite(request):
 
 
 def respuesta_error(e: EntradaInvalida):
-    return web.json_response({"error": e.mensaje}, status=e.status)
+    cuerpo = {"error": e.mensaje}
+    if getattr(e, "sugerencias", None):          # p. ej. arquetipo no reconocido (utils/decks.py)
+        cuerpo["sugerencias"] = e.sugerencias
+    return web.json_response(cuerpo, status=e.status)

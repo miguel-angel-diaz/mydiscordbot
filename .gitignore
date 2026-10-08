@@ -14,3 +14,6 @@ config_local.py
 .idea/
 .vscode/
 .DS_Store
+
+# Caché de la web (se regenera sola al arrancar, ver utils/cache_web.py)
+cache/

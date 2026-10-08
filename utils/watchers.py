@@ -7,6 +7,8 @@ from typing import Optional
 import discord
 from discord.ext import commands, tasks
 
+from utils import decks
+from utils.commons import resolver_miembro
 from utils.torneos_estado import leer_estado, actualizar_torneo_estado, obtener_torneo_estado
 
 try:
@@ -39,7 +41,6 @@ PATRON_FECHA_EVENTO = re.compile(r"\[EVENTO\]\s+(\d{2}/\d{2}/\d{4})")
 PATRON_EVENTO = re.compile(
     r"\[EVENTO\]\s+(\d{2}/\d{2}/\d{4})\s+(\d{2}:\d{2})\s+\|\s+(.+?)\s+vs\s+(.+?)\s+\|"
 )
-PATRON_CODIGO_DECK = re.compile(r"`(.+?)`")
 
 
 # -------------------------------------------------------------
@@ -221,24 +222,8 @@ async def publicar_eventos_semanales(bot: commands.Bot):
 #   RECORDATORIOS DE DECK (3 días y 24h antes del torneo)
 # ============================================================
 async def _obtener_decks_subidos(guild: discord.Guild) -> set:
-    """Devuelve un set con los códigos de deck ya subidos (codigo_torneo_id)."""
-    decks = set()
-    canal = _canal(guild, CANAL_DECKS)
-    if not canal:
-        return decks
-
-    async for msg in canal.history(limit=500):
-        for embed in msg.embeds:
-            if not embed.title or "🃏 Deck" not in embed.title:
-                continue
-            lineas = (embed.description or "").splitlines()
-            lineas += [f"{f.name}: {f.value}" for f in embed.fields]
-            for linea in lineas:
-                if "Código:" in linea:
-                    match = PATRON_CODIGO_DECK.search(linea)
-                    if match:
-                        decks.add(match.group(1))
-    return decks
+    """Códigos de deck ya subidos (codigo_torneo_id), del canal entero."""
+    return await decks.codigos_subidos(guild)
 
 
 def _mensaje_recordatorio(codigo: str, nombre: str, dias_restantes: int) -> str:
@@ -272,7 +257,10 @@ async def _enviar_recordatorio_a_inscritos(bot, guild, codigo, nombre, dias_rest
         if f"{codigo}_{uid}" in decks_subidos:
             continue  # ya subió el deck
         try:
-            miembro = guild.get_member(int(uid)) or await guild.fetch_member(int(uid))
+            miembro = await resolver_miembro(guild, uid)
+            if miembro is None:
+                log(f"No se pudo enviar recordatorio a {uid} (ya no está en el servidor).")
+                continue
             await miembro.send(mensaje)
             enviados += 1
         except discord.Forbidden:

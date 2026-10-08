@@ -84,6 +84,48 @@ def enviar_ayuda_handle():
         return wrapper
     return decorator
 
+# ============================================================
+# MIEMBROS: caché del bot primero, API solo si hace falta
+# ============================================================
+
+NO_ENCONTRADO_TTL = 600            # segundos que se recuerda que un ID no está en el servidor
+_no_encontrados: Dict[int, float] = {}
+
+
+async def resolver_miembro(guild, user_id) -> Optional[discord.Member]:
+    """
+    Miembro del servidor por ID, o None. Con el intent de miembros, get_member (sin llamar a la API) ya tiene a
+    todos los presentes; fetch_member solo se intenta si no está, y un 404 se recuerda NO_ENCONTRADO_TTL segundos
+    (antes, cada nombre de cada clasificación era una llamada a la API, y las de quien ya se fue fallaban siempre).
+    """
+    try:
+        uid = int(user_id)
+    except (TypeError, ValueError):
+        return None
+    if guild is None:
+        return None
+    miembro = guild.get_member(uid)
+    if miembro is not None:
+        return miembro
+    if _no_encontrados.get(uid, 0) > time.monotonic():
+        return None
+    try:
+        return await guild.fetch_member(uid)
+    except discord.NotFound:
+        _no_encontrados[uid] = time.monotonic() + NO_ENCONTRADO_TTL
+    except discord.HTTPException:
+        pass                       # error puntual de Discord: no se recuerda
+    return None
+
+
+async def nombre_miembro(guild, user_id, por_defecto: str = None) -> str:
+    """Nombre visible del miembro, o `por_defecto` ("Usuario <id>" si no se indica)."""
+    miembro = await resolver_miembro(guild, user_id)
+    if miembro is not None:
+        return miembro.display_name
+    return por_defecto if por_defecto is not None else f"Usuario {user_id}"
+
+
 def buscar_usuario_en_servidor(guild, nombre_busqueda):
     """
     - Si recibe un ID numérico (llega como string del chat) → lo usa directamente.
@@ -285,35 +327,19 @@ def obtener_lista_arquetipos(formato: str = "Premodern"):
 
 TOP_CARTAS = 20
 CARTAS_BASICAS = {"mountain", "swamp", "plains", "island", "forest", "wastes"}
-_PATRON_TORNEO_DECK = re.compile(r"Torneo:\**\s*`([^`]+)`")
 
 
 def torneo_de_embed_deck(embed) -> Optional[str]:
-    """Código EXACTO del torneo de un embed de deck ("**Torneo:** `abc`"), o None si no es un deck."""
-    if not (embed.title or "").startswith("🃏 Deck"):
-        return None
-    m = _PATRON_TORNEO_DECK.search(embed.description or "")
-    return m.group(1) if m else None
-
-
-_PATRON_CODIGO_DECK = re.compile(r"Código:\**\s*`([^`]+)`")
+    """Código EXACTO del torneo de un embed de deck, o None si no es un deck (lector común: utils/decks.py)."""
+    from utils import decks   # import local: decks importa commons
+    datos = decks.leer_embed(embed)
+    return datos["codigo_torneo"] if datos else None
 
 
 async def ids_con_deck(guild, codigo_torneo: str) -> set:
     """IDs (str) de los jugadores con deck subido en ESE torneo (código exacto)."""
-    canal = discord.utils.get(guild.text_channels, name="submitted-decks")
-    ids = set()
-    if not canal:
-        return ids
-    prefijo = f"{codigo_torneo}_"
-    async for msg in canal.history(limit=None):
-        for embed in msg.embeds:
-            if torneo_de_embed_deck(embed) != codigo_torneo:
-                continue
-            m = _PATRON_CODIGO_DECK.search(embed.description or "")
-            if m and m.group(1).startswith(prefijo):
-                ids.add(m.group(1)[len(prefijo):])
-    return ids
+    from utils import decks
+    return {d["discord_id"] for d in await decks.listar(guild, codigo_torneo=codigo_torneo) if d["discord_id"]}
 
 
 async def leer_inscritos_sorteo(canal_inscritos, codigo: str) -> List[int]:
@@ -583,50 +609,11 @@ def leer_ediciones(campos: dict) -> int:
 
 async def obtener_deck_en_canal(guild: discord.Guild, codigo_deck: str):
     """
-    Busca en el canal 'submitted-decks' un deck con el código dado.
-    Retorna un dict con todos los datos del deck, o None si no existe.
+    El deck con ese código exacto ("torneo_idjugador") en #submitted-decks, con su "mensaje", o None.
+    Recorre el canal entero (antes solo los últimos 500 mensajes: un deck más antiguo "no existía").
     """
-    canal_submitted = discord.utils.get(guild.text_channels, name="submitted-decks")
-    if not canal_submitted:
-        return None
-
-    # Coincidencia exacta: el código va entre backticks en la descripción ("**Código:** `torneo_id`"),
-    # así "abc_1" no casa con "abc_123..."
-    codigo_exacto = f"`{codigo_deck}`"
-    async for mensaje in canal_submitted.history(limit=500):
-        for embed in mensaje.embeds:
-            if embed.description and codigo_exacto in embed.description:
-                # Extraer campos del embed
-                campos = {field.name.lower(): field.value for field in embed.fields}
-
-                # Extraer nombre del deck del título
-                nombre_deck_extraido = (
-                    embed.title
-                    .replace("🃏 Deck Subido: ", "")
-                    .replace("🃏 Deck Actualizado: ", "")
-                )
-
-                # Extraer torneo y jugador del código
-                partes = codigo_deck.split("_")
-                if len(partes) != 2:
-                    continue
-
-                id_torneo, jugador_id = partes
-
-                edited = leer_ediciones(campos)
-
-                return {
-                    "mensaje": mensaje,
-                    "nombre_deck": nombre_deck_extraido,
-                    "torneo": id_torneo,
-                    "jugador_id": int(jugador_id),
-                    "edited": edited,
-                    "archetype": campos.get("archetype", ""),
-                    "decklist": leer_campo_lista(campos, "decklist"),
-                    "sideboard": leer_campo_lista(campos, "sideboard") or "N/A"
-                }
-
-    return None
+    from utils import decks
+    return await decks.buscar(guild, codigo_deck)
 
 # ============================================================
 # IA Y ANÁLISIS
@@ -749,7 +736,6 @@ def dividir_texto_inteligente(texto, limite=1000):
 # CLASIFICACIÓN (Challonge legacy)
 # ============================================================
 
-DECK_ID_REGEX = re.compile(r"\(ID:\s*(\d+)\)")
 
 def _resultado_challonge(scores_csv: str):
     """'2-1' -> (2, 1); varias partidas '1-0,0-1,1-0' -> (2, 1). None si no se puede leer."""
@@ -828,139 +814,33 @@ def clasificacion_desde_challonge(guild, codigo_torneo: str, participantes_raw: 
     return clasificacion
 
 # ============================================================
-# TORNEOS ACTIVOS (leer del canal)
+# CÓDIGOS DE TORNEO EN TEXTO (un único parser para todo el bot)
 # ============================================================
 
-async def obtener_torneos_activos_canal(guild):
-    canal_torneos = discord.utils.get(guild.text_channels, name="torneos-activos")
-    if not canal_torneos:
-        return []
+# "🏷️ **Código:** `abc`" (anuncios de #torneos-activos, decks...). Los códigos son [A-Za-z0-9] (ver validacion_web).
+PATRON_CODIGO_ETIQUETADO = re.compile(r"Código:\**\s*`([^`]+)`", re.IGNORECASE)
+_PATRON_EMPAREJAMIENTOS = re.compile(r"Emparejamientos Ronda (\d+) - Torneo ([A-Za-z0-9]+)")
 
-    torneos = []
-    async for mensaje in canal_torneos.history(limit=100):
-        lineas = mensaje.content.splitlines()
-        codigo = None
-        nombre = None
-        nivel = "Todos"
-        total_maximo = None
 
-        for linea in lineas:
-            if "🏷️ Código:" in linea:
-                codigo = linea.split("🏷️ Código:")[-1].strip().strip("`")
-            if "🎮 **Torneo creado:**" in linea:
-                nombre = linea.split("🎮 **Torneo creado:**")[-1].strip()
-            elif "🏷️ **Nombre:**" in linea:
-                nombre = linea.split("🏷️ **Nombre:**")[-1].strip()
-            if "Nivel:" in linea or "Roles permitidos:" in linea:
-                linea_limpia = linea.replace("*", "").lower()
-                if "nivel:" in linea_limpia:
-                    nivel = linea_limpia.split("nivel:")[-1].strip()
-                elif "roles permitidos:" in linea_limpia:
-                    nivel = linea_limpia.split("roles permitidos:")[-1].strip()
-            if linea.startswith("👥"):
-                try:
-                    total_maximo = int(linea.split("👥 **Jugadores:**")[-1].strip())
-                except ValueError:
-                    total_maximo = None
+def codigo_etiquetado(texto: str) -> Optional[str]:
+    """Código que sigue a "Código:" entre backticks, o None."""
+    m = PATRON_CODIGO_ETIQUETADO.search(texto or "")
+    return m.group(1).strip() if m else None
 
-        if not codigo:
-            continue
 
-        torneos.append({
-            "codigo": codigo,
-            "nombre": nombre or "Torneo sin nombre",
-            "nivel": nivel.capitalize(),
-            "total_maximo": total_maximo,
-        })
+def cabecera_emparejamientos(codigo: str, ronda: int) -> str:
+    """Primera línea del mensaje de emparejamientos de una ronda en #🍸-citas‐a‐ciegas."""
+    return f"📢 **Emparejamientos Ronda {ronda} - Torneo {codigo}**"
 
-    return torneos
 
-async def obtener_torneos_swiss_disponibles_canal(guild):
+def es_mensaje_emparejamientos(texto: str, codigo: str, ronda: int = None) -> bool:
     """
-    Lee el canal #torneos-activos y devuelve una lista de torneos activos
-    que aún no han comenzado (fecha >= hoy).
-    Retorna: List[Dict] con 'codigo', 'nombre', 'fecha_inicio', 'nivel'
+    ¿Es el mensaje de emparejamientos de ESE torneo (y de esa ronda, si se indica)? Compara el código EXACTO:
+    antes se buscaba "Torneo abc" como subcadena y también casaba con el torneo "abc1".
     """
-    canal_torneos = discord.utils.get(guild.text_channels, name="torneos-activos")
-    if not canal_torneos:
-        return []
+    m = _PATRON_EMPAREJAMIENTOS.search((texto or "").split("\n", 1)[0])
+    return bool(m) and m.group(2) == codigo and (ronda is None or int(m.group(1)) == int(ronda))
 
-    torneos = []
-    hoy = datetime.now().date()
-
-    async for mensaje in canal_torneos.history(limit=200):
-        contenido = mensaje.content
-        if "🎮 **Torneo creado:**" not in contenido:
-            continue
-
-        lineas = contenido.splitlines()
-        codigo = None
-        nombre = None
-        fecha_inicio = None
-        nivel = "todos"
-
-        for linea in lineas:
-            if "🏷️ **Código:**" in linea:
-                codigo = linea.split("🏷️ **Código:**")[-1].strip().strip("`")
-            elif "🎮 **Torneo creado:**" in linea:
-                nombre = linea.split("🎮 **Torneo creado:**")[-1].strip()
-            elif "📅 **Inicio:**" in linea:
-                fecha_str = linea.split("📅 **Inicio:**")[-1].strip()
-                try:
-                    fecha_inicio = datetime.strptime(fecha_str, "%d/%m/%Y").date()
-                except:
-                    pass
-            elif "🎯 **Nivel:**" in linea:
-                nivel = linea.split("🎯 **Nivel:**")[-1].strip().lower()
-
-        if not codigo or not nombre:
-            continue
-
-        if not fecha_inicio:
-            fecha_inicio = hoy
-
-        if fecha_inicio < hoy:
-            continue
-
-        torneos.append({
-            "codigo": codigo,
-            "nombre": nombre,
-            "fecha_inicio": fecha_inicio.strftime("%d/%m/%Y"),
-            "nivel": nivel
-        })
-
-    torneos.sort(key=lambda x: datetime.strptime(x["fecha_inicio"], "%d/%m/%Y"))
-    return torneos
-
-_PATRONES_INFO_TORNEO = {
-    # Aceptan "📅 Inicio: 10/10/2026" y "📅 **Inicio:** 10/10/2026" (los mensajes usan ambos formatos)
-    "fecha_inicio": re.compile(r"Inicio:\**\s*(\d{1,2}/\d{1,2}/\d{4})"),
-    "nivel": re.compile(r"Nivel:\**\s*(.+)"),
-    "total_maximo": re.compile(r"Jugadores:\**\s*(\d+)"),
-}
-
-
-async def obtener_info_torneo_canal(guild, codigo_torneo):
-    """
-    Busca en #torneos-activos el mensaje del torneo (por su código EXACTO, entre backticks)
-    y devuelve {fecha_inicio, nivel, total_maximo} con lo que encuentre, sin llamar a Challonge.
-    """
-    canal = discord.utils.get(guild.text_channels, name="torneos-activos")
-    if not canal:
-        return None
-    codigo_exacto = f"`{codigo_torneo}`"
-    async for msg in canal.history(limit=100):
-        if codigo_exacto not in msg.content:
-            continue
-        info = {}
-        for linea in msg.content.splitlines():
-            for clave, patron in _PATRONES_INFO_TORNEO.items():
-                if clave not in info:
-                    m = patron.search(linea)
-                    if m:
-                        info[clave] = int(m.group(1)) if clave == "total_maximo" else m.group(1).strip()
-        return info
-    return None
 
 # ============================================================
 # VALIDACIÓN DE TORNEO PARA EDICIÓN DE DECK
@@ -991,7 +871,7 @@ async def comprobar_edicion_deck(codigo_torneo: str, author: discord.Member, bot
     """
     Situación del torneo para subir/editar un deck. Devuelve (motivo, mensaje), con motivo uno de
     EDICION_NO_EXISTE, EDICION_NO_INSCRITO, EDICION_FINALIZADO, EDICION_EMPEZADO o EDICION_ABIERTO.
-    Fuente principal: el estado del bot (estado y fecha_inicio); el canal #torneos-activos solo si falta la fecha.
+    Fuente: el estado del bot (estado y fecha_inicio).
     """
     if bot is None:
         bot = author._state._get_client()
@@ -1010,9 +890,6 @@ async def comprobar_edicion_deck(codigo_torneo: str, author: discord.Member, bot
         return EDICION_EMPEZADO, "❌ El torneo ya comenzó."
 
     fecha_inicio_str = torneo_estado.get("fecha_inicio")
-    if not fecha_inicio_str:
-        info_canal = await obtener_info_torneo_canal(author.guild, codigo_torneo)
-        fecha_inicio_str = (info_canal or {}).get("fecha_inicio")
     if not fecha_inicio_str:
         return EDICION_ABIERTO, "✅ Sin fecha de inicio configurada. Edición permitida."
 
@@ -1134,25 +1011,15 @@ async def obtener_estado_torneos_usuario(guild, member: discord.Member):
 
     return resultado
 
-async def obtener_decks_por_usuario(guild, discord_id: str, limite: int = 500, include_message: bool = False):
-    canal = discord.utils.get(guild.text_channels, name="submitted-decks")
-    if not canal:
-        return []
-
-    decks = []
-    async for mensaje in canal.history(limit=limite):
-        if not mensaje.embeds:
-            continue
-
-        for embed in mensaje.embeds:
-            deck = _parsear_embed_deck(embed)
-            if deck and deck["discord_id"] == discord_id:
-                if include_message:
-                    deck["_mensaje"] = mensaje
-                    deck["mensaje"] = mensaje
-                decks.append(deck)
-
-    return decks
+async def obtener_decks_por_usuario(guild, discord_id: str, limite: int = None, include_message: bool = False):
+    """Decks de un jugador (canal entero). Sin include_message se quita el mensaje (la web los serializa a JSON)."""
+    from utils import decks
+    lista = await decks.listar(guild, jugador_id=discord_id)
+    if not include_message:
+        for d in lista:
+            d.pop("mensaje", None)
+            d.pop("_mensaje", None)
+    return lista
 
 # ============================================================
 # INSCRIPCIÓN WEB (soporta Swiss y Challonge)
@@ -1176,78 +1043,26 @@ async def inscribir_usuario_web(guild, member: discord.Member, codigo_torneo: st
 def tiene_rol_permitido(member: discord.Member, roles_permitidos: set):
     return any(role.name in roles_permitidos for role in member.roles)
 
-# ============================================================
-# DECKS POR USUARIO (parseo de embeds)
-# ============================================================
-
-# utils/commons.py
-
-def _parsear_embed_deck(embed: discord.Embed) -> dict | None:
-    campos = {f.name: f.value for f in embed.fields}
-
-    jugador_raw = campos.get("Jugador", "")
-    match_id = DECK_ID_REGEX.search(jugador_raw)
-    if not match_id:
-        return None
-
-    discord_id = match_id.group(1)
-
-    titulo = embed.title or ""
-    nombre_deck = re.sub(r"^🃏\s*Deck (Subido|Actualizado):\s*", "", titulo).strip()
-    if not nombre_deck:
-        nombre_deck = titulo
-
-    descripcion = embed.description or ""
-
-    codigo_deck = None
-    match_codigo = re.search(r"\*\*Código:\*\*\s*`([^`]+)`", descripcion, re.IGNORECASE)
-    if match_codigo:
-        codigo_deck = match_codigo.group(1).strip()
-
-    codigo_torneo = None
-    match_torneo = re.search(r"\*\*Torneo:\*\*\s*`([^`]+)`", descripcion, re.IGNORECASE)
-    if match_torneo:
-        codigo_torneo = match_torneo.group(1).strip()
-
-    # 🔹 NUEVO: extraer formato
-    formato = None
-    match_formato = re.search(r"\*\*Formato:\*\*\s*(.+?)(?:\n|$)", descripcion, re.IGNORECASE)
-    if match_formato:
-        formato = match_formato.group(1).strip()
-
-    if not codigo_torneo and codigo_deck:
-        partes = codigo_deck.split("_")
-        if len(partes) >= 2:
-            codigo_torneo = partes[0]
-
-    edited = leer_ediciones(campos)
-
-    return {
-        "nombre_deck": nombre_deck,
-        "codigo_deck": codigo_deck,
-        "codigo_torneo": codigo_torneo,
-        "discord_id": discord_id,
-        "archetype": campos.get("Archetype", "Desconocido"),
-        "decklist": leer_campo_lista(campos, "Decklist"),
-        "sideboard": leer_campo_lista(campos, "Sideboard"),
-        "formato": formato or "Premodern",  # ⬅️ NUEVO
-        "edited": edited,
-    }
 
 _locks_edicion_deck = {}   # codigo_deck -> asyncio.Lock (evita dos ediciones simultáneas del mismo deck)
+
+
+def lock_edicion_deck(codigo_deck: str) -> asyncio.Lock:
+    """Lock compartido por la web y por !editar-deck: la regla de una sola edición se comprueba y aplica dentro."""
+    return _locks_edicion_deck.setdefault(codigo_deck, asyncio.Lock())
 
 
 async def editar_deck_web(guild, member: discord.Member, codigo_torneo: str, formato: str,
                           nombre_deck: str, archetype: str, decklist: str, sideboard: str):
     codigo_deck = f"{codigo_torneo}_{member.id}"
-    lock = _locks_edicion_deck.setdefault(codigo_deck, asyncio.Lock())
-    async with lock:
+    async with lock_edicion_deck(codigo_deck):
         return await _editar_deck_web(guild, member, codigo_torneo, codigo_deck, formato,
                                       nombre_deck, archetype, decklist, sideboard)
 
 
 async def _editar_deck_web(guild, member, codigo_torneo, codigo_deck, formato,
                            nombre_deck, archetype, decklist, sideboard):
+    from utils import decks
     # Misma regla que !editar-deck: una única edición, también con el torneo empezado,
     # pero nunca sin estar inscrito ni en un torneo inexistente o finalizado
     motivo, mensaje_validacion = await comprobar_edicion_deck(codigo_torneo, member)
@@ -1267,34 +1082,10 @@ async def _editar_deck_web(guild, member, codigo_torneo, codigo_deck, formato,
             f"{mensaje_validacion}"
         )
 
-    # 📊 SIEMPRE INCREMENTAMOS EL CONTADOR
-    nuevo_edited = edited_actual + 1
-
-    # 🎨 COLOR DEL EMBED: Naranja porque ya usó su edición
-    color_embed = discord.Color.orange()
-
-    embed_final = discord.Embed(
-        title=f"🃏 Deck Actualizado: {nombre_deck}",
-        description=(
-            f"**Código:** `{codigo_deck}`\n"
-            f"**Torneo:** `{codigo_torneo}`\n"
-            f"**Formato:** {formato}"
-        ),
-        color=color_embed
-    )
-    embed_final.add_field(name="Jugador", value=f"{member.mention} (ID: {member.id})", inline=False)
-    embed_final.add_field(name="Archetype", value=archetype, inline=False)
-    anadir_campos_lista(embed_final, "Decklist", decklist)
-    anadir_campos_lista(embed_final, "Sideboard", sideboard)
-    embed_final.add_field(name=CAMPO_EDICIONES, value=f"{nuevo_edited}/1", inline=False)
-
-    fecha_legible = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-    embed_final.set_footer(text=f"Última edición: {fecha_legible} (vía web)")
-
-    mensaje = deck_actual["mensaje"]
-
+    embed_final = decks.construir_embed(codigo_torneo, member, nombre_deck, formato, archetype, decklist, sideboard,
+                                        ediciones=edited_actual + 1, actualizado=True, via_web=True)
     try:
-        await mensaje.edit(embed=embed_final)
+        await deck_actual["mensaje"].edit(embed=embed_final)
     except discord.NotFound:
         return False, "No se pudo actualizar el deck (el mensaje original ya no existe). Contacta con un administrador."
     except discord.Forbidden:

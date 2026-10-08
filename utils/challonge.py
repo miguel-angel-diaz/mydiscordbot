@@ -89,3 +89,12 @@ def partidos_simplificados(partidos_raw: list) -> list:
             "loser_id": match.get("loser_id"),
         })
     return partidos
+
+
+def participantes_simplificados(participantes_raw: list) -> list:
+    """Participantes en formato compacto para la caché: [{"id", "name"}] (en Challonge, name = ID de Discord)."""
+    compactos = []
+    for p in participantes_raw:
+        datos = p.get("participant", p)
+        compactos.append({"id": datos.get("id"), "name": datos.get("name")})
+    return compactos

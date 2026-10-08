@@ -98,15 +98,8 @@ async def bienvenida_y_comandos_handle(message: discord.Message):
         if any(rol in roles_simulados for rol in roles_permitidos):
             comandos_disponibles.append(f"!{comando['comando']} - {comando['descripcion']}")
 
-    # 📌 Torneos activos
-    canal_torneos = discord.utils.get(guild.text_channels, name="torneos-activos")
-    torneos_activos = []
-    if canal_torneos:
-        async for msg in canal_torneos.history(limit=50):  # ajusta el límite si quieres más
-            if msg.pinned:  # no contar fijados
-                continue
-            # opcional: comprobar roles en el mensaje (si los torneos tienen esa info)
-            torneos_activos.append(msg.content)
+    # 📌 Torneos a los que puede apuntarse (del estado del bot: abiertos y no solo para socios)
+    torneos_activos = await _torneos_para_nuevo_miembro(message.guild)
 
     # 📌 Sorteos activos
     canal_sorteos = discord.utils.get(guild.text_channels, name="sorteos-activos")
@@ -290,6 +283,28 @@ async def usuario_salio_handle(bot: commands.Bot, member: discord.Member):
     # canal_anuncios = discord.utils.get(member.guild.text_channels, name="📰-tablon‐anuncios")
     # if canal_anuncios:
     #     await canal_anuncios.send(f"📢 El usuario **{member.display_name}** ha abandonado **The Klub**.")
+
+async def _torneos_para_nuevo_miembro(guild) -> list:
+    """Torneos suizos abiertos y de nivel "todos" (un miembro nuevo no es socio), por fecha de inicio."""
+    from utils.torneos_estado import leer_estado   # import local: evita ciclos al cargar
+    try:
+        estado = await leer_estado(guild._state._get_client())
+    except Exception as e:
+        print(f"[WARN] No pude leer los torneos para la bienvenida: {e}")
+        return []
+
+    def fecha(t):
+        try:
+            return datetime.strptime(t.get("fecha_inicio", ""), "%d/%m/%Y")
+        except ValueError:
+            return datetime.max
+
+    abiertos = [t for t in estado.get("torneos", []) if t.get("tipo") == "swiss" and t.get("estado") == "abierto"
+                and str(t.get("nivel", "todos")).lower() != "socios"]
+    return [f"🎮 **{t.get('nombre', 'Torneo')}** — `{t['codigo']}`\n"
+            f"📋 {t.get('formato', '?')} · 📅 {t.get('fecha_inicio', 'sin fecha')}\n"
+            f"👉 `!inscribir-swiss {t['codigo']}`" for t in sorted(abiertos, key=fecha)]
+
 
 async def _dm(member, contenido=None, **kwargs) -> bool:
     """Envía un DM sin romper el flujo si el usuario los tiene cerrados. Devuelve si se pudo enviar."""

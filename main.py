@@ -1,5 +1,6 @@
 ######## main.py #######
 
+import asyncio
 import discord
 from discord.ext import commands
 import logging
@@ -7,7 +8,6 @@ import os
 import unicodedata
 
 from utils.torneos_api import iniciar_servidor_web, set_bot_instance
-from utils.torneos_estado import sincronizar_estado_handle
 
 from utils.admin import (
   aplicar_out, 
@@ -368,10 +368,6 @@ async def tournament_report(ctx):
 async def actualizar_web(ctx):
     await actualizar_web_handle(ctx)
 
-@bot.command(name="sincronizar-estado")
-@commands.has_permissions(administrator=True)
-async def sincronizar_estado(ctx):
-    await sincronizar_estado_handle(ctx)
 
 #####################################################################################################
 
@@ -456,13 +452,15 @@ async def _arranque_unico():
     await iniciar_servidor_web()          # con await: si falla (p. ej. puerto ocupado) se ve en el arranque
     cargar_tareas(bot)                    # el bucle espera a wait_until_ready antes de su primera ejecución
 
-    # Cargar caché de torneos si existe (sin regenerar)
-    from utils.torneos_api import leer_cache
-    cache = leer_cache()
+    # Caché de la web a memoria; si falta o es antigua (p. ej. tras un deploy) se regenera en segundo plano
+    from utils import cache_web
+    from utils.torneos_api import refrescar_cache_al_arrancar
+    cache = await cache_web.cargar()
     if cache:
         print(f"✅ Caché de torneos cargada: {len(cache.get('torneos', []))} torneos")
     else:
-        print("⚠️ No hay caché de torneos. Usa !actualizar-web para generarla.")
+        print("⚠️ No hay caché de torneos: se generará en cuanto el bot esté listo.")
+    bot._tarea_cache_web = asyncio.create_task(refrescar_cache_al_arrancar(bot))   # referencia: que no la recoja el GC
 
 bot.setup_hook = _arranque_unico
 

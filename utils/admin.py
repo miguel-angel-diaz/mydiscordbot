@@ -5,7 +5,8 @@ import asyncio
 import random
 import re
 
-from utils.commons import borrar_mensaje_seguro, validar_canal_correcto, buscar_usuario_en_servidor, obtener_torneo_usuario, leer_campo_lista, torneo_de_embed_deck, enviar_en_trozos, leer_inscritos_sorteo
+from utils import decks
+from utils.commons import borrar_mensaje_seguro, validar_canal_correcto, buscar_usuario_en_servidor, obtener_torneo_usuario, enviar_en_trozos, leer_inscritos_sorteo
 
 # Canal de anuncios: por ID y, si no, por nombre (con el guion especial U+2010 o con guion normal)
 CANAL_ANUNCIOS_ID = 1387389356464934993
@@ -727,42 +728,10 @@ async def eliminar_decks_handle(ctx, codigo_torneo: str = None):
         if not codigo_torneo:
             return await ctx.send("❌ No se seleccionó ningún torneo. Operación cancelada.")
 
-    # 2️⃣ Buscar canal de decks
-    channel = discord.utils.get(ctx.guild.text_channels, name="submitted-decks")
-    if not channel:
+    # 2️⃣ Decks de ESE torneo (código exacto, canal entero; lector común de utils/decks.py)
+    if not decks.canal_decks(ctx.guild):
         return await ctx.send("❌ No encontré el canal `submitted-decks` en este servidor.")
-
-    # 3️⃣ Obtener todos los mensajes del canal y filtrar por torneo
-    decks_encontrados = []
-
-    async for message in channel.history(limit=None):
-        for embed in message.embeds:
-            # Código de torneo EXACTO (antes "abc" también encontraba los decks de "abc2")
-            if torneo_de_embed_deck(embed) != codigo_torneo:
-                continue
-
-            # Extraer campos de los fields
-            campos = {field.name.lower(): field.value for field in embed.fields}
-            nombre_deck_extraido = embed.title.replace("🃏 Deck Subido: ", "").replace("🃏 Deck Actualizado: ", "")
-
-            # Intentar extraer jugador y su ID
-            jugador_field = campos.get("jugador", "Desconocido")
-            jugador_id = None
-            if "(ID:" in jugador_field:
-                try:
-                    jugador_id = int(jugador_field.split("(ID:")[1].split(")")[0].strip())
-                except ValueError:
-                    pass
-
-            decks_encontrados.append({
-                "mensaje": message,
-                "nombre_deck": nombre_deck_extraido,
-                "jugador": jugador_field,
-                "jugador_id": jugador_id,
-                "archetype": campos.get("archetype", "Desconocido"),
-                "decklist": leer_campo_lista(campos, "decklist"),
-                "sideboard": leer_campo_lista(campos, "sideboard") or "N/A"
-            })
+    decks_encontrados = await decks.listar(ctx.guild, codigo_torneo=codigo_torneo)
 
     if not decks_encontrados:
         return await ctx.author.send(f"📭 No se encontraron decks para el torneo `{codigo_torneo}`.")

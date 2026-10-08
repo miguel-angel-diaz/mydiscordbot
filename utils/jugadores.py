@@ -2,29 +2,28 @@
 import discord
 import asyncio
 from collections import Counter
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 import io
 import re
 import config
-import time
 
 from utils.torneos_estado import generar_codigo_unico, obtener_torneo_estado
 
 
 from utils.admin import moderador_permisos_handle
+from utils import decks
 
 from utils.commons import (
     borrar_mensaje_seguro,
     validar_canal_correcto,
     buscar_usuario_en_servidor,
     obtener_torneo_usuario,
-    obtener_sugerencias_arquetipos,
     cartas_mas_jugadas,
     best_decks_handle,
     obtener_deck_en_canal,
     validar_torneo_para_edicion,
     comprobar_edicion_deck,
-    CAMPO_EDICIONES,
+    lock_edicion_deck,
     leer_inscritos_sorteo,
     ids_con_deck,
     enviar_en_trozos,
@@ -34,9 +33,7 @@ from utils.commons import (
     EDICION_NO_INSCRITO,
     EDICION_FINALIZADO,
     EDICION_EMPEZADO,
-    EDICION_ABIERTO,
-    limpiar_deck_raw,
-    contar_cartas
+    EDICION_ABIERTO
 )
 
 import config
@@ -750,7 +747,15 @@ async def deck_dm_flow(ctx, author: discord.Member, codigo_torneo: str, modo: st
     if modo == "subir":
         try:
             await author.send("1️⃣ Nombre de tu deck:")
-            nombre_deck = (await ctx.bot.wait_for("message", check=dm_check, timeout=120.0)).content.strip()
+            for intento in range(INTENTOS_LISTA):
+                try:
+                    nombre_deck = decks.nombre_deck((await ctx.bot.wait_for("message", check=dm_check, timeout=120.0)).content)
+                    break
+                except decks.DeckInvalido as e:
+                    if intento == INTENTOS_LISTA - 1:
+                        await author.send(f"❌ {e.mensaje}. Cancelando.")
+                        return None
+                    await author.send(f"❌ {e.mensaje}. Escríbelo de nuevo:")
 
             # 2️⃣ Preguntar formato
             await author.send(
@@ -759,19 +764,10 @@ async def deck_dm_flow(ctx, author: discord.Member, codigo_torneo: str, modo: st
             )
             while True:
                 msg = await ctx.bot.wait_for("message", check=dm_check, timeout=120.0)
-                respuesta_formato = msg.content.strip()
-                if not respuesta_formato:
-                    formato = formato_torneo
+                formato = decks.formato(msg.content) if msg.content.strip() else formato_torneo
+                if formato:
                     break
-                formato_lower = respuesta_formato.lower()
-                if "premodern" in formato_lower:
-                    formato = "Premodern"
-                    break
-                elif "pauper" in formato_lower:
-                    formato = "Pauper"
-                    break
-                else:
-                    await author.send("❌ Formato no reconocido. Escribe `Premodern` o `Pauper`.")
+                await author.send("❌ Formato no reconocido. Escribe `Premodern` o `Pauper`.")
             await author.send(f"✅ Formato seleccionado: **{formato}**.")
 
             # 3️⃣ Preguntar arquetipo según el formato
@@ -786,7 +782,7 @@ async def deck_dm_flow(ctx, author: discord.Member, codigo_torneo: str, modo: st
                     archetype_raw = msg.content.strip()
                 else:
                     archetype_raw, pendiente = pendiente, None
-                sugerencias = obtener_sugerencias_arquetipos(archetype_raw, formato=formato)
+                exacto, sugerencias = decks.arquetipo(archetype_raw, formato)
 
                 if not sugerencias:
                     await author.send(
@@ -795,8 +791,8 @@ async def deck_dm_flow(ctx, author: discord.Member, codigo_torneo: str, modo: st
                     )
                     continue
 
-                if any(s.lower() == archetype_raw.lower() for s in sugerencias):
-                    archetype = next(s for s in sugerencias if s.lower() == archetype_raw.lower())
+                if exacto:
+                    archetype = exacto
                     await author.send(f"✅ Arquetipo reconocido como **{archetype}**.")
                     break
 
@@ -827,31 +823,26 @@ async def deck_dm_flow(ctx, author: discord.Member, codigo_torneo: str, modo: st
             # 4️⃣ Decklist (se vuelve a pedir si no llega a 60 cartas, sin perder lo anterior)
             await author.send("4️⃣ Sube tu **decklist** (solo el Main, mínimo 60 cartas):")
             for intento in range(INTENTOS_LISTA):
-                decklist_raw = (await ctx.bot.wait_for("message", check=dm_check, timeout=600.0)).content.strip()
-                decklist = limpiar_deck_raw(decklist_raw)
-                total = contar_cartas(decklist)
-                if total >= 60:
+                try:
+                    decklist = decks.decklist((await ctx.bot.wait_for("message", check=dm_check, timeout=600.0)).content)
                     break
-                if intento == INTENTOS_LISTA - 1:
-                    await author.send(f"❌ Tu deck tiene {total} cartas (mínimo 60). Cancelando.")
-                    return None
-                await author.send(f"❌ Tu deck tiene {total} cartas (mínimo 60). Envíala de nuevo:")
+                except decks.DeckInvalido as e:
+                    if intento == INTENTOS_LISTA - 1:
+                        await author.send(f"❌ {e.mensaje}. Cancelando.")
+                        return None
+                    await author.send(f"❌ {e.mensaje}. Envíala de nuevo:")
 
             # 5️⃣ Sideboard (máx. 15 cartas, igual que al editar)
             await author.send("5️⃣ Sube tu **sideboard** (máx 15 cartas, o 'N/A'):")
             for intento in range(INTENTOS_LISTA):
-                sideboard_raw = (await ctx.bot.wait_for("message", check=dm_check, timeout=300.0)).content.strip()
-                if sideboard_raw.lower() == "n/a":
-                    sideboard = "N/A"
+                try:
+                    sideboard = decks.sideboard((await ctx.bot.wait_for("message", check=dm_check, timeout=300.0)).content)
                     break
-                sideboard = limpiar_deck_raw(sideboard_raw) or "N/A"   # vacío rompería el embed
-                total = contar_cartas(sideboard) if sideboard != "N/A" else 0
-                if total <= 15:
-                    break
-                if intento == INTENTOS_LISTA - 1:
-                    await author.send(f"❌ Tu sideboard tiene {total} cartas (máximo 15). Cancelando.")
-                    return None
-                await author.send(f"❌ Tu sideboard tiene {total} cartas (máximo 15). Envíala de nuevo o escribe 'N/A':")
+                except decks.DeckInvalido as e:
+                    if intento == INTENTOS_LISTA - 1:
+                        await author.send(f"❌ {e.mensaje}. Cancelando.")
+                        return None
+                    await author.send(f"❌ {e.mensaje}. Envíala de nuevo o escribe 'N/A':")
             mensaje_deck = None
         except asyncio.TimeoutError:
             await author.send("⌛ Se acabó el tiempo. El proceso fue cancelado.")
@@ -905,7 +896,9 @@ async def deck_dm_flow(ctx, author: discord.Member, codigo_torneo: str, modo: st
                 await author.send("Escribe el nuevo **nombre del deck**:")
                 try:
                     msg = await ctx.bot.wait_for("message", check=dm_check, timeout=120.0)
-                    nombre_deck = msg.content.strip()
+                    nombre_deck = decks.nombre_deck(msg.content)
+                except decks.DeckInvalido as e:
+                    await author.send(f"❌ {e.mensaje}. No se actualizó el nombre.")
                 except asyncio.TimeoutError:
                     await author.send("⏰ Tiempo agotado. No se actualizó el nombre.")
 
@@ -923,7 +916,7 @@ async def deck_dm_flow(ctx, author: discord.Member, codigo_torneo: str, modo: st
                         return None
 
                     archetype_raw = msg.content.strip()
-                    sugerencias = obtener_sugerencias_arquetipos(archetype_raw, formato=formato)
+                    _, sugerencias = decks.arquetipo(archetype_raw, formato)
 
                     if not sugerencias:
                         await author.send(
@@ -964,7 +957,7 @@ async def deck_dm_flow(ctx, author: discord.Member, codigo_torneo: str, modo: st
                             continue
 
                     nuevo_intento = respuesta
-                    sugerencias_nuevas = obtener_sugerencias_arquetipos(nuevo_intento, formato=formato)
+                    _, sugerencias_nuevas = decks.arquetipo(nuevo_intento, formato)
 
                     if not sugerencias_nuevas:
                         await author.send(
@@ -990,12 +983,9 @@ async def deck_dm_flow(ctx, author: discord.Member, codigo_torneo: str, modo: st
                 await author.send("Sube la nueva **decklist** (Main, mínimo 60 cartas):")
                 try:
                     msg = await ctx.bot.wait_for("message", check=dm_check, timeout=600.0)
-                    decklist_raw = msg.content.strip()
-                    decklist_limpia = limpiar_deck_raw(decklist_raw)
-                    if contar_cartas(decklist_limpia) >= 60:
-                        decklist = decklist_limpia
-                    else:
-                        await author.send("❌ La decklist debe tener al menos 60 cartas. No se actualizó.")
+                    decklist = decks.decklist(msg.content)
+                except decks.DeckInvalido as e:
+                    await author.send(f"❌ {e.mensaje}. No se actualizó.")
                 except asyncio.TimeoutError:
                     await author.send("⏰ Tiempo agotado. No se actualizó la decklist.")
 
@@ -1003,15 +993,9 @@ async def deck_dm_flow(ctx, author: discord.Member, codigo_torneo: str, modo: st
                 await author.send("Sube la nueva **sideboard** (máx 15 cartas, o 'N/A'):")
                 try:
                     msg = await ctx.bot.wait_for("message", check=dm_check, timeout=300.0)
-                    sideboard_raw = msg.content.strip()
-                    if sideboard_raw.lower() == "n/a":
-                        sideboard = "N/A"
-                    else:
-                        sideboard_limpia = limpiar_deck_raw(sideboard_raw)
-                        if contar_cartas(sideboard_limpia) <= 15:
-                            sideboard = sideboard_limpia
-                        else:
-                            await author.send("❌ La sideboard no puede superar 15 cartas. No se actualizó.")
+                    sideboard = decks.sideboard(msg.content)
+                except decks.DeckInvalido as e:
+                    await author.send(f"❌ {e.mensaje}. No se actualizó.")
                 except asyncio.TimeoutError:
                     await author.send("⏰ Tiempo agotado. No se actualizó la sideboard.")
 
@@ -1058,24 +1042,17 @@ async def submitted_deck_handle(ctx, codigo_torneo: str = None):
 
     nombre_deck, formato, archetype, decklist, sideboard, _ = datos
 
-    # Publicar embed en submitted-decks
-    canal_submitted = discord.utils.get(ctx.guild.text_channels, name="submitted-decks")
-    if canal_submitted:
-        embed_final = discord.Embed(
-            title=f"🃏 Deck Subido: {nombre_deck}",
-            description=f"**Código:** `{codigo_deck}`\n**Torneo:** `{codigo_torneo}`\n**Formato:** {formato}",
-            color=discord.Color.purple()
-        )
-        embed_final.add_field(name="Jugador", value=f"{author} (ID: {author.id})", inline=False)
-        embed_final.add_field(name="Archetype", value=archetype, inline=False)
-        anadir_campos_lista(embed_final, "Decklist", decklist)
-        anadir_campos_lista(embed_final, "Sideboard", sideboard)
-        embed_final.add_field(name=CAMPO_EDICIONES, value="0/1", inline=False)
-
-        embed_final.set_footer(text="Deck subido correctamente.")
-        await canal_submitted.send(embed=embed_final)
-        await author.send(f"✅ Tu deck ha sido enviado con éxito al torneo `{codigo_torneo}`.")
-        await author.send(embed=embed_final)
+    # Publicar en #submitted-decks (decks.publicar comprueba con lock que no se haya subido otro mientras tanto)
+    embed_final = decks.construir_embed(codigo_torneo, author, nombre_deck, formato, archetype, decklist, sideboard)
+    ok, motivo = await decks.publicar(ctx.guild, embed_final, codigo_deck)
+    if motivo == "ya_existe":
+        await author.send(f"❌ Ya tienes un deck subido para este torneo. Usa `!editar-deck {codigo_torneo}` si deseas modificarlo.")
+        return
+    if not ok:
+        await author.send("❌ No se encontró el canal `submitted-decks`.")
+        return
+    await author.send(f"✅ Tu deck ha sido enviado con éxito al torneo `{codigo_torneo}`.")
+    await author.send(embed=embed_final)
 
 async def editar_deck_handle(ctx, codigo_torneo: str = None):
     await borrar_mensaje_seguro(ctx)
@@ -1210,79 +1187,52 @@ async def editar_deck_handle(ctx, codigo_torneo: str = None):
 
     nombre_deck, formato, archetype, decklist, sideboard, _ = datos
 
-    # 📊 SIEMPRE INCREMENTAMOS EL CONTADOR
-    nuevo_edited = edited + 1
+    embed_final = decks.construir_embed(codigo_torneo, author, nombre_deck, formato, archetype, decklist, sideboard,
+                                        ediciones=edited + 1, actualizado=True)
 
-    # 🎨 COLOR DEL EMBED: Naranja porque ya usó su edición
-    color_embed = discord.Color.orange()
-
-    embed_final = discord.Embed(
-        title=f"🃏 Deck Actualizado: {nombre_deck}",
-        description=f"**Código:** `{codigo_deck}`\n**Torneo:** `{codigo_torneo}`\n**Formato:** {formato}",
-        color=color_embed
-    )
-
-    embed_final.add_field(
-        name="Jugador",
-        value=f"{author.mention} (ID: {author.id})",
-        inline=False
-    )
-    embed_final.add_field(
-        name="Archetype",
-        value=archetype,
-        inline=False
-    )
-    anadir_campos_lista(embed_final, "Decklist", decklist)
-    anadir_campos_lista(embed_final, "Sideboard", sideboard)
-    embed_final.add_field(
-        name=CAMPO_EDICIONES,
-        value=f"{nuevo_edited}/1",
-        inline=False
-    )
-
-    # 🕐 Timestamp de la última edición
-    timestamp_ahora_ms = int(time.time() * 1000)
-    fecha_legible = datetime.fromtimestamp(timestamp_ahora_ms / 1000, tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-    embed_final.set_footer(text=f"Última edición: {fecha_legible}")
-
-    # 💾 ACTUALIZAR MENSAJE EXISTENTE
-    if mensaje_deck:
-        try:
-            await mensaje_deck.edit(embed=embed_final)
-            await author.send("✅ Tu deck ha sido actualizado correctamente.")
-        except discord.errors.NotFound:
-            await author.send(
-                "❌ No se pudo actualizar el mensaje original (fue eliminado).\n"
-                "Contacta con un administrador."
-            )
+    # 🔒 Escritura con el lock del deck (el mismo que usa la web) y revalidando: durante el asistente por DM
+    #    el deck pudo editarse desde la web u otro !editar-deck, o el torneo terminar
+    async with lock_edicion_deck(codigo_deck):
+        deck_ahora = await obtener_deck_en_canal(ctx.guild, codigo_deck)
+        if deck_ahora and deck_ahora.get("edited", 0) >= 1:
+            await author.send("❌ Mientras respondías, tu deck ya se editó (p. ej. desde la web). Solo se permite una edición.")
             return
-        except discord.errors.Forbidden:
-            await author.send("❌ No tengo permisos para editar el mensaje del deck.")
+        motivo_ahora, mensaje_ahora = await comprobar_edicion_deck(codigo_torneo, author)
+        if motivo_ahora in (EDICION_NO_EXISTE, EDICION_NO_INSCRITO, EDICION_FINALIZADO):
+            await author.send(mensaje_ahora)
             return
-        except Exception as e:
-            await author.send(f"❌ Error inesperado al actualizar el deck: {str(e)}")
-            return
-    else:
-        # Fallback: si no hay mensaje, crear uno nuevo
-        canal_submitted = discord.utils.get(ctx.guild.text_channels, name="submitted-decks")
-        if canal_submitted:
+        mensaje_deck = (deck_ahora or {}).get("mensaje")
+
+        # 💾 ACTUALIZAR MENSAJE EXISTENTE
+        if mensaje_deck:
             try:
-                await canal_submitted.send(embed=embed_final)
-                await author.send("⚠️ Se creó un nuevo mensaje porque no se encontró el original.")
+                await mensaje_deck.edit(embed=embed_final)
+                await author.send("✅ Tu deck ha sido actualizado correctamente.")
+            except discord.errors.NotFound:
+                await author.send(
+                    "❌ No se pudo actualizar el mensaje original (fue eliminado).\n"
+                    "Contacta con un administrador."
+                )
+                return
+            except discord.errors.Forbidden:
+                await author.send("❌ No tengo permisos para editar el mensaje del deck.")
+                return
             except Exception as e:
-                await author.send(f"❌ Error al crear el mensaje: {str(e)}")
+                await author.send(f"❌ Error inesperado al actualizar el deck: {str(e)}")
                 return
         else:
-            await author.send("❌ No se encontró el canal `submitted-decks`.")
+            # El deck ya no está (p. ej. lo borró un admin mientras respondías): no se vuelve a crear
+            await author.send("❌ Tu deck ya no está en `submitted-decks` (puede que lo haya retirado un admin). "
+                              "No se ha guardado la edición; habla con un admin.")
             return
 
-    # 📬 Enviar confirmación al usuario con el embed
-    await author.send("📋 **Resumen de tu deck actualizado:**")
-    await author.send(embed=embed_final)
-    await author.send(
-        "⚠️ **Importante:** Has usado tu única edición disponible.\n"
-        "Ya no podrás modificar este deck hasta que finalice el torneo."
-    )
+        # 📬 Enviar confirmación al usuario con el embed
+        await author.send("📋 **Resumen de tu deck actualizado:**")
+        await author.send(embed=embed_final)
+        await author.send(
+            "⚠️ **Importante:** Has usado tu única edición disponible.\n"
+            "Ya no podrás modificar este deck hasta que finalice el torneo."
+        )
 
 async def subir_deck_desde_edicion(ctx, author: discord.Member, codigo_torneo: str, torneo_activo: bool, mensaje_estado: str):
     """
@@ -1313,56 +1263,23 @@ async def subir_deck_desde_edicion(ctx, author: discord.Member, codigo_torneo: s
     nombre_deck, formato, archetype, decklist, sideboard, _ = datos
 
     codigo_deck = f"{codigo_torneo}_{author.id}"
-
-    # 🎨 CREAR EMBED
-    color_embed = discord.Color.green() if edited_inicial == 0 else discord.Color.orange()
-
-    embed_final = discord.Embed(
-        title=f"🃏 Deck Subido: {nombre_deck}",
-        description=f"**Código:** `{codigo_deck}`\n**Torneo:** `{codigo_torneo}`\n**Formato:** {formato}",
-        color=color_embed
-    )
-
-    embed_final.add_field(
-        name="Jugador",
-        value=f"{author.mention} (ID: {author.id})",
-        inline=False
-    )
-    embed_final.add_field(
-        name="Archetype",
-        value=archetype,
-        inline=False
-    )
-    anadir_campos_lista(embed_final, "Decklist", decklist)
-    anadir_campos_lista(embed_final, "Sideboard", sideboard)
-    embed_final.add_field(
-        name=CAMPO_EDICIONES,
-        value=f"{edited_inicial}/1",
-        inline=False
-    )
-
-    # 🕐 Timestamp
-    timestamp_ahora_ms = int(time.time() * 1000)
-    fecha_legible = datetime.fromtimestamp(timestamp_ahora_ms / 1000, tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-    embed_final.set_footer(text=f"Subido el: {fecha_legible}")
-
-    # 💾 PUBLICAR EN CANAL
-    canal_submitted = discord.utils.get(ctx.guild.text_channels, name="submitted-decks")
-    if not canal_submitted:
+    embed_final = decks.construir_embed(codigo_torneo, author, nombre_deck, formato, archetype, decklist, sideboard,
+                                        ediciones=edited_inicial)
+    try:
+        ok, motivo = await decks.publicar(ctx.guild, embed_final, codigo_deck)
+    except discord.HTTPException as e:
+        await author.send(f"❌ Error al publicar el deck: {e}")
+        return
+    if motivo == "ya_existe":
+        await author.send(f"❌ Ya tienes un deck subido para este torneo. Usa `!editar-deck {codigo_torneo}` si deseas modificarlo.")
+        return
+    if not ok:
         await author.send("❌ No se encontró el canal `submitted-decks`.")
         return
-
-    try:
-        await canal_submitted.send(embed=embed_final)
-        await author.send("✅ Tu deck ha sido registrado correctamente.")
-        await author.send(embed=embed_final)
-
-        if edited_inicial == 1:
-            await author.send(
-                "⚠️ **Recuerda:** Como el torneo ya comenzó, este deck no podrá ser editado."
-            )
-    except Exception as e:
-        await author.send(f"❌ Error al publicar el deck: {str(e)}")
+    await author.send("✅ Tu deck ha sido registrado correctamente.")
+    await author.send(embed=embed_final)
+    if edited_inicial == 1:
+        await author.send("⚠️ **Recuerda:** Como el torneo ya comenzó, este deck no podrá ser editado.")
 
 async def cartas_mas_jugadas_handle(ctx, codigo_torneo: str = None, channel: str = None):
     await cartas_mas_jugadas(ctx, codigo_torneo, channel)

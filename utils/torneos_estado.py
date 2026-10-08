@@ -1,11 +1,31 @@
 # utils/torneos_estado.py
+"""
+Persistencia de los torneos en mensajes del bot (#torneos-estado, #rondas-torneo, #clasificaciones-torneo).
+
+Formato de cada mensaje (la primera línea es la cabecera):
+    📊 TORNEO: <codigo> | v=<versión>                     -> datos completos en un mensaje
+    📊 TORNEO: <codigo> | PARTE i/n | v=<versión>          -> trozo i de n (JSON compacto)
+seguido de un bloque ```json```. Los mensajes antiguos sin "v=" se siguen leyendo (versión 0).
+
+Garantías:
+  - Se lee el canal ENTERO (sin límite de 200 mensajes) y el código se compara exacto ("abc" no es "abc1").
+  - Guardar es atómico: primero se publica la versión nueva completa y solo después se borra la anterior.
+    Si algo falla a mitad, al leer se usa la versión completa más reciente, así que nunca se pierde un torneo.
+  - Un JSON corrupto o una versión a medias no se ignora en silencio: queda registrado en el log.
+  - Un lock por (canal, torneo) evita que dos escrituras del mismo torneo se pisen, y actualizar_torneo_estado
+    hace leer-modificar-escribir dentro del lock.
+"""
+import asyncio
 import discord
 import json
+import logging
 import re
 import random
 import string
-from datetime import datetime, timezone
-from typing import List, Dict, Optional
+from collections import defaultdict
+from typing import List, Dict, Optional, Tuple
+
+log = logging.getLogger(__name__)
 
 CANALES = {
     "estado": "torneos-estado",
@@ -13,7 +33,18 @@ CANALES = {
     "clasificacion": "clasificaciones-torneo"
 }
 PREFIX = "📊 TORNEO: "
-PARTE_PATTERN = re.compile(r"\s*\|\s*PARTE\s*(\d+)/(\d+)")
+CABECERA = re.compile(r"^📊 TORNEO: (\S+)(?:\s*\|\s*PARTE\s*(\d+)/(\d+))?(?:\s*\|\s*v=(\d+))?\s*$")
+BLOQUE_JSON = re.compile(r"```json\n(.*)\n```", re.DOTALL)
+LIMITE_MENSAJE = 1900      # Discord admite 2000 caracteres por mensaje
+TAM_TROZO = 1800
+SIN_MENCIONES = discord.AllowedMentions.none()
+
+_locks: Dict[Tuple[str, str], asyncio.Lock] = {}
+
+
+def _lock(tipo: str, codigo: str) -> asyncio.Lock:
+    return _locks.setdefault((tipo, codigo), asyncio.Lock())
+
 
 # ============================================================
 # FUNCIONES GENÉRICAS PARA CANALES
@@ -27,128 +58,136 @@ async def _get_channel(bot, tipo: str):
             return channel
     return None
 
-async def _get_mensaje_torneo(bot, tipo: str, codigo: str):
-    """Busca el mensaje principal de un torneo (sin parte)."""
-    channel = await _get_channel(bot, tipo)
-    if not channel:
+
+def _cabecera(contenido: str):
+    """(codigo, parte, total, version) de un mensaje de datos, o None si no lo es."""
+    m = CABECERA.match((contenido or "").split("\n", 1)[0])
+    if not m:
         return None
-    async for msg in channel.history(limit=200):
+    codigo, parte, total, version = m.groups()
+    return (codigo, int(parte) if parte else None, int(total) if total else None, int(version) if version else 0)
+
+
+async def _mensajes_por_codigo(bot, channel, codigo: str = None) -> Dict[str, list]:
+    """Recorre el canal entero una vez y agrupa los mensajes del bot por código EXACTO."""
+    grupos = defaultdict(list)
+    async for msg in channel.history(limit=None):
         if msg.author != bot.user:
             continue
-        if msg.content.startswith(f"{PREFIX}{codigo}"):
-            if "| PARTE" not in msg.content.splitlines()[0]:
-                return msg
-    async for msg in channel.history(limit=200):
-        if msg.author == bot.user and msg.content.startswith(f"{PREFIX}{codigo}"):
-            return msg
+        cab = _cabecera(msg.content)
+        if not cab or (codigo is not None and cab[0] != codigo):
+            continue
+        grupos[cab[0]].append((msg, *cab[1:]))
+    return grupos
+
+
+def _decodificar(codigo: str, entradas: list) -> Optional[dict]:
+    """
+    Datos de la versión completa y válida más reciente. `entradas` = [(msg, parte, total, version)] en el orden
+    del historial (más reciente primero).
+    """
+    versiones = defaultdict(lambda: {"sueltos": [], "partes": {}, "totales": set()})
+    for msg, parte, total, version in entradas:
+        m = BLOQUE_JSON.search(msg.content)
+        if not m:
+            continue
+        v = versiones[version]
+        if parte is None:
+            v["sueltos"].append(m.group(1))
+        else:
+            v["partes"].setdefault(parte, m.group(1))
+            v["totales"].add(total)
+
+    mas_reciente = max(versiones, default=None)
+    for version in sorted(versiones, reverse=True):
+        v = versiones[version]
+        candidatos = list(v["sueltos"])
+        if v["partes"]:
+            total = max(v["totales"])
+            if len(v["totales"]) == 1 and all(i in v["partes"] for i in range(1, total + 1)):
+                candidatos.insert(0, "".join(v["partes"][i] for i in range(1, total + 1)))
+        for texto in candidatos:
+            try:
+                datos = json.loads(texto)
+            except ValueError:
+                continue
+            if isinstance(datos, dict):
+                if version != mas_reciente:
+                    log.warning("Torneo %s: la versión %s está incompleta o corrupta; se usa la %s",
+                                codigo, mas_reciente, version)
+                return datos
+    log.error("Torneo %s: ningún dato legible (%d mensajes). Revisa el canal a mano.", codigo, len(entradas))
     return None
+
+
+def _componer_mensajes(codigo: str, datos: dict, version: int) -> List[str]:
+    legible = json.dumps(datos, indent=2, separators=(",", ":"), ensure_ascii=False)
+    contenido = f"{PREFIX}{codigo} | v={version}\n```json\n{legible}\n```"
+    if len(contenido) <= LIMITE_MENSAJE:
+        return [contenido]
+    compacto = json.dumps(datos, separators=(",", ":"), ensure_ascii=False)
+    trozos = [compacto[i:i + TAM_TROZO] for i in range(0, len(compacto), TAM_TROZO)]
+    return [f"{PREFIX}{codigo} | PARTE {i}/{len(trozos)} | v={version}\n```json\n{t}\n```"
+            for i, t in enumerate(trozos, 1)]
+
+
+async def _leer_sin_lock(bot, channel, codigo: str) -> Optional[dict]:
+    entradas = (await _mensajes_por_codigo(bot, channel, codigo)).get(codigo, [])
+    return _decodificar(codigo, entradas) if entradas else None
+
+
+async def _guardar_sin_lock(bot, channel, codigo: str, datos: dict):
+    datos["codigo"] = codigo
+    previos = (await _mensajes_por_codigo(bot, channel, codigo)).get(codigo, [])
+    version = max((v for *_, v in previos), default=0) + 1
+    mensajes = _componer_mensajes(codigo, datos, version)
+
+    # Un único mensaje que sigue cabiendo en uno: editarlo es atómico
+    if len(mensajes) == 1 and len(previos) == 1:
+        await previos[0][0].edit(content=mensajes[0], allowed_mentions=SIN_MENCIONES)
+        return
+
+    # 1) Versión nueva completa. Si falla a mitad, la anterior sigue intacta y es la que se lee.
+    for contenido in mensajes:
+        await channel.send(contenido, allowed_mentions=SIN_MENCIONES)
+    # 2) Solo entonces se borra la anterior (si algo no se borra, al leer gana la versión nueva).
+    for msg, *_ in previos:
+        try:
+            await msg.delete()
+        except discord.HTTPException as e:
+            log.warning("Torneo %s: no se pudo borrar un mensaje de la versión anterior (%s)", codigo, e)
+
 
 async def _guardar_dato_torneo(bot, tipo: str, codigo: str, datos: dict):
-    """
-    Guarda datos en el canal, dividiendo en partes si supera 1900 caracteres.
-    """
+    """Guarda los datos del torneo en el canal del tipo indicado (troceados si no caben en un mensaje)."""
     channel = await _get_channel(bot, tipo)
     if not channel:
+        log.error("No existe el canal #%s: no se guardan los datos de %s", CANALES[tipo], codigo)
         return
+    async with _lock(tipo, codigo):
+        await _guardar_sin_lock(bot, channel, codigo, datos)
 
-    datos["codigo"] = codigo
-    json_str = json.dumps(datos, indent=2, separators=(',', ':'))
-    content = f"{PREFIX}{codigo}\n```json\n{json_str}\n```"
-
-    if len(content) <= 1900:
-        msg = await _get_mensaje_torneo(bot, tipo, codigo)
-        if msg:
-            await msg.edit(content=content)
-        else:
-            await channel.send(content)
-        return
-
-    # Eliminar mensajes antiguos de este torneo
-    async for msg in channel.history(limit=200):
-        if msg.author == bot.user and msg.content.startswith(f"{PREFIX}{codigo}"):
-            await msg.delete()
-
-    # Usar JSON compacto para partes
-    json_compact = json.dumps(datos, separators=(',', ':'))
-    total_len = len(json_compact)
-    max_chunk_size = 1800
-    num_parts = max(1, (total_len // max_chunk_size) + 1)
-    part_size = max(1, len(json_compact) // num_parts)
-    parts = [json_compact[i:i+part_size] for i in range(0, len(json_compact), part_size)]
-
-    for idx, part in enumerate(parts, 1):
-        part_content = f"{PREFIX}{codigo} | PARTE {idx}/{len(parts)}\n```json\n{part}\n```"
-        await channel.send(part_content)
 
 async def _leer_dato_torneo(bot, tipo: str, codigo: str) -> Optional[dict]:
-    """
-    Lee datos de un torneo, combinando partes si están divididas.
-    """
+    """Lee los datos de un torneo, uniendo las partes si están divididas."""
     channel = await _get_channel(bot, tipo)
     if not channel:
         return None
+    async with _lock(tipo, codigo):
+        return await _leer_sin_lock(bot, channel, codigo)
 
-    mensajes = []
-    async for msg in channel.history(limit=200):
-        if msg.author != bot.user:
-            continue
-        if msg.content.startswith(f"{PREFIX}{codigo}"):
-            mensajes.append(msg)
-
-    if not mensajes:
-        return None
-
-    if len(mensajes) == 1:
-        msg = mensajes[0]
-        match = re.search(r'```json\n(.*?)\n```', msg.content, re.DOTALL)
-        if match:
-            try:
-                return json.loads(match.group(1))
-            except:
-                pass
-        return None
-
-    partes = {}
-    for msg in mensajes:
-        lines = msg.content.splitlines()
-        if not lines:
-            continue
-        first_line = lines[0]
-        match = PARTE_PATTERN.search(first_line)
-        if match:
-            part_num = int(match.group(1))
-            total_parts = int(match.group(2))
-            json_match = re.search(r'```json\n(.*?)\n```', msg.content, re.DOTALL)
-            if json_match:
-                partes[part_num] = json_match.group(1)
-        else:
-            json_match = re.search(r'```json\n(.*?)\n```', msg.content, re.DOTALL)
-            if json_match:
-                partes[1] = json_match.group(1)
-
-    if not partes:
-        return None
-
-    json_completo = ""
-    for i in range(1, max(partes.keys()) + 1):
-        if i in partes:
-            json_completo += partes[i]
-
-    if json_completo:
-        try:
-            return json.loads(json_completo)
-        except:
-            pass
-    return None
 
 async def _eliminar_mensaje_torneo(bot, tipo: str, codigo: str):
     """Elimina todos los mensajes de un torneo en un canal."""
     channel = await _get_channel(bot, tipo)
     if not channel:
         return
-    async for msg in channel.history(limit=200):
-        if msg.author == bot.user and msg.content.startswith(f"{PREFIX}{codigo}"):
-            await msg.delete()
+    async with _lock(tipo, codigo):
+        for msg, *_ in (await _mensajes_por_codigo(bot, channel, codigo)).get(codigo, []):
+            try:
+                await msg.delete()
+            except discord.HTTPException as e:
+                log.warning("Torneo %s: no se pudo borrar un mensaje de #%s (%s)", codigo, CANALES[tipo], e)
 
 # ============================================================
 # FUNCIONES ESPECÍFICAS PARA CADA TIPO
@@ -156,51 +195,36 @@ async def _eliminar_mensaje_torneo(bot, tipo: str, codigo: str):
 
 async def leer_estado(bot):
     """
-    Lee el estado de todos los torneos desde el canal #torneos-estado.
-    Devuelve un diccionario con la clave 'torneos' que contiene una lista de torneos.
+    Lee el estado de todos los torneos desde el canal #torneos-estado (una sola pasada por el canal).
+    Devuelve un diccionario con la clave 'torneos' que contiene una lista de torneos (uno por código).
     """
     channel = await _get_channel(bot, "estado")
     if not channel:
         return {"torneos": []}
-    
+
     torneos = []
-    async for msg in channel.history(limit=200):
-        if msg.author != bot.user:
-            continue
-        if not msg.content.startswith(PREFIX):
-            continue
-        # Extraer el código del torneo del mensaje
-        codigo = msg.content.replace(PREFIX, "").split()[0]
-        data = await _leer_dato_torneo(bot, "estado", codigo)
+    for codigo, entradas in (await _mensajes_por_codigo(bot, channel)).items():
+        data = _decodificar(codigo, entradas)
         if data:
             torneos.append(data)
-    
     return {"torneos": torneos}
 
-async def guardar_estado(bot, torneos: list):
+async def actualizar_torneo_estado(bot, codigo: str, datos: dict):
+    """Mezcla `datos` con el estado guardado del torneo (leer-modificar-escribir dentro del lock)."""
     channel = await _get_channel(bot, "estado")
     if not channel:
+        log.error("No existe el canal #%s: no se guarda el estado de %s", CANALES["estado"], codigo)
         return
-    codigos_actuales = set()
-    async for msg in channel.history(limit=200):
-        if msg.author == bot.user and msg.content.startswith(PREFIX):
-            codigo = msg.content.replace(PREFIX, "").split()[0]
-            codigos_actuales.add(codigo)
-    for t in torneos:
-        codigo = t.get("codigo")
-        if codigo:
-            await _guardar_dato_torneo(bot, "estado", codigo, t)
-            if codigo in codigos_actuales:
-                codigos_actuales.remove(codigo)
-    for codigo in codigos_actuales:
-        await _eliminar_mensaje_torneo(bot, "estado", codigo)
-
-async def actualizar_torneo_estado(bot, codigo: str, datos: dict):
-    actual = await _leer_dato_torneo(bot, "estado", codigo)
-    if actual:
-        actual.update(datos)
-        datos = actual
-    await _guardar_dato_torneo(bot, "estado", codigo, datos)
+    async with _lock("estado", codigo):
+        entradas = (await _mensajes_por_codigo(bot, channel, codigo)).get(codigo, [])
+        actual = _decodificar(codigo, entradas) if entradas else None
+        if entradas and actual is None:
+            # Hay datos pero ilegibles: escribir solo `datos` borraría el resto del torneo
+            raise RuntimeError(f"El estado guardado del torneo {codigo} está corrupto; no se sobrescribe.")
+        if actual:
+            actual.update(datos)
+            datos = actual
+        await _guardar_sin_lock(bot, channel, codigo, datos)
 
 async def eliminar_torneo_estado(bot, codigo: str):
     for tipo in ["estado", "rondas", "clasificacion"]:
@@ -245,47 +269,3 @@ def slugify_challonge(value: str) -> str:
 
 def generar_codigo_unico(longitud=6):
     return ''.join(random.choices(string.ascii_uppercase + string.digits, k=longitud))
-
-# ============================================================
-# SINCRONIZACIÓN (para migrar)
-# ============================================================
-   
-async def sincronizar_estado_handle(ctx):
-    await ctx.author.send("🔄 Sincronizando estado de torneos desde #torneos-activos...")
-
-    from utils.commons import obtener_torneos_activos_canal
-
-    guild = ctx.guild
-    torneos_activos = await obtener_torneos_activos_canal(guild)
-    if not torneos_activos:
-        await ctx.author.send("❌ No hay torneos activos en el canal #torneos-activos.")
-        return
-
-    # Limpiar todos los mensajes de estado, rondas y clasificación
-    for tipo in ["estado", "rondas", "clasificacion"]:
-        channel = await _get_channel(ctx.bot, tipo)
-        if channel:
-            async for msg in channel.history(limit=200):
-                if msg.author == ctx.bot.user and msg.content.startswith(PREFIX):
-                    await msg.delete()
-
-    hoy = datetime.now().date()
-    for torneo in torneos_activos:
-        codigo = torneo["codigo"]
-        estado_data = {
-            "codigo": codigo,
-            "nombre": torneo.get("nombre", "Torneo sin nombre"),
-            "nivel": torneo["nivel"],
-            "total_maximo": int(torneo.get("total_maximo", 0)) if torneo.get("total_maximo") else None,
-            "tipo": "challonge",
-            "fecha_inicio": torneo.get("fecha_inicio", datetime.now().strftime("%d/%m/%Y")),
-            "estado": "abierto",
-            "ronda_actual": 0,
-            "inscritos_ids": []
-        }
-        await _guardar_dato_torneo(ctx.bot, "estado", codigo, estado_data)
-        await _guardar_dato_torneo(ctx.bot, "rondas", codigo, {"codigo": codigo, "rondas": []})
-        await _guardar_dato_torneo(ctx.bot, "clasificacion", codigo, {"codigo": codigo, "clasificacion": []})
-
-    await ctx.author.send(f"✅ Estado sincronizado con {len(torneos_activos)} torneos activos.")
-

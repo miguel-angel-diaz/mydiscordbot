@@ -1,6 +1,5 @@
 import aiohttp
 import discord
-import json
 import os
 import re
 import secrets
@@ -18,19 +17,17 @@ from flask import app
 
 import config
 from utils.commons import (
-    CAMPO_EDICIONES,
-    anadir_campos_lista,
     buscar_usuario_en_servidor,
     obtener_deck_en_canal,
     obtener_decks_por_usuario,
     validar_torneo_para_edicion,
-    limpiar_deck_raw,
-    contar_cartas,
     obtener_lista_arquetipos,
-    obtener_sugerencias_arquetipos,
     inscribir_usuario_web,
     tiene_rol_permitido,
-    editar_deck_web
+    editar_deck_web,
+    nombre_miembro,
+    resolver_miembro,
+    es_mensaje_emparejamientos
 )
 
 from utils.torneos_estado import leer_estado, leer_rondas, leer_clasificacion
@@ -39,6 +36,8 @@ from utils.swiss_core import reportar_resultado, desinscribir_jugador
 from utils.swiss_core import calcular_clasificacion as calcular_clasificacion_swiss
 from utils.commons import clasificacion_desde_challonge
 from utils import challonge
+from utils import cache_web
+from utils import decks
 
 
 CANAL_ADMIN_NOMBRE = "solicitudes-admision"
@@ -192,46 +191,69 @@ def _minutos_bloqueo_restantes(discord_id: str) -> int:
 # 2. CACHÉ — evita golpear Challonge/Discord en cada visita web
 # ============================================================
 async def regenerar_cache(guild):
+    """
+    Rehace la caché de torneos antiguos de Challonge. Si un torneo falla se conserva su entrada anterior,
+    y si Challonge no responde se deja la caché como estaba (nunca se sustituye por una vacía).
+    """
+    anterior = {t.get("codigo"): t for t in (leer_cache() or {}).get("torneos", [])}
     try:
         torneos = await challonge.torneos_finalizados()
-        resultado = []
-        for torneo in torneos:
-            try:
-                # Una sola descarga por torneo: de ella salen la clasificación y los enfrentamientos
-                participantes_raw, matches_raw = await challonge.participantes_y_partidos(torneo["codigo"])
-                resultado.append({
-                    **torneo,
-                    "clasificacion": clasificacion_desde_challonge(guild, torneo["codigo"], participantes_raw, matches_raw),
-                    "matches": challonge.partidos_simplificados(matches_raw),
-                })
-            except Exception as e:
-                print(f"Error procesando torneo {torneo['codigo']}: {e}")
-                continue
+    except challonge.ErrorChallonge as e:
+        print(f"❌ Error regenerando caché (se mantiene la anterior): {e}")
+        return leer_cache() or {"actualizado": None, "torneos": []}
 
-        payload = {
-            "actualizado": datetime.now(timezone.utc).isoformat(),
-            "torneos": resultado
-        }
+    resultado, fallidos = [], []
+    for torneo in torneos:
+        try:
+            # Una sola descarga por torneo: de ella salen la clasificación y los enfrentamientos
+            participantes_raw, matches_raw = await challonge.participantes_y_partidos(torneo["codigo"])
+            resultado.append({
+                **torneo,
+                "clasificacion": clasificacion_desde_challonge(guild, torneo["codigo"], participantes_raw, matches_raw),
+                "participants": challonge.participantes_simplificados(participantes_raw),
+                "matches": challonge.partidos_simplificados(matches_raw),
+            })
+        except Exception as e:
+            print(f"Error procesando torneo {torneo['codigo']}: {e}")
+            fallidos.append(torneo["codigo"])
+            if torneo["codigo"] in anterior:
+                resultado.append(anterior[torneo["codigo"]])
 
-        # Escritura atómica: un fallo a mitad no deja la caché de la web corrupta
-        os.makedirs(os.path.dirname(config.CACHE_PATH) or ".", exist_ok=True)
-        tmp_path = f"{config.CACHE_PATH}.tmp"
-        with open(tmp_path, "w", encoding="utf-8") as f:
-            json.dump(payload, f, ensure_ascii=False, indent=2)
-        os.replace(tmp_path, config.CACHE_PATH)
+    # Si no se ha refrescado ninguno, no se escribe: la fecha diría que está al día y no se reintentaría
+    if torneos and len(fallidos) == len(torneos):
+        print("❌ No se pudo procesar ningún torneo: se mantiene la caché anterior.")
+        return leer_cache() or {"actualizado": None, "torneos": []}
 
-        print(f"✅ Caché regenerado con {len(resultado)} torneo(s).")
-        return payload
+    payload = {"actualizado": datetime.now(timezone.utc).isoformat(), "torneos": resultado}
+    await cache_web.guardar(payload)
+    aviso = f" ({len(fallidos)} con error, se conserva su versión anterior)" if fallidos else ""
+    print(f"✅ Caché regenerado con {len(resultado)} torneo(s){aviso}.")
+    return payload
 
-    except Exception as e:
-        print(f"❌ Error regenerando caché: {e}")
-        return {"actualizado": datetime.now(timezone.utc).isoformat(), "torneos": []}
 
 def leer_cache():
-    if not os.path.exists(config.CACHE_PATH):
-        return None
-    with open(config.CACHE_PATH, "r", encoding="utf-8") as f:
-        return json.load(f)
+    """Caché de la web desde memoria (ver utils/cache_web.py)."""
+    return cache_web.leer()
+
+
+async def refrescar_cache_al_arrancar(bot):
+    """
+    Tras un deploy (disco nuevo en Railway) la caché falta o es la copia del repositorio: si no existe o tiene
+    más de 24 h se regenera en segundo plano, sin retrasar el arranque. Mientras, se sirve la que haya.
+    """
+    await bot.wait_until_ready()
+    if not cache_web.necesita_regenerar():
+        return
+    guild = bot.get_guild(config.GUILD_ID_ADMISION)
+    if not guild:
+        print("⚠️ No se encontró el servidor: no se regenera la caché de la web al arrancar.")
+        return
+    print("🔄 Caché de la web ausente o antigua: regenerando en segundo plano...")
+    try:
+        await regenerar_cache(guild)
+    except Exception:
+        print(f"❌ Error regenerando la caché al arrancar:\n{traceback.format_exc()}")
+
 
 # ============================================================
 # 3. ENDPOINTS HTTP — Torneos
@@ -295,6 +317,8 @@ async def api_torneos(request):
             except Exception:
                 print(f"Error al procesar Swiss {t['codigo']}:\n{traceback.format_exc()}")
 
+    # La web solo usa los datos del torneo y su clasificación: los partidos y participantes no se envían
+    torneos_challonge = [{k: v for k, v in t.items() if k not in ("matches", "participants")} for t in torneos_challonge]
     todos_los_torneos = torneos_challonge + torneos_swiss_finalizados
     todos_los_torneos.sort(key=lambda x: x.get("fecha_fin") or "", reverse=True)
 
@@ -475,11 +499,7 @@ async def auth_verificar_codigo(request):
     guild = _bot_instance.get_guild(config.GUILD_ID_ADMISION)
     username = pendiente.get("username", "Usuario")
     if guild:
-        try:
-            member = await guild.fetch_member(int(discord_id))
-            username = member.display_name
-        except:
-            pass
+        username = await nombre_miembro(guild, discord_id, username)
 
     return web.json_response({
         "ok": True,
@@ -498,11 +518,7 @@ async def auth_verificar_sesion(request):
     if _bot_instance:
         guild = _bot_instance.get_guild(config.GUILD_ID_ADMISION)
         if guild:
-            try:
-                member = await guild.fetch_member(int(discord_id))
-                username = member.display_name
-            except:
-                pass
+            username = await nombre_miembro(guild, discord_id, username)
 
     response = web.json_response({
         "autenticado": True,
@@ -682,15 +698,10 @@ async def api_subir_deck(request):
     discord_id = payload["discord_id"]
 
     codigo_torneo = v.codigo_torneo(body.get("codigo_torneo"))
-    formato_input = str(body.get("formato", "")).strip().lower()
-    nombre_deck = v.texto(body.get("nombre_deck"), "nombre del deck", v.MAX_NOMBRE, markdown=True)
-    archetype_input = v.texto(body.get("archetype"), "arquetipo", v.MAX_NOMBRE, markdown=True)
-    decklist_raw = v.texto(body.get("decklist"), "decklist", v.MAX_DECKLIST, multilinea=True, markdown=True)
-    sideboard_raw = v.texto(body.get("sideboard"), "sideboard", v.MAX_SIDEBOARD, obligatorio=False,
-                            multilinea=True, markdown=True)
-
-    if len(nombre_deck) > 100:
-        return web.json_response({"error": "Nombre de deck demasiado largo"}, status=400)
+    # Mismas reglas que !subir-deck / !editar-deck (utils/decks.py); si no se cumplen, el middleware responde 400
+    nombre_deck = decks.nombre_deck(body.get("nombre_deck"))
+    decklist = decks.decklist(body.get("decklist"))
+    sideboard = decks.sideboard(body.get("sideboard"))
 
     if _bot_instance is None:
         return web.json_response({"error": "Servicio no disponible"}, status=503)
@@ -703,74 +714,29 @@ async def api_subir_deck(request):
     if not miembro:
         return web.json_response({"error": "No se pudo verificar tu membresía en el servidor"}, status=403)
 
-    # 🔹 Determinar el formato: si no viene del front, lo sacamos del torneo
+    # 🔹 Formato: el que venga del front si es válido; si no, el del torneo. El arquetipo debe ser de ese formato.
     from utils.torneos_estado import obtener_torneo_estado
     torneo = await obtener_torneo_estado(_bot_instance, codigo_torneo)
-    formato_torneo = torneo.get("formato", "Premodern") if torneo else "Premodern"
-
-    if formato_input and formato_input.lower() in ("premodern", "pauper"):
-        formato = formato_input.capitalize()
-    else:
-        formato = formato_torneo
-
-    # Validar arquetipo según el formato
-    sugerencias = obtener_sugerencias_arquetipos(archetype_input, formato=formato, max_sugerencias=5)
-    coincidencia_exacta = next((s for s in sugerencias if s.lower() == archetype_input.lower()), None)
-
-    if not coincidencia_exacta:
-        return web.json_response({
-            "error": "Arquetipo no reconocido",
-            "sugerencias": sugerencias
-        }, status=400)
-
-    archetype = coincidencia_exacta
+    formato = decks.formato(body.get("formato")) or (torneo or {}).get("formato", "Premodern")
+    archetype = decks.arquetipo_obligatorio(body.get("archetype"), formato)
 
     ok, mensaje_validacion = await validar_torneo_para_edicion(codigo_torneo, miembro, _bot_instance)
     if not ok:
         return web.json_response({"error": mensaje_validacion}, status=400)
 
     codigo_deck = f"{codigo_torneo}_{discord_id}"
-    decks_existentes = await obtener_decks_por_usuario(guild, discord_id)
 
-    if any(d["codigo_deck"] == codigo_deck for d in decks_existentes):
+    # Mismo embed que !subir-deck; decks.publicar comprueba con lock que no exista ya (web y Discord a la vez -> uno)
+    embed_final = decks.construir_embed(codigo_torneo, miembro, nombre_deck, formato, archetype, decklist, sideboard,
+                                        via_web=True)
+    ok, motivo = await decks.publicar(guild, embed_final, codigo_deck)
+    if motivo == "ya_existe":
         return web.json_response(
             {"error": "Ya tienes un deck subido para este torneo. Usa la edición en Discord con !editar-deck."},
             status=409
         )
-
-    decklist = limpiar_deck_raw(decklist_raw)
-    if contar_cartas(decklist) < 60:
-        return web.json_response({"error": "La decklist debe tener al menos 60 cartas"}, status=400)
-
-    if sideboard_raw.lower() in ("", "n/a"):
-        sideboard = "N/A"
-    else:
-        sideboard_limpio = limpiar_deck_raw(sideboard_raw)
-        if contar_cartas(sideboard_limpio) > 15:
-            return web.json_response({"error": "La sideboard no puede superar 15 cartas"}, status=400)
-        sideboard = sideboard_limpio
-
-    embed_final = discord.Embed(
-        title=f"🃏 Deck Subido: {nombre_deck}",
-        description=(
-            f"**Código:** `{codigo_deck}`\n"
-            f"**Torneo:** `{codigo_torneo}`\n"
-            f"**Formato:** {formato}"
-        ),
-        color=discord.Color.purple()
-    )
-    embed_final.add_field(name="Jugador", value=f"{miembro} (ID: {discord_id})", inline=False)
-    embed_final.add_field(name="Archetype", value=archetype, inline=False)
-    anadir_campos_lista(embed_final, "Decklist", decklist)
-    anadir_campos_lista(embed_final, "Sideboard", sideboard)
-    embed_final.add_field(name=CAMPO_EDICIONES, value="0/1", inline=False)
-    embed_final.set_footer(text="Deck subido correctamente (vía web).")
-
-    canal_submitted = discord.utils.get(guild.text_channels, name="submitted-decks")
-    if not canal_submitted:
+    if not ok:
         return web.json_response({"error": "Canal de decks no encontrado"}, status=500)
-
-    await canal_submitted.send(embed=embed_final)
 
     try:
         await miembro.send(
@@ -907,12 +873,10 @@ async def api_editar_deck(request):
 
     discord_id = payload["discord_id"]
     codigo_torneo = v.codigo_torneo(body.get("codigo_torneo"))
-    formato_input = str(body.get("formato", "")).strip().lower()
-    nombre_deck = v.texto(body.get("nombre_deck"), "nombre del deck", v.MAX_NOMBRE, markdown=True)
-    archetype_input = v.texto(body.get("archetype"), "arquetipo", v.MAX_NOMBRE, markdown=True)
-    decklist_raw = v.texto(body.get("decklist"), "decklist", v.MAX_DECKLIST, multilinea=True, markdown=True)
-    sideboard_raw = v.texto(body.get("sideboard"), "sideboard", v.MAX_SIDEBOARD, obligatorio=False,
-                            multilinea=True, markdown=True)
+    # Mismas reglas que !subir-deck / !editar-deck (utils/decks.py); si no se cumplen, el middleware responde 400
+    nombre_deck = decks.nombre_deck(body.get("nombre_deck"))
+    decklist = decks.decklist(body.get("decklist"))
+    sideboard = decks.sideboard(body.get("sideboard"))
 
     if _bot_instance is None:
         return web.json_response({"error": "Servicio no disponible"}, status=503)
@@ -939,38 +903,11 @@ async def api_editar_deck(request):
             status=400
         )
 
-    # 🔹 Determinar formato
+    # 🔹 Formato: el que venga del front si es válido; si no, el del torneo. El arquetipo debe ser de ese formato.
     from utils.torneos_estado import obtener_torneo_estado
     torneo = await obtener_torneo_estado(_bot_instance, codigo_torneo)
-    formato_torneo = torneo.get("formato", "Premodern") if torneo else "Premodern"
-
-    if formato_input and formato_input.lower() in ("premodern", "pauper"):
-        formato = formato_input.capitalize()
-    else:
-        formato = formato_torneo
-
-    sugerencias = obtener_sugerencias_arquetipos(archetype_input, formato=formato, max_sugerencias=5)
-    coincidencia_exacta = next((s for s in sugerencias if s.lower() == archetype_input.lower()), None)
-
-    if not coincidencia_exacta:
-        return web.json_response({
-            "error": "Arquetipo no reconocido",
-            "sugerencias": sugerencias
-        }, status=400)
-
-    archetype = coincidencia_exacta
-
-    decklist = limpiar_deck_raw(decklist_raw)
-    if contar_cartas(decklist) < 60:
-        return web.json_response({"error": "La decklist debe tener al menos 60 cartas"}, status=400)
-
-    if sideboard_raw.lower() in ("", "n/a"):
-        sideboard = "N/A"
-    else:
-        sideboard_limpio = limpiar_deck_raw(sideboard_raw)
-        if contar_cartas(sideboard_limpio) > 15:
-            return web.json_response({"error": "La sideboard no puede superar 15 cartas"}, status=400)
-        sideboard = sideboard_limpio
+    formato = decks.formato(body.get("formato")) or (torneo or {}).get("formato", "Premodern")
+    archetype = decks.arquetipo_obligatorio(body.get("archetype"), formato)
 
     ok, mensaje = await editar_deck_web(
         guild, miembro, codigo_torneo, formato,
@@ -1017,26 +954,12 @@ async def api_todas_partidas(request):
         jugador1_id = int(jugador1_match.group(1)) if jugador1_match else None
         jugador2_id = int(jugador2_match.group(1)) if jugador2_match else None
 
-        try:
-            j1_member = await guild.fetch_member(jugador1_id) if jugador1_id else None
-            j1_nombre = j1_member.display_name if j1_member else jugador1_raw.strip()
-        except:
-            j1_nombre = jugador1_raw.strip()
-
-        try:
-            j2_member = await guild.fetch_member(jugador2_id) if jugador2_id else None
-            j2_nombre = j2_member.display_name if j2_member else jugador2_raw.strip()
-        except:
-            j2_nombre = jugador2_raw.strip()
+        j1_nombre = await nombre_miembro(guild, jugador1_id, jugador1_raw.strip())
+        j2_nombre = await nombre_miembro(guild, jugador2_id, jugador2_raw.strip())
 
         agendado_match = re.search(r"<@!?(\d+)>", agendado_por)
         if agendado_match:
-            agendado_id = int(agendado_match.group(1))
-            try:
-                ag_member = await guild.fetch_member(agendado_id)
-                ag_nombre = ag_member.display_name
-            except:
-                ag_nombre = agendado_por.strip()
+            ag_nombre = await nombre_miembro(guild, agendado_match.group(1), agendado_por.strip())
         else:
             ag_nombre = agendado_por.strip()
 
@@ -1161,11 +1084,7 @@ async def api_mis_torneos_pendientes(request):
                 j2 = emp.get("j2")
 
                 # Obtener nombre del jugador 1
-                try:
-                    member1 = await guild.fetch_member(int(j1))
-                    nombre1 = member1.display_name
-                except:
-                    nombre1 = f"Usuario {j1}"
+                nombre1 = await nombre_miembro(guild, j1, f"Usuario {j1}")
 
                 # Caso BYE
                 if j2 is None:
@@ -1180,11 +1099,7 @@ async def api_mis_torneos_pendientes(request):
                     continue
 
                 # Obtener nombre del jugador 2
-                try:
-                    member2 = await guild.fetch_member(int(j2))
-                    nombre2 = member2.display_name
-                except:
-                    nombre2 = f"Usuario {j2}"
+                nombre2 = await nombre_miembro(guild, j2, f"Usuario {j2}")
 
                 # --- Comprobar si la partida ya está agendada ---
                 agendada = False
@@ -1277,21 +1192,13 @@ async def api_reportar_resultado(request):
                 ronda_actual = rondas[-1]
                 ronda_num = ronda_actual.get("numero", 0)
 
-                try:
-                    j1_member = await guild.fetch_member(int(jugador1_id))
-                    nombre1 = j1_member.display_name
-                except:
-                    nombre1 = f"Usuario {jugador1_id}"
-                try:
-                    j2_member = await guild.fetch_member(int(jugador2_id))
-                    nombre2 = j2_member.display_name
-                except:
-                    nombre2 = f"Usuario {jugador2_id}"
+                nombre1 = await nombre_miembro(guild, jugador1_id, f"Usuario {jugador1_id}")
+                nombre2 = await nombre_miembro(guild, jugador2_id, f"Usuario {jugador2_id}")
 
                 canal_citas = discord.utils.get(guild.text_channels, name="🍸-citas‐a‐ciegas")
                 if canal_citas and emp is not None:
                     async for msg in canal_citas.history(limit=200):
-                        if msg.author == _bot_instance.user and f"Emparejamientos Ronda {ronda_num} - Torneo {codigo_torneo}" in msg.content:
+                        if msg.author == _bot_instance.user and es_mensaje_emparejamientos(msg.content, codigo_torneo, ronda_num):
                             lines = msg.content.splitlines()
                             nuevas_lines = []
                             if lines:
@@ -1380,11 +1287,7 @@ async def api_mis_enfrentamientos(request):
                 es_j1 = str(discord_id) == j1
                 rival_id = j2 if es_j1 else j1
 
-                try:
-                    rival_member = await guild.fetch_member(int(rival_id))
-                    rival_nombre = rival_member.display_name
-                except:
-                    rival_nombre = f"Usuario {rival_id}"
+                rival_nombre = await nombre_miembro(guild, rival_id, f"Usuario {rival_id}")
 
                 deck_rival = None
                 if resultado is not None and rival_id is not None:
@@ -1415,6 +1318,52 @@ async def api_mis_enfrentamientos(request):
     except Exception as e:
         print(f"❌ Error en api_mis_enfrentamientos: {e}")
         return _error_interno("api_mis_enfrentamientos", status=500)
+
+async def _rondas_challonge_web(guild, participantes: list, partidos: list) -> list:
+    """
+    Rondas para la web a partir de participantes y partidos de Challonge. Admite el formato original
+    ({"participant": {...}} / {"match": {...}}) y el compacto de la caché ({"id", "name"} / {...}).
+    """
+    id_to_discord = {}
+    for p in participantes:
+        datos = p.get("participant", p)
+        if datos.get("id") and datos.get("name"):
+            id_to_discord[datos["id"]] = datos["name"]
+
+    nombres = {}
+
+    async def nombre(discord_id, pid):
+        if not discord_id:
+            return f"Participante {pid}" if pid else "TBD"
+        if discord_id not in nombres:
+            nombres[discord_id] = await nombre_miembro(guild, discord_id)
+        return nombres[discord_id]
+
+    rondas_dict = {}
+    for match in partidos:
+        m = match.get("match", match)
+        ronda = m.get("round")
+        if ronda is None:
+            continue
+        rondas_dict.setdefault(ronda, {"partidos": [], "completa": True})
+        p1_id, p2_id = m.get("player1_id"), m.get("player2_id")
+        discord1 = id_to_discord.get(p1_id) if p1_id else None
+        discord2 = id_to_discord.get(p2_id) if p2_id else None
+        nombre1 = await nombre(discord1, p1_id)
+        if p2_id is None:
+            partido = {"jugador1": nombre1, "jugador1_id": discord1, "jugador2": None, "jugador2_id": None,
+                       "resultado": "BYE"}
+        else:
+            resultado_emp = (m.get("scores_csv") or None) if m.get("state") == "complete" else None
+            partido = {"jugador1": nombre1, "jugador1_id": discord1, "jugador2": await nombre(discord2, p2_id),
+                       "jugador2_id": discord2, "resultado": resultado_emp}
+        rondas_dict[ronda]["partidos"].append(partido)
+        if m.get("state") != "complete":
+            rondas_dict[ronda]["completa"] = False
+
+    return [{"ronda": r, "completa": rondas_dict[r]["completa"], "partidos": rondas_dict[r]["partidos"]}
+            for r in sorted(rondas_dict)]
+
 
 async def api_torneo_enfrentamientos(request):
     token = obtener_token(request)
@@ -1461,11 +1410,7 @@ async def api_torneo_enfrentamientos(request):
                     j2 = emp.get("j2")
                     resultado_emp = emp.get("resultado")
 
-                    try:
-                        member1 = await guild.fetch_member(int(j1))
-                        nombre1 = member1.display_name
-                    except:
-                        nombre1 = f"Usuario {j1}"
+                    nombre1 = await nombre_miembro(guild, j1, f"Usuario {j1}")
 
                     if j2 is None:
                         partido = {
@@ -1476,11 +1421,7 @@ async def api_torneo_enfrentamientos(request):
                             "resultado": "BYE"
                         }
                     else:
-                        try:
-                            member2 = await guild.fetch_member(int(j2))
-                            nombre2 = member2.display_name
-                        except:
-                            nombre2 = f"Usuario {j2}"
+                        nombre2 = await nombre_miembro(guild, j2, f"Usuario {j2}")
                         partido = {
                             "jugador1": nombre1,
                             "jugador1_id": j1,
@@ -1493,98 +1434,11 @@ async def api_torneo_enfrentamientos(request):
             response = web.json_response({"rondas": resultado})
             return response
 
-        # 2️⃣ CASO CHALLONGE: intentar obtener de caché primero
-        cache = leer_cache()
-        torneo_cache = None
-        if cache and cache.get("torneos"):
-            for t in cache["torneos"]:
-                if t.get("codigo") == torneo_codigo:
-                    torneo_cache = t
-                    break
-
-        if torneo_cache and torneo_cache.get("matches"):
-            # ✅ Tenemos los matches en caché → procesar sin llamar a Challonge
-            matches_raw = torneo_cache["matches"]
-            participants_raw = torneo_cache.get("participants", [])
-            # Construir el mapa de IDs de Challonge a Discord IDs
-            id_to_discord = {}
-            for p in participants_raw:
-                pid = p.get("participant", {}).get("id")
-                name = p.get("participant", {}).get("name")
-                if pid and name:
-                    id_to_discord[pid] = name
-
-            # Procesar igual que antes
-            rondas_dict = {}
-            for match in matches_raw:
-                m = match.get("match", {})
-                ronda = m.get("round")
-                if ronda is None:
-                    continue
-                if ronda not in rondas_dict:
-                    rondas_dict[ronda] = {"partidos": [], "completa": True}
-
-                p1_id = m.get("player1_id")
-                p2_id = m.get("player2_id")
-                discord1 = id_to_discord.get(p1_id) if p1_id else None
-                discord2 = id_to_discord.get(p2_id) if p2_id else None
-
-                nombre1 = None
-                nombre2 = None
-                if discord1:
-                    try:
-                        member = await guild.fetch_member(int(discord1))
-                        nombre1 = member.display_name
-                    except:
-                        nombre1 = f"Usuario {discord1}"
-                else:
-                    nombre1 = f"Participante {p1_id}" if p1_id else "TBD"
-
-                if discord2:
-                    try:
-                        member = await guild.fetch_member(int(discord2))
-                        nombre2 = member.display_name
-                    except:
-                        nombre2 = f"Usuario {discord2}"
-                else:
-                    nombre2 = f"Participante {p2_id}" if p2_id else "TBD"
-
-                resultado_emp = None
-                if m.get("state") == "complete":
-                    scores = m.get("scores_csv")
-                    if scores:
-                        resultado_emp = scores
-
-                if p2_id is None:
-                    partido = {
-                        "jugador1": nombre1,
-                        "jugador1_id": discord1,
-                        "jugador2": None,
-                        "jugador2_id": None,
-                        "resultado": "BYE"
-                    }
-                else:
-                    partido = {
-                        "jugador1": nombre1,
-                        "jugador1_id": discord1,
-                        "jugador2": nombre2,
-                        "jugador2_id": discord2,
-                        "resultado": resultado_emp
-                    }
-                rondas_dict[ronda]["partidos"].append(partido)
-                if m.get("state") != "complete":
-                    rondas_dict[ronda]["completa"] = False
-
-            resultado = []
-            for ronda in sorted(rondas_dict.keys()):
-                resultado.append({
-                    "ronda": ronda,
-                    "completa": rondas_dict[ronda]["completa"],
-                    "partidos": rondas_dict[ronda]["partidos"]
-                })
-
-            response = web.json_response({"rondas": resultado})
-            return response
+        # 2️⃣ CASO CHALLONGE: de la caché si tiene partidos y participantes
+        torneo_cache = next((t for t in (leer_cache() or {}).get("torneos", []) if t.get("codigo") == torneo_codigo), None)
+        if torneo_cache and torneo_cache.get("matches") and torneo_cache.get("participants"):
+            rondas = await _rondas_challonge_web(guild, torneo_cache["participants"], torneo_cache["matches"])
+            return web.json_response({"rondas": rondas})
 
         # Un torneo propio que no es suizo (Battle Royale) no tiene rondas que mostrar ni está en Challonge
         if torneo is not None and torneo.get("tipo") not in (None, "challonge"):
@@ -1595,120 +1449,19 @@ async def api_torneo_enfrentamientos(request):
         if torneo is None and torneo_cache is None:
             return web.json_response({"rondas": []})
 
-        # 3️⃣ No estaba en caché → llamar a Challonge y guardar en caché
+        # 3️⃣ No estaba en caché → llamar a Challonge y guardar en caché (formato compacto)
         try:
             participants_data, matches_data = await challonge.participantes_y_partidos(torneo_codigo)
         except challonge.ErrorChallonge as e:
             print(f"⚠️ torneo-enfrentamientos {torneo_codigo}: {e}")
             return web.json_response({"error": "No se pudieron obtener los enfrentamientos"}, status=503)
 
-        # --- Guardar en caché para futuras peticiones ---
-        # Leer caché actual
-        cache_actual = leer_cache() or {"torneos": []}
-        # Buscar el torneo en la caché y actualizarlo (o añadirlo)
-        encontrado = False
-        for t in cache_actual["torneos"]:
-            if t.get("codigo") == torneo_codigo:
-                t["participants"] = participants_data
-                t["matches"] = matches_data
-                encontrado = True
-                break
-        if not encontrado:
-            # No está en caché, añadirlo (aunque podría no estar porque es un torneo no finalizado)
-            # Lo añadimos solo con la info mínima para que no se pierda
-            cache_actual["torneos"].append({
-                "codigo": torneo_codigo,
-                "nombre": (torneo or {}).get("nombre", torneo_codigo),
-                "participants": participants_data,
-                "matches": matches_data
-            })
-
-        # Escritura atómica: se escribe en un temporal y se renombra, así un fallo a mitad no corrompe la caché
-        os.makedirs(os.path.dirname(config.CACHE_PATH) or ".", exist_ok=True)
-        tmp_path = f"{config.CACHE_PATH}.tmp"
-        with open(tmp_path, "w", encoding="utf-8") as f:
-            json.dump(cache_actual, f, ensure_ascii=False, indent=2)
-        os.replace(tmp_path, config.CACHE_PATH)
-
-        # --- Procesar los datos recién obtenidos (igual que antes) ---
-        id_to_discord = {}
-        for p in participants_data:
-            part = p.get("participant", {})
-            pid = part.get("id")
-            name = part.get("name")
-            if pid and name:
-                id_to_discord[pid] = name
-
-        rondas_dict = {}
-        for match in matches_data:
-            m = match.get("match", {})
-            ronda = m.get("round")
-            if ronda is None:
-                continue
-            if ronda not in rondas_dict:
-                rondas_dict[ronda] = {"partidos": [], "completa": True}
-
-            p1_id = m.get("player1_id")
-            p2_id = m.get("player2_id")
-            discord1 = id_to_discord.get(p1_id) if p1_id else None
-            discord2 = id_to_discord.get(p2_id) if p2_id else None
-
-            nombre1 = None
-            nombre2 = None
-            if discord1:
-                try:
-                    member = await guild.fetch_member(int(discord1))
-                    nombre1 = member.display_name
-                except:
-                    nombre1 = f"Usuario {discord1}"
-            else:
-                nombre1 = f"Participante {p1_id}" if p1_id else "TBD"
-
-            if discord2:
-                try:
-                    member = await guild.fetch_member(int(discord2))
-                    nombre2 = member.display_name
-                except:
-                    nombre2 = f"Usuario {discord2}"
-            else:
-                nombre2 = f"Participante {p2_id}" if p2_id else "TBD"
-
-            resultado_emp = None
-            if m.get("state") == "complete":
-                scores = m.get("scores_csv")
-                if scores:
-                    resultado_emp = scores
-
-            if p2_id is None:
-                partido = {
-                    "jugador1": nombre1,
-                    "jugador1_id": discord1,
-                    "jugador2": None,
-                    "jugador2_id": None,
-                    "resultado": "BYE"
-                }
-            else:
-                partido = {
-                    "jugador1": nombre1,
-                    "jugador1_id": discord1,
-                    "jugador2": nombre2,
-                    "jugador2_id": discord2,
-                    "resultado": resultado_emp
-                }
-            rondas_dict[ronda]["partidos"].append(partido)
-            if m.get("state") != "complete":
-                rondas_dict[ronda]["completa"] = False
-
-        resultado = []
-        for ronda in sorted(rondas_dict.keys()):
-            resultado.append({
-                "ronda": ronda,
-                "completa": rondas_dict[ronda]["completa"],
-                "partidos": rondas_dict[ronda]["partidos"]
-            })
-
-        response = web.json_response({"rondas": resultado})
-        return response
+        participantes = challonge.participantes_simplificados(participants_data)
+        partidos = challonge.partidos_simplificados(matches_data)
+        await cache_web.actualizar_torneo(
+            torneo_codigo, {"participants": participantes, "matches": partidos},
+            nuevo=lambda: {"codigo": torneo_codigo, "nombre": (torneo or {}).get("nombre", torneo_codigo)})
+        return web.json_response({"rondas": await _rondas_challonge_web(guild, participantes, partidos)})
 
     except Exception as e:
         print(f"❌ Error en api_torneo_enfrentamientos: {e}")
@@ -1804,15 +1557,10 @@ async def api_clasificacion_torneo(request):
             # Formatear al mismo estilo que Challonge para el frontend
             clasificacion_formateada = []
             for item in clasificacion:
-                try:
-                    member = await guild.fetch_member(int(item["id"]))
-                    nombre = member.display_name
-                    discord_id = item["id"]
-                    avatar = str(member.display_avatar.url)
-                except:
-                    nombre = f"Usuario {item['id']}"
-                    discord_id = item["id"]
-                    avatar = None
+                member = await resolver_miembro(guild, item["id"])
+                nombre = member.display_name if member else f"Usuario {item['id']}"
+                discord_id = item["id"]
+                avatar = str(member.display_avatar.url) if member else None
                 clasificacion_formateada.append({
                     "nombre": nombre,
                     "discord_id": discord_id,
@@ -1886,13 +1634,11 @@ async def api_agendar_partida(request):
     if not await _son_rivales(codigo_torneo, str(j1), str(j2)):
         return web.json_response({"error": "Esos jugadores no se enfrentan en este torneo"}, status=403)
 
-    try:
-        jugador1 = await guild.fetch_member(j1)
-    except:
+    jugador1 = await resolver_miembro(guild, j1)
+    if not jugador1:
         return web.json_response({"error": "Jugador 1 no encontrado en el servidor"}, status=404)
-    try:
-        jugador2 = await guild.fetch_member(j2)
-    except:
+    jugador2 = await resolver_miembro(guild, j2)
+    if not jugador2:
         return web.json_response({"error": "Jugador 2 no encontrado en el servidor"}, status=404)
 
     canal = discord.utils.get(guild.text_channels, name="partidos-agendados")
@@ -1955,13 +1701,11 @@ async def api_modificar_partida(request):
     if not es_admin and not es_jugador:
         return web.json_response({"error": "No tienes permiso para modificar esta partida"}, status=403)
 
-    try:
-        jugador1 = await guild.fetch_member(int(jugador1_id))
-    except:
+    jugador1 = await resolver_miembro(guild, jugador1_id)
+    if not jugador1:
         return web.json_response({"error": "Jugador 1 no encontrado"}, status=404)
-    try:
-        jugador2 = await guild.fetch_member(int(jugador2_id))
-    except:
+    jugador2 = await resolver_miembro(guild, jugador2_id)
+    if not jugador2:
         return web.json_response({"error": "Jugador 2 no encontrado"}, status=404)
 
     canal = discord.utils.get(guild.text_channels, name="partidos-agendados")
@@ -2051,13 +1795,11 @@ async def api_eliminar_partida(request):
     if not es_admin and not es_jugador:
         return web.json_response({"error": "No tienes permiso para eliminar esta partida"}, status=403)
 
-    try:
-        jugador1 = await guild.fetch_member(int(jugador1_id))
-    except:
+    jugador1 = await resolver_miembro(guild, jugador1_id)
+    if not jugador1:
         return web.json_response({"error": "Jugador 1 no encontrado"}, status=404)
-    try:
-        jugador2 = await guild.fetch_member(int(jugador2_id))
-    except:
+    jugador2 = await resolver_miembro(guild, jugador2_id)
+    if not jugador2:
         return web.json_response({"error": "Jugador 2 no encontrado"}, status=404)
 
     canal = discord.utils.get(guild.text_channels, name="partidos-agendados")

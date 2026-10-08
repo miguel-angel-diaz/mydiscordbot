@@ -1,5 +1,6 @@
 import discord
 import asyncio
+import functools
 import hashlib
 import math
 import random
@@ -19,6 +20,58 @@ from utils.torneos_estado import (
     generar_codigo_unico
 )
 from utils.validacion_web import EntradaInvalida, resultado as validar_resultado
+from utils.commons import cabecera_emparejamientos, es_mensaje_emparejamientos
+
+# ============================================================
+# LOCK POR TORNEO
+# ============================================================
+
+class _LockReentrante:
+    """
+    asyncio.Lock que la MISMA tarea puede volver a tomar. Hace falta porque las operaciones se llaman entre sí
+    (reportar_resultado -> _siguiente_ronda_automatica -> generar_ronda; retirar_por_abandono -> reportar_resultado)
+    y con un Lock normal la tarea se quedaría esperándose a sí misma.
+    """
+    def __init__(self):
+        self._lock = asyncio.Lock()
+        self._dueno = None
+        self._nivel = 0
+
+    async def __aenter__(self):
+        tarea = asyncio.current_task()
+        if self._dueno is tarea:
+            self._nivel += 1
+            return self
+        await self._lock.acquire()
+        self._dueno, self._nivel = tarea, 1
+        return self
+
+    async def __aexit__(self, *exc):
+        self._nivel -= 1
+        if self._nivel == 0:
+            self._dueno = None
+            self._lock.release()
+
+
+_locks_torneo: Dict[str, _LockReentrante] = {}
+
+
+def lock_torneo(codigo: str) -> _LockReentrante:
+    """
+    Lock de un torneo para leer-modificar-escribir su estado y sus rondas. Las operaciones de este módulo ya lo
+    toman; los asistentes lo usan SOLO en el tramo final de escritura (nunca mientras esperan una respuesta por DM).
+    """
+    return _locks_torneo.setdefault(str(codigo), _LockReentrante())
+
+
+def _con_lock_torneo(func):
+    """Ejecuta la operación (bot, codigo, ...) con el lock del torneo."""
+    @functools.wraps(func)
+    async def envoltura(*args, **kwargs):
+        codigo = kwargs["codigo"] if "codigo" in kwargs else args[1]
+        async with lock_torneo(codigo):
+            return await func(*args, **kwargs)
+    return envoltura
 
 # ============================================================
 # GESTIÓN DE TORNEOS
@@ -64,6 +117,7 @@ async def obtener_torneo(bot, codigo: str) -> Optional[Dict]:
 # INSCRIPCIONES
 # ============================================================
 
+@_con_lock_torneo
 async def inscribir_jugador(bot, codigo: str, usuario_id: int, miembro=None, forzar: bool = False) -> Tuple[bool, str]:
     """
     Inscribe en un torneo suizo abierto. Si el torneo es de nivel "socios", `miembro` debe tener un rol
@@ -93,6 +147,7 @@ async def inscribir_jugador(bot, codigo: str, usuario_id: int, miembro=None, for
     await actualizar_torneo_estado(bot, codigo, {"inscritos_ids": inscritos})
     return True, "Inscripción completada."
 
+@_con_lock_torneo
 async def desinscribir_jugador(bot, codigo: str, usuario_id: int, guild: discord.Guild = None) -> Tuple[bool, str]:
     torneo = await obtener_torneo(bot, codigo)
     if not torneo:
@@ -139,6 +194,7 @@ def rondas_necesarias(num_jugadores: int) -> int:
 # GENERAR RONDA (CON LÍMITE DE INTENTOS)
 # ============================================================
 
+@_con_lock_torneo
 async def generar_ronda(bot, codigo: str) -> Tuple[bool, str]:
     torneo = await obtener_torneo(bot, codigo)
     if not torneo:
@@ -282,6 +338,7 @@ async def _calcular_stats_completos(bot, codigo: str, participantes: List[str], 
 # REPORTAR RESULTADO
 # ============================================================
 
+@_con_lock_torneo
 async def reportar_resultado(bot, codigo: str, jugador1_id: int, resultado: str, jugador2_id: int,
                              guild: discord.Guild = None, publicar: bool = True) -> Tuple[bool, str, dict, int]:
     """
@@ -358,6 +415,7 @@ async def reportar_resultado(bot, codigo: str, jugador1_id: int, resultado: str,
 # RETIRADA POR ABANDONO (el jugador sale del servidor)
 # ============================================================
 
+@_con_lock_torneo
 async def retirar_por_abandono(bot, codigo: str, usuario_id, guild: discord.Guild = None) -> Tuple[bool, str, Optional[str]]:
     """
     Retira a un jugador que ha dejado el servidor.
@@ -407,6 +465,7 @@ async def retirar_por_abandono(bot, codigo: str, usuario_id, guild: discord.Guil
 # SIGUIENTE RONDA AUTOMÁTICA (CON CÁLCULO DE RONDAS NECESARIAS)
 # ============================================================
 
+@_con_lock_torneo
 async def _siguiente_ronda_automatica(bot, codigo: str, guild: discord.Guild = None):
     torneo = await obtener_torneo(bot, codigo)
     if not torneo:
@@ -447,7 +506,7 @@ async def _siguiente_ronda_automatica(bot, codigo: str, guild: discord.Guild = N
         canal_citas = discord.utils.get(guild.text_channels, name="🍸-citas‐a‐ciegas")
         if canal_citas:
             async for msg in canal_citas.history(limit=100):
-                if msg.author == bot.user and f"Torneo {codigo}" in msg.content and "Emparejamientos Ronda" in msg.content:
+                if msg.author == bot.user and es_mensaje_emparejamientos(msg.content, codigo):
                     await msg.delete()
                     break
 
@@ -462,7 +521,7 @@ async def _siguiente_ronda_automatica(bot, codigo: str, guild: discord.Guild = N
                 rondas = rondas_data.get("rondas", [])
                 if rondas:
                     ultima_ronda = rondas[-1]
-                    mensaje_citas = f"📢 **Emparejamientos Ronda {ultima_ronda['numero']} - Torneo {codigo}**\n"
+                    mensaje_citas = cabecera_emparejamientos(codigo, ultima_ronda['numero']) + "\n"
                     for emp in ultima_ronda.get("emparejamientos", []):
                         j1 = emp["j1"]
                         j2 = emp["j2"]
@@ -521,6 +580,7 @@ async def calcular_clasificacion(bot, codigo: str) -> List[Dict]:
 # ELIMINAR RONDA
 # ============================================================
 
+@_con_lock_torneo
 async def eliminar_ronda_swiss(bot, codigo: str, ronda_num: int, guild: discord.Guild = None) -> Tuple[bool, str]:
     torneo = await obtener_torneo(bot, codigo)
     if not torneo:
@@ -570,7 +630,7 @@ async def eliminar_ronda_swiss(bot, codigo: str, ronda_num: int, guild: discord.
         canal_citas = discord.utils.get(guild.text_channels, name="🍸-citas‐a‐ciegas")
         if canal_citas:
             async for msg in canal_citas.history(limit=200):
-                if msg.author == bot.user and f"Emparejamientos Ronda {ronda_num} - Torneo {codigo}" in msg.content:
+                if msg.author == bot.user and es_mensaje_emparejamientos(msg.content, codigo, ronda_num):
                     await msg.delete()
                     break
 

@@ -353,18 +353,6 @@ COMANDOS_INFO = [
             "La web mostrará los datos actualizados."
         ]
     },
-    {
-        "comando": "sincronizar-estado",
-        "aliases": [],
-        "roles_permitidos": ["admin"],
-        "permisos_discord": ["administrator"],
-        "descripcion": "Reconstruye el estado interno de los torneos desde #torneos-activos",
-        "tutorial": [
-            "Escribe `!sincronizar-estado` en cualquier canal (solo admins).",
-            "El bot borra el estado interno y lo reconstruye a partir de los torneos visibles en `#torneos-activos`.",
-            "⚠️ Es una operación destructiva: se pierden inscritos, rondas y clasificación."
-        ]
-    },
 
     # ============================================================
     # JUGADOR - INSCRIPCIONES
