@@ -4,8 +4,6 @@ import asyncio
 import aiohttp
 import config
 import discord
-import json
-from functools import wraps
 from collections import Counter
 import io
 import re
@@ -21,6 +19,7 @@ from difflib import get_close_matches
 # ============================================================
 from utils import dm
 from utils import canales
+from utils import cache_web
 from utils.torneos_estado import leer_estado
 from utils import challonge
 
@@ -69,25 +68,6 @@ async def validar_canal_correcto(ctx, canal_valido: str, comando: str):
             pass  # ya borrado por borrar_mensaje_seguro (NotFound) o sin permisos
 
     return False
-
-def enviar_ayuda_handle():
-    def decorator(func):
-        @wraps(func)
-        async def wrapper(ctx, *args, **kwargs):
-            # Si no se pasó ningún argumento posicional y no hay kwargs, consideramos que se ejecutó mal
-            if not args and not kwargs:
-                try:
-                    await ctx.author.send(
-                        f"🔔 Parece que usaste el comando `!{ctx.command.name}` sin los argumentos necesarios.\n\n"
-                        f"📘 Uso correcto:\n{ctx.command.help or 'No hay ayuda disponible para este comando.'}"
-                    )
-                except Exception:
-                    pass  # Por si tiene los DMs cerrados
-
-            # Ejecutar el comando normalmente
-            return await func(ctx, *args, **kwargs)
-        return wrapper
-    return decorator
 
 # ============================================================
 # MIEMBROS: caché del bot primero, API solo si hace falta
@@ -191,7 +171,6 @@ async def obtener_torneo_usuario(ctx, mensaje_inicial: str = None, complete=Fals
     # de la web (cache/torneos.json, generado con !actualizar-web). Los torneos activos son solo los suizos.
     torneos_challonge = []
     if complete:
-        from utils import cache_web
         for t in (cache_web.leer() or {}).get("torneos", []):
             if solo_inscritos and not any(str(p.get("discord_id")) == str(ctx.author.id) for p in t.get("clasificacion", [])):
                 continue
@@ -480,7 +459,6 @@ async def _ids_clasificacion(bot, guild, codigo_torneo: str) -> List[str]:
         from utils.battle import calcular_clasificacion_battle, leer_enfrentamientos
         return [p["id"] for p in calcular_clasificacion_battle(codigo_torneo, await leer_enfrentamientos(bot, codigo_torneo))]
 
-    from utils import cache_web
     cache = cache_web.leer() or {}
     torneo_cache = next((t for t in cache.get("torneos", []) if t.get("codigo") == codigo_torneo), None)
     clasificacion = (torneo_cache or {}).get("clasificacion") or await calcular_clasificacion_torneo(guild, codigo_torneo)
@@ -939,80 +917,8 @@ def contar_cartas(lista_raw: str) -> int:
     return total
 
 # ============================================================
-# ESTADO DE TORNEOS PARA USUARIO (web)
+# DECKS DEL USUARIO (web)
 # ============================================================
-async def obtener_estado_torneos_usuario(guild, member: discord.Member):
-    bot = guild._state._get_client()
-    estado = await leer_estado(bot) 
-    torneos_estado = estado.get("torneos", []) 
-
-    hoy = datetime.now().date()
-    resultado = []
-
-    decks_usuario = await obtener_decks_por_usuario(guild, str(member.id), include_message=False)
-    decks_por_torneo = {d["codigo_torneo"]: d for d in decks_usuario if d.get("codigo_torneo")}
-
-    for t in torneos_estado:
-        codigo = t.get("codigo")
-        if not codigo:
-            continue
-
-        # --- FILTROS ---
-        # 1. Estado: solo 'abierto'
-        estado_torneo = t.get("estado", "abierto")
-        if estado_torneo != "abierto":
-            continue
-
-        # 2. Fecha: si tiene fecha, debe ser >= hoy
-        fecha_str = t.get("fecha_inicio")
-        if fecha_str:
-            try:
-                fecha_inicio = datetime.strptime(fecha_str, "%d/%m/%Y").date()
-                if fecha_inicio < hoy:
-                    continue  # Si la fecha ya pasó, no se muestra
-            except ValueError:
-                # Si no se puede parsear, asumimos que es hoy (no filtrar)
-                pass
-
-        # --- Obtener datos ---
-        nivel = t.get("nivel", "todos")
-        if not isinstance(nivel, str):
-            nivel = str(nivel)
-        nivel = nivel.lower()
-
-        roles_permitidos = config.ROLES_SOCIOS if nivel == "socios" else config.ROLES_TODOS
-        if not tiene_rol_permitido(member, roles_permitidos):
-            continue
-
-        inscritos_ids = t.get("inscritos_ids", [])
-        total_inscritos = len(inscritos_ids)
-
-        total_maximo = t.get("total_maximo")
-        if total_maximo is not None:
-            try:
-                total_maximo = int(total_maximo)
-            except (ValueError, TypeError):
-                total_maximo = None
-
-        plazas_restantes = total_maximo - total_inscritos if total_maximo is not None else None
-
-        deck = decks_por_torneo.get(codigo)
-
-        resultado.append({
-            "codigo": codigo,
-            "nivel": nivel.capitalize(),
-            "inscrito": str(member.id) in inscritos_ids,
-            "total_inscritos": total_inscritos,
-            "total_maximo": total_maximo,
-            "plazas_restantes": plazas_restantes,
-            "deck_subido": bool(deck),
-            "deck_nombre": deck["nombre_deck"] if deck else None,
-            "estado": estado_torneo,
-            "fecha_inicio": fecha_str if fecha_str else "Sin fecha"
-        })
-
-    return resultado
-
 async def obtener_decks_por_usuario(guild, discord_id: str, limite: int = None, include_message: bool = False):
     """Decks de un jugador (canal entero). Sin include_message se quita el mensaje (la web los serializa a JSON)."""
     from utils import decks
@@ -1022,10 +928,6 @@ async def obtener_decks_por_usuario(guild, discord_id: str, limite: int = None, 
             d.pop("mensaje", None)
             d.pop("_mensaje", None)
     return lista
-
-def tiene_rol_permitido(member: discord.Member, roles_permitidos: set):
-    return any(role.name in roles_permitidos for role in member.roles)
-
 
 _locks_edicion_deck = {}   # codigo_deck -> asyncio.Lock (evita dos ediciones simultáneas del mismo deck)
 

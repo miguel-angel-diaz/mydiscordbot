@@ -235,12 +235,6 @@ async def eliminar_torneo_estado(bot, codigo: str):
 async def obtener_torneo_estado(bot, codigo: str) -> Optional[dict]:
     return await _leer_dato_torneo(bot, "estado", codigo)
 
-async def obtener_inscritos_ids(bot, codigo: str) -> List[str]:
-    data = await _leer_dato_torneo(bot, "estado", codigo)
-    if data:
-        return data.get("inscritos_ids", [])
-    return []
-
 # --- RONDAS ---
 async def leer_rondas(bot, codigo: str) -> Optional[dict]:
     return await _leer_dato_torneo(bot, "rondas", codigo)
@@ -248,18 +242,12 @@ async def leer_rondas(bot, codigo: str) -> Optional[dict]:
 async def guardar_rondas(bot, codigo: str, datos: dict):
     await _guardar_dato_torneo(bot, "rondas", codigo, datos)
 
-async def eliminar_rondas(bot, codigo: str):
-    await _eliminar_mensaje_torneo(bot, "rondas", codigo)
-
 # --- CLASIFICACIÓN ---
 async def leer_clasificacion(bot, codigo: str) -> Optional[dict]:
     return await _leer_dato_torneo(bot, "clasificacion", codigo)
 
 async def guardar_clasificacion(bot, codigo: str, datos: dict):
     await _guardar_dato_torneo(bot, "clasificacion", codigo, datos)
-
-async def eliminar_clasificacion(bot, codigo: str):
-    await _eliminar_mensaje_torneo(bot, "clasificacion", codigo)
 
 # ============================================================
 # UTILIDADES

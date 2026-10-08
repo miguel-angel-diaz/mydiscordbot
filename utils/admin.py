@@ -254,30 +254,6 @@ async def _avisar_admin(ctx, texto: str):
         except discord.HTTPException:
             pass
 
-async def asignar_strike_automatico(ctx):
-    autor = ctx.author
-    servidor = ctx.guild
-    rol_strike = canales.get_rol(servidor, canales.ROL_STRIKE)
-
-    if not rol_strike:
-        await ctx.send("⚠️ El rol `Strike` no existe.")
-        return
-
-    if rol_strike in autor.roles:
-        await ctx.send(f"⛔ Ya tienes un strike, {autor.mention}. No puedes usar este comando.")
-        return
-
-    try:
-        await autor.add_roles(rol_strike, reason="Intentó usar comando sin permiso.")
-        await ctx.author.send(f"🚫 {autor.mention}, no puedes usar este comando. Has recibido un **Strike**.")
-        await autor.send(get_mensaje_strike())
-    except discord.Forbidden:
-        await ctx.send("⚠️ No tengo permisos para asignar el rol.")
-    
-    
-    # canal_anuncios = ctx.guild.get_channel(1387389356464934993)
-    # await canal_anuncios.send(f"⚠️ Hemos decidido que {autor.mention} Permanezca una semana en el Hielo, la proxima vez le invitaremos a que abandone The Klub")
-
 def get_mensaje_strike():
     return (
         "Oye... te lo voy a decir solo una vez.\n\n"
@@ -476,9 +452,7 @@ async def moderador_permisos_handle(ctx, only_check: bool = False) -> bool:
 
     if not tiene_permiso:
         if not only_check:
-            # await asignar_strike_automatico(ctx)
             await ctx.author.send("❌ No tienes permisos de moderador.")
-            pass
         return False
 
     return True

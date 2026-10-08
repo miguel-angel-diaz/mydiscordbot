@@ -756,56 +756,6 @@ async def swiss_eliminar_asistente_handle(ctx):
     except Exception as e:
         await ctx.author.send(f"❌ Error: {e}")
 
-# ============================================================
-# COMANDO: lista-inscritos-swiss (asistente)
-# ============================================================
-
-async def swiss_lista_inscritos_asistente_handle(ctx):
-    await borrar_mensaje_seguro(ctx)
-
-    try:
-        await ctx.author.send("📋 **Lista de inscritos**\nEscribe el código del torneo o `cancelar` para salir.")
-
-        torneos = await obtener_torneos_activos(ctx.bot)
-        if not torneos:
-            await ctx.author.send("❌ No hay torneos suizos activos.")
-            return
-
-        mensaje = "📋 **Torneos activos:**\n"
-        for i, t in enumerate(torneos, 1):
-            inscritos = len(t.get("inscritos_ids", []))
-            maximo = t.get("total_maximo", "∞")
-            mensaje += f"{i}. `{t['codigo']}` → {t['nombre']} ({inscritos}/{maximo} inscritos)\n"
-        mensaje += "\nEscribe el **número** del torneo:"
-        await ctx.author.send(mensaje)
-
-        seleccion_msg = await dm.esperar_respuesta(ctx.bot, ctx.author, timeout=60)
-        if dm.es_cancelar(seleccion_msg.content):
-            return
-        idx = dm.indice_elegido(seleccion_msg.content, len(torneos))
-        if idx is None:
-            await ctx.author.send("❌ Número no válido.")
-            return
-        torneo = torneos[idx]
-
-        inscritos_ids = torneo.get("inscritos_ids", [])
-        if not inscritos_ids:
-            await ctx.author.send(f"📭 No hay jugadores inscritos en `{torneo['codigo']}`.")
-            return
-
-        lines = [f"📋 **Inscritos en {torneo['nombre']} ({torneo['codigo']})**: {len(inscritos_ids)} jugadores"]
-        for uid in inscritos_ids:
-            member = ctx.guild.get_member(int(uid))
-            nombre = member.display_name if member else f"Usuario {uid}"
-            lines.append(f"• {nombre} (<@{uid}>)")
-
-        for chunk in [lines[i:i+20] for i in range(0, len(lines), 20)]:
-            await ctx.author.send("\n".join(chunk))
-
-    except asyncio.TimeoutError:
-        await ctx.author.send("⏰ Tiempo agotado.")
-    except Exception as e:
-        await ctx.author.send(f"❌ Error: {e}")
 
 # ============================================================
 # COMANDO: reiniciar-swiss (asistente) - solo admin

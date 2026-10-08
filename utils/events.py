@@ -11,7 +11,6 @@ from discord.ext.commands.view import StringView
 from utils import canales
 from utils import dm
 from utils import ayuda
-from utils.jugadores import enviar_comandos_a_miembro
 
 log = logging.getLogger(__name__)
 
@@ -448,48 +447,3 @@ async def _registrar_voz(member, nombre_canal: str, accion: str, color, canal_vo
         await canal_registro.send(embed=embed)
     except discord.HTTPException as e:
         log.warning(f"No pude enviar el registro de voz de {member}: {e}")
-
-async def _esta_registrado_en_canal(guild: discord.Guild, member_id: int) -> bool:
-    """Comprueba si el miembro tiene una entrada en #registro-de-usuarios."""
-    canal_registro = canales.get_canal(guild, canales.REGISTRO_USUARIOS)
-    if not canal_registro:
-        return False
-
-    async for msg in canal_registro.history(limit=500):
-        for embed in msg.embeds:
-            # Buscar en fields
-            for field in embed.fields:
-                if str(member_id) in (field.value or ""):
-                    return True
-            # Buscar en description y footer
-            if embed.description and str(member_id) in embed.description:
-                return True
-            if embed.footer and embed.footer.text and str(member_id) in embed.footer.text:
-                return True
-    return False
-
-
-async def member_update_handle(before: discord.Member, after: discord.Member):
-    """Detecta cambios de rol y actúa en consecuencia."""
-    roles_antes = {r.name for r in before.roles}
-    roles_despues = {r.name for r in after.roles}
-
-    # Si acaba de obtener el rol "miembro"
-    if canales.ROL_MIEMBRO not in roles_antes and canales.ROL_MIEMBRO in roles_despues:
-        await comprobar_registro_y_enviar_comandos(after)
-
-    # Aquí puedes añadir el resto de lógica de evento_socio_handle
-    await evento_socio_handle(before, after)
-
-async def comprobar_registro_y_enviar_comandos(member: discord.Member):
-    """
-    Si el miembro NO está registrado en #registro-de-usuarios, le envía
-    los comandos disponibles por DM.
-    """
-    if member.bot or not member.guild:
-        return
-
-    registrado = await _esta_registrado_en_canal(member.guild, member.id)
-    if not registrado:
-        log.info(f"{member.display_name} no está registrado → enviando comandos.")
-        await enviar_comandos_a_miembro(member)

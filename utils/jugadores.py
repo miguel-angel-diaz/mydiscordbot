@@ -2,9 +2,7 @@
 import logging
 import discord
 import asyncio
-from collections import Counter
 from datetime import datetime, timedelta
-import io
 import re
 
 from utils import dm
@@ -42,9 +40,6 @@ from utils.commons import (
 
 log = logging.getLogger(__name__)
 
-MAX_ERRORES = 3
-TIEMPO_LIMITE_MINUTOS = 10
-intentos_fallidos = {}  # Guardado temporal por usuario
 
 async def agendar_partida_handle(ctx, fecha=None, hora=None, jugador1=None, _vs=None, jugador2=None):
     await borrar_mensaje_seguro(ctx)
@@ -118,19 +113,8 @@ async def agendar_partida_handle(ctx, fecha=None, hora=None, jugador1=None, _vs=
         except discord.Forbidden:
             await ctx.author.send(f"⚠️ No se pudo enviar mensaje privado a {jugador.mention}.")
 
-    if ctx.author.id in intentos_fallidos:
-        del intentos_fallidos[ctx.author.id]
     # Publicar partidas agendadas esta semana
     await actualizar_proximas_partidas(ctx)
-
-async def extraer_mencion(mensaje, ctx):
-    if mensaje.mentions:
-        return mensaje.mentions[0]
-    else:
-        try:
-            return await ctx.guild.fetch_member(int(mensaje.content.strip("<@!>")))
-        except (ValueError, discord.HTTPException):
-            return None
 
 async def modificar_partida_agendada_handle(ctx):
     await borrar_mensaje_seguro(ctx)
@@ -412,8 +396,6 @@ async def ver_inscritos_handler(ctx, codigo_torneo: str = None):
             return
 
     # 2️⃣ Inscritos desde el estado del bot (los torneos se gestionan con el sistema propio, no con Challonge)
-    from utils.torneos_estado import obtener_torneo_estado
-
     torneo = await obtener_torneo_estado(ctx.bot, codigo_torneo)
     if not torneo:
         await ctx.author.send(f"❌ El torneo `{codigo_torneo}` no existe o ya no está activo.")
@@ -665,58 +647,6 @@ async def mis_comandos_handle(ctx):
         await ctx.send("❌ No puedo enviarte mensajes privados. Activa los DMs para continuar.")
     except Exception as e:
         log.exception(f"❌ Error en mis_comandos_wizard_handle: {e}")
-
-async def enviar_comandos_a_miembro(member: discord.Member):
-    """Envía por DM la lista de comandos disponibles (sin necesitar ctx)."""
-    if member.bot:
-        return
-
-    roles_usuario = [rol.name for rol in member.roles]
-    comandos_disponibles = []
-
-    for comando in ayuda.comandos_info():
-        roles_permitidos = comando["roles_permitidos"]
-        if any(rol in roles_usuario for rol in roles_permitidos):
-            comandos_disponibles.append(f"!{comando['comando']} - {comando['descripcion']}")
-
-    if not comandos_disponibles:
-        try:
-            await member.send(
-                "❌ No tienes acceso a ningún comando.\n"
-                "Si crees que deberías tener acceso, contacta con un moderador del servidor."
-            )
-        except discord.Forbidden:
-            log.info(f"No pude enviar DM a {member}")
-        return
-
-    mensaje_intro = (
-        "👋 ¡Hola! Aquí tienes los comandos que puedes usar en el servidor:\n\n"
-        "Para usar un comando, simplemente escríbelo en el canal preguntale-a-el-barbas "
-        "yo te ayudare a que todo vaya en su sitio. Por ejemplo:\n"
-        "`!reportar-resultado`, `!ver-inscritos`, `!subir-deck`, etc.\n\n"
-        "📋 Lista de comandos disponibles según tus roles:"
-    )
-
-    embed = discord.Embed(
-        title="📋 Tus comandos disponibles",
-        description="\n".join(comandos_disponibles),
-        color=discord.Color.green()
-    )
-
-    mensaje_ayuda = (
-        "💡 **¿No sabes cómo funciona algún comando?**\n"
-        "Escribe `!mis-comandos` en el canal **#preguntale-a-el-barbas** "
-        "y te guiaré paso a paso con un tutorial.\n\n"
-        "Si sigues con dudas, consulta con un **admin** del servidor."
-    )
-
-    try:
-        await member.send(mensaje_intro)
-        await member.send(embed=embed)
-        await member.send(mensaje_ayuda)
-    except discord.Forbidden:
-        log.info(f"No pude enviar comandos a {member}")
-
 
 INTENTOS_LISTA = 3   # veces que se vuelve a pedir la decklist o el sideboard si no son válidos
 

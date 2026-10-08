@@ -28,6 +28,9 @@ class Bot(commands.Bot):
         for extension in EXTENSIONES:
             await self.load_extension(extension)      # si una falla, el bot no arranca a medias
         logger.info(f"✅ {len(self.commands)} comandos cargados de {len(EXTENSIONES)} cogs")
+        sin_ayuda = ayuda.comandos_sin_ayuda(self)
+        if sin_ayuda:
+            logger.warning(f"⚠️ Comandos sin texto en data/ayuda_comandos.json: {', '.join(sin_ayuda)}")
 
         await iniciar_servidor_web()          # con await: si falla (p. ej. puerto ocupado) se ve en el arranque
         cargar_tareas(self)                   # el bucle espera a wait_until_ready antes de su primera ejecución
