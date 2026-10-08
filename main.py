@@ -10,7 +10,7 @@ import logging
 import os
 
 from utils import ayuda
-from utils.torneos_api import iniciar_servidor_web, set_bot_instance
+from utils.api import iniciar_servidor_web, set_bot_instance
 from utils.events import reconocer_comando_handle
 from utils.watchers import cargar_tareas
 
@@ -34,7 +34,7 @@ class Bot(commands.Bot):
 
         # Caché de la web a memoria; si falta o es antigua (p. ej. tras un deploy) se regenera en segundo plano
         from utils import cache_web
-        from utils.torneos_api import refrescar_cache_al_arrancar
+        from utils.api import refrescar_cache_al_arrancar
         cache = await cache_web.cargar()
         if cache:
             logger.info(f"✅ Caché de torneos cargada: {len(cache.get('torneos', []))} torneos")

@@ -16,7 +16,7 @@ import discord
 
 from utils import canales
 from utils.torneos_estado import leer_estado
-from utils.swiss_core import retirar_por_abandono  # reportar_resultado ya publica la clasificación
+from utils.swiss.service import retirar_por_abandono  # reportar_resultado ya publica la clasificación
 from utils.jugadores import actualizar_proximas_partidas
 from utils import battle
 from utils.commons import es_mensaje_emparejamientos

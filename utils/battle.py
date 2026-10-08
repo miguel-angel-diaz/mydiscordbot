@@ -21,7 +21,7 @@ import discord
 from utils import canales
 from utils import dm
 from utils.commons import borrar_mensaje_seguro, buscar_usuario_en_servidor, trocear_lista, validar_canal_correcto
-from utils.swiss_core import calcular_estadisticas, _desempate_final
+from utils.swiss import engine
 from utils.swiss_handle import _es_admin
 from utils.torneos_estado import (
     actualizar_torneo_estado,
@@ -237,11 +237,7 @@ def calcular_clasificacion_battle(codigo: str, enfrentamientos: List[dict]) -> L
     """Clasificación de los jugadores con algún resultado, con las reglas y el orden del suizo."""
     jugados = [e for e in _activos(enfrentamientos) if e.get("resultado")]
     jugadores = sorted({e["j1"] for e in jugados} | {e["j2"] for e in jugados})
-    stats = calcular_estadisticas([{"emparejamientos": jugados}], jugadores)
-    ranking = sorted(stats.items(), key=lambda x: (-x[1]["mp"], -x[1]["omw"], -x[1]["dif"], -x[1]["bch"],
-                                                   _desempate_final(codigo, x[0])))
-    return [{"id": pid, "rk": i, "mp": d["mp"], "w": d["w"], "l": d["l"], "dw": d["dw"],
-             "omw": d["omw"], "bch": d["bch"], "dif": d["dif"]} for i, (pid, d) in enumerate(ranking, 1)]
+    return engine.clasificacion(codigo, [{"emparejamientos": jugados}], jugadores)
 
 
 # ============================================================

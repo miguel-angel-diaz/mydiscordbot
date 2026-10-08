@@ -36,8 +36,8 @@ def get_jwt_secret():
     with open(".jwt_secret", "w") as f:
         f.write(secret)
     log.warning(
-        f"⚠️ JWT_SECRET generada y guardada en .jwt_secret: {secret}\n"
-        "📌 Cópiala y añádela como variable de entorno para mantenerla entre despliegues.")
+        "⚠️ JWT_SECRET no definida: se ha generado una nueva y se ha guardado en .jwt_secret (no se muestra en el log).\n"
+        "📌 Define la variable de entorno JWT_SECRET para mantener las sesiones entre despliegues.")
     return secret
 
 

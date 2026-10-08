@@ -14,6 +14,7 @@ from utils.torneos_estado import generar_codigo_unico, obtener_torneo_estado
 
 from utils.admin import moderador_permisos_handle
 from utils import decks
+from utils import servicios
 from utils import ayuda
 
 from utils.commons import (
@@ -26,7 +27,6 @@ from utils.commons import (
     obtener_deck_en_canal,
     validar_torneo_para_edicion,
     comprobar_edicion_deck,
-    lock_edicion_deck,
     leer_inscritos_sorteo,
     ids_con_deck,
     enviar_en_trozos,
@@ -936,25 +936,25 @@ async def submitted_deck_handle(ctx, codigo_torneo: str = None):
         await author.send(f"❌ Ya tienes un deck subido para este torneo. Usa `!editar-deck {codigo_torneo}` si deseas modificarlo.")
         return
 
-    # Iniciar flujo manual directamente
+    await _asistente_subir_deck(ctx, author, codigo_torneo)
+
+
+async def _asistente_subir_deck(ctx, author: discord.Member, codigo_torneo: str):
+    """
+    Pide el deck por DM y lo publica con servicios.subir_deck (lo mismo que la web), que vuelve a comprobar el
+    torneo y que no se haya subido otro mientras se respondía.
+    """
     datos = await deck_dm_flow(ctx, author, codigo_torneo, modo="subir")
     if not datos or len(datos) != 6:
         log.error(f"❌ deck_dm_flow devolvió datos inesperados: {datos}")
         return
 
-    nombre_deck, formato, archetype, decklist, sideboard, _ = datos
-
-    # Publicar en #submitted-decks (decks.publicar comprueba con lock que no se haya subido otro mientras tanto)
-    embed_final = decks.construir_embed(codigo_torneo, author, nombre_deck, formato, archetype, decklist, sideboard)
-    ok, motivo = await decks.publicar(ctx.guild, embed_final, codigo_deck)
-    if motivo == "ya_existe":
-        await author.send(f"❌ Ya tienes un deck subido para este torneo. Usa `!editar-deck {codigo_torneo}` si deseas modificarlo.")
-        return
-    if not ok:
-        await author.send("❌ No se encontró el canal `submitted-decks`.")
+    res = await servicios.subir_deck(ctx.bot, ctx.guild, author, codigo_torneo, *datos[:5])
+    if not res.ok:
+        await author.send(f"❌ {res.mensaje}")
         return
     await author.send(f"✅ Tu deck ha sido enviado con éxito al torneo `{codigo_torneo}`.")
-    await author.send(embed=embed_final)
+    await author.send(embed=res.embed)
 
 async def editar_deck_handle(ctx, codigo_torneo: str = None):
     await borrar_mensaje_seguro(ctx)
@@ -1017,13 +1017,13 @@ async def editar_deck_handle(ctx, codigo_torneo: str = None):
             await author.send("⏰ Tiempo agotado. Operación cancelada.")
             return
 
-        # 🔄 REDIRIGIR A FLUJO DE SUBIDA
-        await subir_deck_desde_edicion(ctx, author, codigo_torneo, ok_validacion, mensaje_validacion)
+        # 🔄 REDIRIGIR A FLUJO DE SUBIDA (aquí el torneo aún no ha empezado: con él empezado se ha salido arriba)
+        await author.send(f"✅ Perfecto, vamos a subir tu deck.\nℹ️ {mensaje_validacion}")
+        await _asistente_subir_deck(ctx, author, codigo_torneo)
         return
 
     # ✅ DECK ENCONTRADO: COMPROBAR SI YA EDITÓ
     edited = deck_existente.get("edited", 0)
-    mensaje_deck = deck_existente.get("mensaje")
 
     # 🔒 BLOQUEO GLOBAL: Si ya editó una vez, no puede volver a editar
     if edited >= 1:
@@ -1078,101 +1078,20 @@ async def editar_deck_handle(ctx, codigo_torneo: str = None):
         await author.send("❌ Edición cancelada.")
         return
 
-    nombre_deck, formato, archetype, decklist, sideboard, _ = datos
-
-    embed_final = decks.construir_embed(codigo_torneo, author, nombre_deck, formato, archetype, decklist, sideboard,
-                                        ediciones=edited + 1, actualizado=True)
-
-    # 🔒 Escritura con el lock del deck (el mismo que usa la web) y revalidando: durante el asistente por DM
-    #    el deck pudo editarse desde la web u otro !editar-deck, o el torneo terminar
-    async with lock_edicion_deck(codigo_deck):
-        deck_ahora = await obtener_deck_en_canal(ctx.guild, codigo_deck)
-        if deck_ahora and deck_ahora.get("edited", 0) >= 1:
-            await author.send("❌ Mientras respondías, tu deck ya se editó (p. ej. desde la web). Solo se permite una edición.")
-            return
-        motivo_ahora, mensaje_ahora = await comprobar_edicion_deck(codigo_torneo, author)
-        if motivo_ahora in (EDICION_NO_EXISTE, EDICION_NO_INSCRITO, EDICION_FINALIZADO):
-            await author.send(mensaje_ahora)
-            return
-        mensaje_deck = (deck_ahora or {}).get("mensaje")
-
-        # 💾 ACTUALIZAR MENSAJE EXISTENTE
-        if mensaje_deck:
-            try:
-                await mensaje_deck.edit(embed=embed_final)
-                await author.send("✅ Tu deck ha sido actualizado correctamente.")
-            except discord.errors.NotFound:
-                await author.send(
-                    "❌ No se pudo actualizar el mensaje original (fue eliminado).\n"
-                    "Contacta con un administrador."
-                )
-                return
-            except discord.errors.Forbidden:
-                await author.send("❌ No tengo permisos para editar el mensaje del deck.")
-                return
-            except Exception as e:
-                await author.send(f"❌ Error inesperado al actualizar el deck: {str(e)}")
-                return
-        else:
-            # El deck ya no está (p. ej. lo borró un admin mientras respondías): no se vuelve a crear
-            await author.send("❌ Tu deck ya no está en `submitted-decks` (puede que lo haya retirado un admin). "
-                              "No se ha guardado la edición; habla con un admin.")
-            return
-
-        # 📬 Enviar confirmación al usuario con el embed
-        await author.send("📋 **Resumen de tu deck actualizado:**")
-        await author.send(embed=embed_final)
-        await author.send(
-            "⚠️ **Importante:** Has usado tu única edición disponible.\n"
-            "Ya no podrás modificar este deck hasta que finalice el torneo."
-        )
-
-async def subir_deck_desde_edicion(ctx, author: discord.Member, codigo_torneo: str, torneo_activo: bool, mensaje_estado: str):
-    """
-    Permite subir un deck cuando el usuario está inscrito pero no tiene deck registrado.
-    """
-    # Mostrar estado del torneo
-    if not torneo_activo:
-        await author.send(
-            "⚠️ **IMPORTANTE:** El torneo ya ha comenzado.\n"
-            "Al subir tu deck ahora, **no tendrás ediciones adicionales disponibles**.\n"
-            f"ℹ️ {mensaje_estado}"
-        )
-        edited_inicial = 1  # Ya usó su "edición" al subirlo tarde
-    else:
-        await author.send(
-            f"✅ Perfecto, vamos a subir tu deck.\n"
-            f"ℹ️ {mensaje_estado}"
-        )
-        edited_inicial = 0
-
-    # 🔹 Flujo de subida
-    datos = await deck_dm_flow(ctx, author, codigo_torneo, modo="subir")
-    if not datos or len(datos) != 6:
-        log.error(f"❌ deck_dm_flow devolvió datos inesperados: {datos}")
-        await author.send("❌ Subida cancelada.")
+    # 🔒 servicios.editar_deck (lo mismo que la web) revalida dentro del lock del deck: durante el asistente por DM
+    #    el deck pudo editarse desde la web u otro !editar-deck, retirarlo un admin o terminar el torneo
+    res = await servicios.editar_deck(ctx.bot, ctx.guild, author, codigo_torneo, *datos[:5])
+    if not res.ok:
+        await author.send(f"❌ {res.mensaje}")
         return
 
-    nombre_deck, formato, archetype, decklist, sideboard, _ = datos
-
-    codigo_deck = f"{codigo_torneo}_{author.id}"
-    embed_final = decks.construir_embed(codigo_torneo, author, nombre_deck, formato, archetype, decklist, sideboard,
-                                        ediciones=edited_inicial)
-    try:
-        ok, motivo = await decks.publicar(ctx.guild, embed_final, codigo_deck)
-    except discord.HTTPException as e:
-        await author.send(f"❌ Error al publicar el deck: {e}")
-        return
-    if motivo == "ya_existe":
-        await author.send(f"❌ Ya tienes un deck subido para este torneo. Usa `!editar-deck {codigo_torneo}` si deseas modificarlo.")
-        return
-    if not ok:
-        await author.send("❌ No se encontró el canal `submitted-decks`.")
-        return
-    await author.send("✅ Tu deck ha sido registrado correctamente.")
-    await author.send(embed=embed_final)
-    if edited_inicial == 1:
-        await author.send("⚠️ **Recuerda:** Como el torneo ya comenzó, este deck no podrá ser editado.")
+    await author.send("✅ Tu deck ha sido actualizado correctamente.")
+    await author.send("📋 **Resumen de tu deck actualizado:**")
+    await author.send(embed=res.embed)
+    await author.send(
+        "⚠️ **Importante:** Has usado tu única edición disponible.\n"
+        "Ya no podrás modificar este deck hasta que finalice el torneo."
+    )
 
 async def cartas_mas_jugadas_handle(ctx, codigo_torneo: str = None, channel: str = None):
     await cartas_mas_jugadas(ctx, codigo_torneo, channel)

@@ -751,6 +751,6 @@ async def actualizar_web_handle(ctx):
 
     await ctx.author.send("🔄 Actualizando cache de torneos...")
     guild = ctx.guild
-    from utils.torneos_api import regenerar_cache  # Importación local aquí
+    from utils.api import regenerar_cache  # import local: evita ciclos
     payload = await regenerar_cache(guild)
     await ctx.author.send(f"✅ Cache actualizada con {len(payload['torneos'])} torneo(s).")

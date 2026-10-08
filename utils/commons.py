@@ -191,8 +191,8 @@ async def obtener_torneo_usuario(ctx, mensaje_inicial: str = None, complete=Fals
     # de la web (cache/torneos.json, generado con !actualizar-web). Los torneos activos son solo los suizos.
     torneos_challonge = []
     if complete:
-        from utils.torneos_api import leer_cache   # import local: evita ciclos
-        for t in (leer_cache() or {}).get("torneos", []):
+        from utils import cache_web
+        for t in (cache_web.leer() or {}).get("torneos", []):
             if solo_inscritos and not any(str(p.get("discord_id")) == str(ctx.author.id) for p in t.get("clasificacion", [])):
                 continue
             torneos_challonge.append((t["codigo"], t.get("nombre") or t["codigo"], "challonge"))
@@ -474,14 +474,14 @@ async def _ids_clasificacion(bot, guild, codigo_torneo: str) -> List[str]:
 
     torneo = await obtener_torneo_estado(bot, codigo_torneo)
     if torneo and torneo.get("tipo") == "swiss":
-        from utils.swiss_core import calcular_clasificacion
+        from utils.swiss.service import calcular_clasificacion   # import local: evita ciclos
         return [str(p["id"]) for p in await calcular_clasificacion(bot, codigo_torneo)]
     if torneo and torneo.get("tipo") == "battle":
         from utils.battle import calcular_clasificacion_battle, leer_enfrentamientos
         return [p["id"] for p in calcular_clasificacion_battle(codigo_torneo, await leer_enfrentamientos(bot, codigo_torneo))]
 
-    from utils.torneos_api import leer_cache
-    cache = leer_cache() or {}
+    from utils import cache_web
+    cache = cache_web.leer() or {}
     torneo_cache = next((t for t in cache.get("torneos", []) if t.get("codigo") == codigo_torneo), None)
     clasificacion = (torneo_cache or {}).get("clasificacion") or await calcular_clasificacion_torneo(guild, codigo_torneo)
     return [str(p["discord_id"]) for p in clasificacion if p.get("discord_id")]
@@ -789,16 +789,16 @@ async def calcular_clasificacion_torneo(guild, codigo_torneo: str):
 
 def clasificacion_desde_challonge(guild, codigo_torneo: str, participantes_raw: list, matches_raw: list):
     """Clasificación a partir de los datos ya descargados de Challonge (sin llamadas a la API)."""
-    from utils.swiss_core import calcular_estadisticas, _desempate_final   # import local: evita ciclos
+    from utils.swiss import engine
 
     nombres = {str(p["participant"]["id"]): p["participant"].get("name", "") for p in participantes_raw}
-    stats = calcular_estadisticas(rondas_desde_challonge(matches_raw), list(nombres))
+    stats = engine.calcular_estadisticas(rondas_desde_challonge(matches_raw), list(nombres))
+    orden = sorted((pid for pid in stats if pid in nombres),
+                   key=lambda pid: engine.clave_clasificacion(codigo_torneo, pid, stats[pid]))
 
     clasificacion = []
-    for pid, datos in stats.items():
-        if pid not in nombres:
-            continue
-        nombre_challonge = nombres[pid]
+    for rank, pid in enumerate(orden, 1):
+        datos, nombre_challonge = stats[pid], nombres[pid]
         miembro = guild.get_member(int(nombre_challonge)) if str(nombre_challonge).isdigit() else None
         clasificacion.append({
             "nombre": miembro.display_name if miembro else nombre_challonge,
@@ -811,14 +811,8 @@ def clasificacion_desde_challonge(guild, codigo_torneo: str, participantes_raw: 
             "wins": datos["w"],
             "losses": datos["l"],
             "draws": datos["dw"],
-            "_pid": pid,
+            "rank": rank,
         })
-
-    clasificacion.sort(key=lambda x: (-x["mp"], -x["omw"], -x["diff"], -x["buchholz"],
-                                      _desempate_final(codigo_torneo, x["_pid"])))
-    for i, p in enumerate(clasificacion, 1):
-        p["rank"] = i
-        del p["_pid"]
     return clasificacion
 
 # ============================================================
@@ -1029,25 +1023,6 @@ async def obtener_decks_por_usuario(guild, discord_id: str, limite: int = None, 
             d.pop("_mensaje", None)
     return lista
 
-# ============================================================
-# INSCRIPCIÓN WEB (soporta Swiss y Challonge)
-# ============================================================
-
-async def inscribir_usuario_web(guild, member: discord.Member, codigo_torneo: str):
-    """Inscribe al usuario desde la web en un torneo suizo (la gestión por Challonge ya no existe)."""
-    from utils.swiss_core import inscribir_jugador  # Import local para evitar ciclo
-
-    bot = guild._state._get_client()
-    estado = await leer_estado(bot)
-    torneo = next((t for t in estado.get("torneos", []) if t.get("codigo") == codigo_torneo), None)
-
-    if not torneo:
-        return False, "Ese torneo no está activo o no se encontró en el estado."
-    if torneo.get("tipo") != "swiss":
-        return False, "Las inscripciones de este torneo no se gestionan desde la web."
-
-    return await inscribir_jugador(bot, codigo_torneo, member.id, miembro=member)
-
 def tiene_rol_permitido(member: discord.Member, roles_permitidos: set):
     return any(role.name in roles_permitidos for role in member.roles)
 
@@ -1056,50 +1031,9 @@ _locks_edicion_deck = {}   # codigo_deck -> asyncio.Lock (evita dos ediciones si
 
 
 def lock_edicion_deck(codigo_deck: str) -> asyncio.Lock:
-    """Lock compartido por la web y por !editar-deck: la regla de una sola edición se comprueba y aplica dentro."""
+    """Lock de un deck (decks.publicar y servicios.editar_deck): las reglas de existencia y de una edición se comprueban dentro."""
     return _locks_edicion_deck.setdefault(codigo_deck, asyncio.Lock())
 
-
-async def editar_deck_web(guild, member: discord.Member, codigo_torneo: str, formato: str,
-                          nombre_deck: str, archetype: str, decklist: str, sideboard: str):
-    codigo_deck = f"{codigo_torneo}_{member.id}"
-    async with lock_edicion_deck(codigo_deck):
-        return await _editar_deck_web(guild, member, codigo_torneo, codigo_deck, formato,
-                                      nombre_deck, archetype, decklist, sideboard)
-
-
-async def _editar_deck_web(guild, member, codigo_torneo, codigo_deck, formato,
-                           nombre_deck, archetype, decklist, sideboard):
-    from utils import decks
-    # Misma regla que !editar-deck: una única edición, también con el torneo empezado,
-    # pero nunca sin estar inscrito ni en un torneo inexistente o finalizado
-    motivo, mensaje_validacion = await comprobar_edicion_deck(codigo_torneo, member)
-    if motivo in (EDICION_NO_EXISTE, EDICION_NO_INSCRITO, EDICION_FINALIZADO):
-        return False, mensaje_validacion.lstrip("❌ ")
-
-    deck_actual = await obtener_deck_en_canal(guild, codigo_deck)
-    if not deck_actual:
-        return False, "No se encontró tu deck para este torneo. Debes subirlo primero."
-
-    edited_actual = deck_actual.get("edited", 0)
-
-    # 🔒 BLOQUEO GLOBAL: Si ya editó una vez, no puede volver a editar (sin importar el estado)
-    if edited_actual >= 1:
-        return False, (
-            "No puedes editar tu deck: ya usaste tu única edición disponible (1/1).\n"
-            f"{mensaje_validacion}"
-        )
-
-    embed_final = decks.construir_embed(codigo_torneo, member, nombre_deck, formato, archetype, decklist, sideboard,
-                                        ediciones=edited_actual + 1, actualizado=True, via_web=True)
-    try:
-        await deck_actual["mensaje"].edit(embed=embed_final)
-    except discord.NotFound:
-        return False, "No se pudo actualizar el deck (el mensaje original ya no existe). Contacta con un administrador."
-    except discord.Forbidden:
-        return False, "No tengo permisos para editar el mensaje del deck."
-
-    return True, "✅ Deck actualizado correctamente. Has usado tu única edición disponible."
 
 def tiene_rol_permitido(member: discord.Member, roles_permitidos: set):
     return any(role.name in roles_permitidos for role in member.roles)
