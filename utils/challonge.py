@@ -37,6 +37,8 @@ def _ruta_torneo(codigo: str, recurso: str) -> str:
 
 
 async def _get(session: aiohttp.ClientSession, ruta: str, params: dict = None):
+    if not config.CHALLONGE_USERNAME or not config.CHALLONGE_API_KEY:
+        raise ErrorChallonge("Credenciales de Challonge no configuradas (CHALLONGE_USERNAME / CHALLONGE_API_KEY)")
     try:
         async with session.get(f"{API_BASE}{ruta}", params=params, auth=_auth()) as resp:
             if resp.status != 200:

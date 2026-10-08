@@ -58,107 +58,84 @@ async def _obtener_objetivo_sancion(ctx, miembro, accion: str):
     return miembro
 
 
-async def aplicar_strike(ctx, miembro: discord.Member):
-     # Intentar eliminar el mensaje del canal público
+MENSAJE_OUT = (
+    "Escúchame bien, campeón. No fue solo la pinta, ni que vinieras en grupo, ni que te colaras en la fila. Fue todo. "
+    "La energía, la actitud, el rollo. Este sitio tiene su código, su vibra... y tú no venías ni en la misma frecuencia.\n\n"
+    "Así que no, no vas a entrar. No hoy, no mañana, no el próximo eclipse lunar. "
+    "Puedes venir disfrazado de unicornio o vestido en látex con lentejuelas bendecidas por los dioses del techno… "
+    "pero ya cruzaste la línea.\n\n"
+    "Este club no es para todos. Es para los que son. Y tú... tú simplemente no eres."
+)
+
+# !strike y !out son la misma operación con distinto rol, mensaje y registro (antes, dos copias que divergían)
+SANCIONES = {
+    "strike": {"rol": canales.ROL_STRIKE, "mensaje": lambda: get_mensaje_strike(),
+               "motivo": "Strike manual asignado por moderador.", "hecho": "ha recibido un **Strike**", "registrar_en_blacklist": False},
+    "out": {"rol": canales.ROL_OUT, "mensaje": lambda: MENSAJE_OUT,
+            "motivo": "Out manual asignado por moderador.", "hecho": "ha sido expulsado de la comunidad", "registrar_en_blacklist": True},
+}
+
+
+async def _aplicar_sancion(ctx, miembro, accion: str):
+    """Asigna el rol de la sanción, avisa al sancionado por DM y, si es un Out, lo registra en #blacklist."""
     await borrar_mensaje_seguro(ctx)
-    if not await validar_canal_correcto(ctx, canales.COMANDOS, "!strike"):
+    if not await validar_canal_correcto(ctx, canales.COMANDOS, f"!{accion}"):
         return
-
-    servidor = ctx.guild
-
-    # Verificar permisos
     if not await moderador_permisos_handle(ctx):
-      return
-
-    miembro = await _obtener_objetivo_sancion(ctx, miembro, "strike")
+        return
+    miembro = await _obtener_objetivo_sancion(ctx, miembro, accion)
     if miembro is None:
         return
 
-    rol_strike = canales.get_rol(servidor, canales.ROL_STRIKE)
-    if not rol_strike:
-        await ctx.send("⚠️ El rol `Strike` no existe en el servidor.")
+    sancion = SANCIONES[accion]
+    autor = ctx.author
+    rol = canales.get_rol(ctx.guild, sancion["rol"])
+    if not rol:
+        await autor.send(f"⚠️ El rol `{sancion['rol']}` no existe en el servidor.")    # por DM, no en el canal
         return
-
-    if rol_strike in miembro.roles:
-        await ctx.author.send(f"ℹ️ {miembro.mention} ya tiene el rol `Strike`.")
+    if rol in miembro.roles:
+        await autor.send(f"ℹ️ {miembro.mention} ya tiene el rol `{sancion['rol']}`.")
         return
 
     try:
-        await miembro.add_roles(rol_strike, reason="Strike manual asignado por Moderador.")
-        await miembro.send(get_mensaje_strike())
+        await miembro.add_roles(rol, reason=sancion["motivo"])
     except discord.Forbidden:
-        await ctx.author.send("❌ No tengo permisos para asignar el rol o enviar mensaje privado.")
+        await autor.send(f"❌ No tengo permisos para asignar el rol `{sancion['rol']}`. Revisa la jerarquía de roles.")
         return
 
-    await ctx.author.send(f"✅ {miembro.mention} ha recibido un **Strike**.")
-    
-    
-    # canal_anuncios = ctx.guild.get_channel(1387389356464934993)
-    # await canal_anuncios.send(f"⚠️ Hemos decidido que {miembro.mention} Permanezca una semana en el Hielo, la proxima vez le invitaremos a que abandone The Klub")
+    # El DM va aparte: si el sancionado tiene los DMs cerrados, la sanción ya está aplicada igualmente
+    try:
+        await miembro.send(sancion["mensaje"]())
+    except discord.HTTPException:
+        await autor.send(f"⚠️ {miembro.mention} no tiene los mensajes privados habilitados (la sanción se ha aplicado).")
+
+    await autor.send(f"✅ {miembro.mention} {sancion['hecho']}.")
+    if sancion["registrar_en_blacklist"]:
+        await _registrar_en_blacklist(ctx, miembro)
+
+
+async def _registrar_en_blacklist(ctx, miembro):
+    """Ficha en #blacklist. El campo "ID" es el que usa la bienvenida para no dejar volver a quien recibió !out."""
+    canal_info = canales.get_canal(ctx.guild, canales.BLACKLIST)
+    if not canal_info:
+        return
+    embed = discord.Embed(title="👋 Usuario expulsado del servidor", color=discord.Color.red())
+    embed.add_field(name="Nombre", value=str(miembro), inline=True)                  # antes "nombre#0" con los usuarios nuevos
+    embed.add_field(name="ID", value=miembro.id, inline=True)
+    embed.add_field(name="Aplicado por", value=ctx.author.mention, inline=True)
+    embed.add_field(name="Fecha de creación", value=miembro.created_at.strftime("%d/%m/%Y %H:%M:%S"), inline=False)
+    embed.add_field(name="Fecha de unión", value=miembro.joined_at.strftime("%d/%m/%Y %H:%M:%S") if miembro.joined_at else "Desconocida", inline=False)
+    embed.set_thumbnail(url=miembro.display_avatar.url)
+    await canal_info.send(embed=embed)
+
+
+async def aplicar_strike(ctx, miembro: discord.Member):
+    await _aplicar_sancion(ctx, miembro, "strike")
+
 
 async def aplicar_out(ctx, miembro: discord.Member):
-     # Intentar eliminar el mensaje del canal público
-    await borrar_mensaje_seguro(ctx)
-    if not await validar_canal_correcto(ctx, canales.COMANDOS, "!out"):
-        return
-        
-    servidor = ctx.guild
-    
-    # Verificar permisos
-    if not await moderador_permisos_handle(ctx):
-      return
+    await _aplicar_sancion(ctx, miembro, "out")
 
-    miembro = await _obtener_objetivo_sancion(ctx, miembro, "out")
-    if miembro is None:
-        return
-    
-    rol_out = canales.get_rol(servidor, canales.ROL_OUT)
-    if not rol_out:
-        await ctx.author.send("⚠️ El rol `Out` no existe en el servidor.")
-        return
-
-    if rol_out in miembro.roles:
-        await ctx.author.send(f"ℹ️ {miembro.mention} ya tiene el rol `Out`.")
-        return
-
-    try:
-        await miembro.add_roles(rol_out, reason="Out manual asignado por moderador.")
-    except discord.Forbidden:
-        await ctx.author.send("❌ No tengo permisos para asignar el rol. Revisa la jerarquía de roles.")
-        return
-
-    mensaje_out = (
-        "Escúchame bien, campeón. No fue solo la pinta, ni que vinieras en grupo, ni que te colaras en la fila. Fue todo. "
-        "La energía, la actitud, el rollo. Este sitio tiene su código, su vibra... y tú no venías ni en la misma frecuencia.\n\n"
-        "Así que no, no vas a entrar. No hoy, no mañana, no el próximo eclipse lunar. "
-        "Puedes venir disfrazado de unicornio o vestido en látex con lentejuelas bendecidas por los dioses del techno… "
-        "pero ya cruzaste la línea.\n\n"
-        "Este club no es para todos. Es para los que son. Y tú... tú simplemente no eres."
-    )
-
-    try:
-        await miembro.send(mensaje_out)
-    except discord.Forbidden:
-        await ctx.author.send(f"⚠️ {miembro.mention} no tiene los mensajes privados habilitados.")
-
-    await ctx.author.send(f"✅ {miembro.mention} ha sido expulsado de la comunidad.")
-
-    canal_info = canales.get_canal(ctx.guild, canales.BLACKLIST)
-    if canal_info:
-        embed = discord.Embed(
-            title="👋 Usuario expulsado del servidor",
-            color=discord.Color.red()
-        )
-        embed.add_field(name="Nombre", value=f"{miembro.name}#{miembro.discriminator}", inline=True)
-        embed.add_field(name="ID", value=miembro.id, inline=True)
-        embed.add_field(name="Fecha de creación", value=miembro.created_at.strftime("%d/%m/%Y %H:%M:%S"), inline=False)
-        embed.add_field(name="Fecha de unión", value=miembro.joined_at.strftime("%d/%m/%Y %H:%M:%S") if miembro.joined_at else "Desconocida", inline=False)
-        embed.set_thumbnail(url=miembro.display_avatar.url)
-        await canal_info.send(embed=embed)
-    
-    
-    # canal_anuncios = ctx.guild.get_channel(1387389356464934993)
-    # await canal_anuncios.send(f"⚠️ Hemos invitado a abandonar el servidor a {miembro.mention}, ya no podra volver a entrar a The Klub.")
 
 async def eliminar_mensajes(ctx, canal: discord.TextChannel = None, cantidad: int = None, orden: str = None, incluir_fijados: bool = None):
     await borrar_mensaje_seguro(ctx)

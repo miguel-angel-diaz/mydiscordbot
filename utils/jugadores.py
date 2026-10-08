@@ -6,7 +6,6 @@ from collections import Counter
 from datetime import datetime, timedelta
 import io
 import re
-import config
 
 from utils import dm
 from utils import canales
@@ -15,6 +14,7 @@ from utils.torneos_estado import generar_codigo_unico, obtener_torneo_estado
 
 from utils.admin import moderador_permisos_handle
 from utils import decks
+from utils import ayuda
 
 from utils.commons import (
     borrar_mensaje_seguro,
@@ -39,7 +39,6 @@ from utils.commons import (
     EDICION_ABIERTO
 )
 
-import config
 
 log = logging.getLogger(__name__)
 
@@ -541,7 +540,7 @@ async def mis_comandos_handle(ctx):
     # 1️⃣ Filtrar comandos disponibles según los roles del autor
     roles_usuario = [rol.name for rol in author.roles]
     comandos_disponibles = []
-    for comando in config.COMANDOS_INFO:
+    for comando in ayuda.comandos_info(ctx.bot):
         if any(rol in roles_usuario for rol in comando["roles_permitidos"]):
             comandos_disponibles.append(comando)
 
@@ -675,7 +674,7 @@ async def enviar_comandos_a_miembro(member: discord.Member):
     roles_usuario = [rol.name for rol in member.roles]
     comandos_disponibles = []
 
-    for comando in config.COMANDOS_INFO:
+    for comando in ayuda.comandos_info():
         roles_permitidos = comando["roles_permitidos"]
         if any(rol in roles_usuario for rol in roles_permitidos):
             comandos_disponibles.append(f"!{comando['comando']} - {comando['descripcion']}")
@@ -722,274 +721,190 @@ async def enviar_comandos_a_miembro(member: discord.Member):
 INTENTOS_LISTA = 3   # veces que se vuelve a pedir la decklist o el sideboard si no son válidos
 
 
+async def _pedir_con_reintentos(ctx, author, validar, timeout: float, reintento: str):
+    """
+    Espera respuestas hasta que `validar` (de utils/decks.py) la acepte, como mucho INTENTOS_LISTA veces.
+    Devuelve el valor limpio o None si se agotan los intentos (avisando). El tiempo agotado se propaga.
+    """
+    for intento in range(INTENTOS_LISTA):
+        try:
+            return validar((await dm.esperar_respuesta(ctx.bot, author, timeout=timeout)).content)
+        except decks.DeckInvalido as e:
+            if intento == INTENTOS_LISTA - 1:
+                await author.send(f"❌ {e.mensaje}. Cancelando.")
+                return None
+            await author.send(f"❌ {e.mensaje}. {reintento}")
+    return None
+
+
+async def _pedir_formato(ctx, author, formato_torneo: str) -> str:
+    await author.send(
+        f"2️⃣ ¿Cuál es el **formato** del torneo? (Premodern / Pauper)\n"
+        f"*(Por defecto: {formato_torneo})*"
+    )
+    while True:
+        msg = await dm.esperar_respuesta(ctx.bot, author, timeout=120.0)
+        formato = decks.formato(msg.content) if msg.content.strip() else formato_torneo
+        if formato:
+            await author.send(f"✅ Formato seleccionado: **{formato}**.")
+            return formato
+        await author.send("❌ Formato no reconocido. Escribe `Premodern` o `Pauper`.")
+
+
+async def _pedir_arquetipo(ctx, author, formato: str, pregunta: str) -> str:
+    """
+    Arquetipo de la lista del formato. Si no es exacto se ofrecen sugerencias: se puede responder con su número o
+    escribir otro nombre, que se procesa directamente. Única versión para subir y editar (la de editar trataba el
+    número como un nombre tras unas segundas sugerencias). El tiempo agotado se propaga.
+    """
+    await author.send(pregunta)
+    pendiente = None   # nombre escrito tras ver sugerencias: se procesa sin pedirlo otra vez
+    while True:
+        if pendiente is None:
+            escrito = (await dm.esperar_respuesta(ctx.bot, author, timeout=120.0)).content.strip()
+        else:
+            escrito, pendiente = pendiente, None
+        exacto, sugerencias = decks.arquetipo(escrito, formato)
+        if exacto:
+            await author.send(f"✅ Arquetipo reconocido como **{exacto}**.")
+            return exacto
+        if not sugerencias:
+            await author.send("❌ No se reconoció el arquetipo.\nIntenta escribirlo de nuevo.")
+            continue
+
+        opciones_texto = "\n".join(f"{i + 1}. {s}" for i, s in enumerate(sugerencias))
+        await author.send(
+            f"🤔 No encontré un arquetipo exacto, pero aquí tienes algunas sugerencias:\n"
+            f"{opciones_texto}\n\n"
+            "👉 Escribe el **número** del arquetipo correcto o vuelve a intentarlo escribiendo otro nombre."
+        )
+        contenido = (await dm.esperar_respuesta(ctx.bot, author, timeout=120.0)).content.strip()
+        if not contenido.isdigit():
+            pendiente = contenido
+            continue
+        indice = dm.indice_elegido(contenido, len(sugerencias))
+        if indice is None:
+            await author.send("❌ Número fuera de rango. Escribe el nombre del arquetipo de nuevo:")
+            continue
+        await author.send(f"✅ Arquetipo seleccionado: **{sugerencias[indice]}**.")
+        return sugerencias[indice]
+
+
+async def _subir_deck_dm(ctx, author, formato_torneo: str):
+    try:
+        await author.send("1️⃣ Nombre de tu deck:")
+        nombre_deck = await _pedir_con_reintentos(ctx, author, decks.nombre_deck, 120.0, "Escríbelo de nuevo:")
+        if nombre_deck is None:
+            return None
+        formato = await _pedir_formato(ctx, author, formato_torneo)
+        archetype = await _pedir_arquetipo(
+            ctx, author, formato,
+            "3️⃣ ¿Cuál es el **archetype** de tu deck?\n"
+            "(Puedes escribir el nombre exacto o algo parecido, te ayudaré a encontrarlo)")
+
+        # Decklist y sideboard se vuelven a pedir si no cumplen las reglas, sin perder lo anterior
+        await author.send("4️⃣ Sube tu **decklist** (solo el Main, mínimo 60 cartas):")
+        decklist = await _pedir_con_reintentos(ctx, author, decks.decklist, 600.0, "Envíala de nuevo:")
+        if decklist is None:
+            return None
+        await author.send("5️⃣ Sube tu **sideboard** (máx 15 cartas, o 'N/A'):")
+        sideboard = await _pedir_con_reintentos(ctx, author, decks.sideboard, 300.0, "Envíala de nuevo o escribe 'N/A':")
+        if sideboard is None:
+            return None
+    except asyncio.TimeoutError:
+        await author.send("⌛ Se acabó el tiempo. El proceso fue cancelado.")
+        return None
+    return nombre_deck, formato, archetype, decklist, sideboard, None
+
+
+async def _mostrar_deck_actual(author, codigo_torneo, codigo_deck, formato, nombre_deck, archetype, decklist, sideboard):
+    dm_embed = discord.Embed(
+        title=f"🃏 Deck actual: {nombre_deck}",
+        description=f"**Código del deck:** `{codigo_deck}`\n**Torneo:** `{codigo_torneo}`\n**Formato:** {formato}",
+        color=discord.Color.orange()
+    )
+    dm_embed.add_field(name="Jugador", value=f"{author} (ID: {author.id})", inline=False)
+    dm_embed.add_field(name="Archetype", value=archetype, inline=False)
+    anadir_campos_lista(dm_embed, "Decklist", decklist)
+    anadir_campos_lista(dm_embed, "Sideboard", sideboard)
+    dm_embed.set_footer(text="Este es un registro privado de tu deck.")
+    await author.send(embed=dm_embed)
+
+
+async def _editar_campo(ctx, author, pregunta: str, validar, timeout: float, que: str):
+    """Pide un campo y lo devuelve validado, o None si no es válido o se agota el tiempo (avisando)."""
+    await author.send(pregunta)
+    try:
+        return validar((await dm.esperar_respuesta(ctx.bot, author, timeout=timeout)).content)
+    except decks.DeckInvalido as e:
+        await author.send(f"❌ {e.mensaje}. No se actualizó{que}.")
+    except asyncio.TimeoutError:
+        await author.send(f"⏰ Tiempo agotado. No se actualizó{que}.")
+    return None
+
+
+async def _editar_deck_dm(ctx, author, codigo_torneo: str, formato_torneo: str):
+    codigo_deck = f"{codigo_torneo}_{author.id}"
+    deck_actual = await obtener_deck_en_canal(ctx.guild, codigo_deck)
+    if not deck_actual:
+        await author.send("❌ No se encontró tu deck en `submitted-decks`. Debes subirlo primero.")
+        return None
+
+    nombre_deck = deck_actual["nombre_deck"]
+    archetype = deck_actual["archetype"]
+    decklist = deck_actual["decklist"]
+    sideboard = deck_actual["sideboard"]
+    formato = formato_torneo           # en edición se usa el formato del torneo
+
+    while True:
+        await _mostrar_deck_actual(author, codigo_torneo, codigo_deck, formato, nombre_deck, archetype, decklist, sideboard)
+        await author.send(
+            "✏️ ¿Qué deseas editar?\n"
+            "1️⃣ Nombre del deck\n2️⃣ Archetype\n3️⃣ Decklist\n4️⃣ Sideboard\n"
+            "Escribe el número correspondiente o `ok` si está todo correcto."
+        )
+        try:
+            respuesta = await dm.esperar_respuesta(ctx.bot, author, timeout=300.0)
+        except asyncio.TimeoutError:
+            await author.send("⏰ No respondiste a tiempo. Se mantiene tu deck sin cambios.")
+            break
+
+        opcion = respuesta.content.strip().lower()
+        if opcion in ["ok", "sí", "si", "confirmar"]:
+            break
+        if opcion == "1":
+            nombre_deck = await _editar_campo(ctx, author, "Escribe el nuevo **nombre del deck**:", decks.nombre_deck,
+                                              120.0, " el nombre") or nombre_deck
+        elif opcion == "2":
+            try:
+                archetype = await _pedir_arquetipo(
+                    ctx, author, formato,
+                    "2️⃣ ¿Cuál es el **archetype** de tu deck?\n"
+                    "(Puedes escribir el nombre exacto o algo parecido, te ayudaré a encontrarlo)")
+            except asyncio.TimeoutError:
+                await author.send("⏰ Tiempo agotado. Cancelando selección de arquetipo.")
+                return None
+        elif opcion == "3":
+            decklist = await _editar_campo(ctx, author, "Sube la nueva **decklist** (Main, mínimo 60 cartas):",
+                                           decks.decklist, 600.0, " la decklist") or decklist
+        elif opcion == "4":
+            sideboard = await _editar_campo(ctx, author, "Sube la nueva **sideboard** (máx 15 cartas, o 'N/A'):",
+                                            decks.sideboard, 300.0, " la sideboard") or sideboard
+
+    return nombre_deck, formato, archetype, decklist, sideboard, deck_actual["mensaje"]
+
+
 async def deck_dm_flow(ctx, author: discord.Member, codigo_torneo: str, modo: str = "subir"):
     """
-    Flujo de DM para subir o editar un deck.
-    Retorna: nombre_deck, formato, archetype, decklist, sideboard, mensaje_deck
+    Asistente por DM para subir o editar un deck (las reglas son las de utils/decks.py).
+    Devuelve (nombre_deck, formato, archetype, decklist, sideboard, mensaje_deck) o None si se cancela.
     """
-
-    await author.send(f"📝 Vamos a {'subir tu deck' if modo=='subir' else 'editar tu deck'}.")
-
-    
+    await author.send(f"📝 Vamos a {'subir tu deck' if modo == 'subir' else 'editar tu deck'}.")
     torneo = await obtener_torneo_estado(ctx.bot, codigo_torneo)
     formato_torneo = torneo.get("formato", "Premodern") if torneo else "Premodern"
-
     if modo == "subir":
-        try:
-            await author.send("1️⃣ Nombre de tu deck:")
-            for intento in range(INTENTOS_LISTA):
-                try:
-                    nombre_deck = decks.nombre_deck((await dm.esperar_respuesta(ctx.bot, author, timeout=120.0)).content)
-                    break
-                except decks.DeckInvalido as e:
-                    if intento == INTENTOS_LISTA - 1:
-                        await author.send(f"❌ {e.mensaje}. Cancelando.")
-                        return None
-                    await author.send(f"❌ {e.mensaje}. Escríbelo de nuevo:")
-
-            # 2️⃣ Preguntar formato
-            await author.send(
-                f"2️⃣ ¿Cuál es el **formato** del torneo? (Premodern / Pauper)\n"
-                f"*(Por defecto: {formato_torneo})*"
-            )
-            while True:
-                msg = await dm.esperar_respuesta(ctx.bot, author, timeout=120.0)
-                formato = decks.formato(msg.content) if msg.content.strip() else formato_torneo
-                if formato:
-                    break
-                await author.send("❌ Formato no reconocido. Escribe `Premodern` o `Pauper`.")
-            await author.send(f"✅ Formato seleccionado: **{formato}**.")
-
-            # 3️⃣ Preguntar arquetipo según el formato
-            await author.send(
-                f"3️⃣ ¿Cuál es el **archetype** de tu deck?\n"
-                f"(Puedes escribir el nombre exacto o algo parecido, te ayudaré a encontrarlo)"
-            )
-            pendiente = None   # nombre escrito tras ver sugerencias: se procesa sin pedirlo otra vez
-            while True:
-                if pendiente is None:
-                    msg = await dm.esperar_respuesta(ctx.bot, author, timeout=120.0)
-                    archetype_raw = msg.content.strip()
-                else:
-                    archetype_raw, pendiente = pendiente, None
-                exacto, sugerencias = decks.arquetipo(archetype_raw, formato)
-
-                if not sugerencias:
-                    await author.send(
-                        "❌ No se reconoció el arquetipo.\n"
-                        "Intenta escribirlo de nuevo."
-                    )
-                    continue
-
-                if exacto:
-                    archetype = exacto
-                    await author.send(f"✅ Arquetipo reconocido como **{archetype}**.")
-                    break
-
-                opciones_texto = "\n".join([f"{i+1}. {s}" for i, s in enumerate(sugerencias)])
-                await author.send(
-                    f"🤔 No encontré un arquetipo exacto, pero aquí tienes algunas sugerencias:\n"
-                    f"{opciones_texto}\n\n"
-                    "👉 Escribe el **número** del arquetipo correcto o vuelve a intentarlo escribiendo otro nombre."
-                )
-
-                try:
-                    msg_opcion = await dm.esperar_respuesta(ctx.bot, author, timeout=120.0)
-                    contenido = msg_opcion.content.strip()
-                    if contenido.isdigit():
-                        indice = int(contenido) - 1
-                        if 0 <= indice < len(sugerencias):
-                            archetype = sugerencias[indice]
-                            await author.send(f"✅ Arquetipo seleccionado: **{archetype}**.")
-                            break
-                        await author.send("❌ Número fuera de rango. Escribe el nombre del arquetipo de nuevo:")
-                    else:
-                        pendiente = contenido
-                        continue
-                except asyncio.TimeoutError:
-                    await author.send("⏰ Tiempo agotado. Cancelando selección de arquetipo.")
-                    return None
-
-            # 4️⃣ Decklist (se vuelve a pedir si no llega a 60 cartas, sin perder lo anterior)
-            await author.send("4️⃣ Sube tu **decklist** (solo el Main, mínimo 60 cartas):")
-            for intento in range(INTENTOS_LISTA):
-                try:
-                    decklist = decks.decklist((await dm.esperar_respuesta(ctx.bot, author, timeout=600.0)).content)
-                    break
-                except decks.DeckInvalido as e:
-                    if intento == INTENTOS_LISTA - 1:
-                        await author.send(f"❌ {e.mensaje}. Cancelando.")
-                        return None
-                    await author.send(f"❌ {e.mensaje}. Envíala de nuevo:")
-
-            # 5️⃣ Sideboard (máx. 15 cartas, igual que al editar)
-            await author.send("5️⃣ Sube tu **sideboard** (máx 15 cartas, o 'N/A'):")
-            for intento in range(INTENTOS_LISTA):
-                try:
-                    sideboard = decks.sideboard((await dm.esperar_respuesta(ctx.bot, author, timeout=300.0)).content)
-                    break
-                except decks.DeckInvalido as e:
-                    if intento == INTENTOS_LISTA - 1:
-                        await author.send(f"❌ {e.mensaje}. Cancelando.")
-                        return None
-                    await author.send(f"❌ {e.mensaje}. Envíala de nuevo o escribe 'N/A':")
-            mensaje_deck = None
-        except asyncio.TimeoutError:
-            await author.send("⌛ Se acabó el tiempo. El proceso fue cancelado.")
-            return None
-
-    else:  # modo "editar"
-        codigo_deck = f"{codigo_torneo}_{author.id}"
-        deck_actual = await obtener_deck_en_canal(ctx.guild, codigo_deck)
-        if not deck_actual:
-            await author.send("❌ No se encontró tu deck en `submitted-decks`. Debes subirlo primero.")
-            return None
-
-        nombre_deck = deck_actual["nombre_deck"]
-        archetype = deck_actual["archetype"]
-        decklist = deck_actual["decklist"]
-        sideboard = deck_actual["sideboard"]
-        mensaje_deck = deck_actual["mensaje"]
-        # En edición usamos el formato del torneo
-        formato = formato_torneo
-
-        while True:
-            dm_embed = discord.Embed(
-                title=f"🃏 Deck actual: {nombre_deck}",
-                description=f"**Código del deck:** `{codigo_deck}`\n**Torneo:** `{codigo_torneo}`\n**Formato:** {formato}",
-                color=discord.Color.orange()
-            )
-            dm_embed.add_field(name="Jugador", value=f"{author} (ID: {author.id})", inline=False)
-            dm_embed.add_field(name="Archetype", value=archetype, inline=False)
-            anadir_campos_lista(dm_embed, "Decklist", decklist)
-            anadir_campos_lista(dm_embed, "Sideboard", sideboard)
-            dm_embed.set_footer(text="Este es un registro privado de tu deck.")
-            await author.send(embed=dm_embed)
-
-            await author.send(
-                "✏️ ¿Qué deseas editar?\n"
-                "1️⃣ Nombre del deck\n2️⃣ Archetype\n3️⃣ Decklist\n4️⃣ Sideboard\n"
-                "Escribe el número correspondiente o `ok` si está todo correcto."
-            )
-
-            try:
-                respuesta = await dm.esperar_respuesta(ctx.bot, author, timeout=300.0)
-            except asyncio.TimeoutError:
-                await author.send("⏰ No respondiste a tiempo. Se mantiene tu deck sin cambios.")
-                break
-
-            contenido = respuesta.content.strip().lower()
-            if contenido in ["ok", "sí", "si", "confirmar"]:
-                break
-
-            elif contenido == "1":
-                await author.send("Escribe el nuevo **nombre del deck**:")
-                try:
-                    msg = await dm.esperar_respuesta(ctx.bot, author, timeout=120.0)
-                    nombre_deck = decks.nombre_deck(msg.content)
-                except decks.DeckInvalido as e:
-                    await author.send(f"❌ {e.mensaje}. No se actualizó el nombre.")
-                except asyncio.TimeoutError:
-                    await author.send("⏰ Tiempo agotado. No se actualizó el nombre.")
-
-            elif contenido == "2":
-                await author.send(
-                    "2️⃣ ¿Cuál es el **archetype** de tu deck?\n"
-                    "(Puedes escribir el nombre exacto o algo parecido, te ayudaré a encontrarlo)"
-                )
-
-                while True:
-                    try:
-                        msg = await dm.esperar_respuesta(ctx.bot, author, timeout=120.0)
-                    except asyncio.TimeoutError:
-                        await author.send("⏰ Tiempo agotado. Cancelando selección de arquetipo.")
-                        return None
-
-                    archetype_raw = msg.content.strip()
-                    _, sugerencias = decks.arquetipo(archetype_raw, formato)
-
-                    if not sugerencias:
-                        await author.send(
-                            f"❌ No he encontrado ningún arquetipo que coincida con **{archetype_raw}**.\n"
-                            "🔍 Puedes intentar escribirlo de otra forma."
-                        )
-                        continue
-
-                    coincidencia_exacta = next((s for s in sugerencias if s.lower() == archetype_raw.lower()), None)
-                    if coincidencia_exacta:
-                        archetype = coincidencia_exacta
-                        await author.send(f"✅ Arquetipo reconocido como **{archetype}**.")
-                        break
-
-                    opciones_texto = "\n".join([f"{i+1}. {s}" for i, s in enumerate(sugerencias)])
-                    await author.send(
-                        f"🤔 No encontré una coincidencia exacta, pero aquí tienes algunas opciones similares:\n"
-                        f"{opciones_texto}\n\n"
-                        "👉 Escribe el **número** del arquetipo correcto o directamente el **nombre completo**."
-                    )
-
-                    try:
-                        msg_opcion = await dm.esperar_respuesta(ctx.bot, author, timeout=120.0)
-                    except asyncio.TimeoutError:
-                        await author.send("⏰ Tiempo agotado. Cancelando selección de arquetipo.")
-                        return None
-
-                    respuesta = msg_opcion.content.strip()
-
-                    if respuesta.isdigit():
-                        indice = int(respuesta) - 1
-                        if 0 <= indice < len(sugerencias):
-                            archetype = sugerencias[indice]
-                            await author.send(f"✅ Arquetipo seleccionado: **{archetype}**.")
-                            break
-                        else:
-                            await author.send("❌ Número fuera de rango. Intenta de nuevo.")
-                            continue
-
-                    nuevo_intento = respuesta
-                    _, sugerencias_nuevas = decks.arquetipo(nuevo_intento, formato)
-
-                    if not sugerencias_nuevas:
-                        await author.send(
-                            f"❌ No se encontró ningún arquetipo que coincida con **{nuevo_intento}**."
-                        )
-                        continue
-
-                    coincidencia_exacta = next((s for s in sugerencias_nuevas if s.lower() == nuevo_intento.lower()), None)
-                    if coincidencia_exacta:
-                        archetype = coincidencia_exacta
-                        await author.send(f"✅ Arquetipo reconocido como **{archetype}**.")
-                        break
-                    else:
-                        opciones_texto = "\n".join([f"{i+1}. {s}" for i, s in enumerate(sugerencias_nuevas)])
-                        await author.send(
-                            f"❌ No hay coincidencia exacta, pero encontré estas sugerencias:\n"
-                            f"{opciones_texto}\n"
-                            "👉 Escribe el **número** del arquetipo correcto o vuelve a intentarlo."
-                        )
-                        continue
-
-            elif contenido == "3":
-                await author.send("Sube la nueva **decklist** (Main, mínimo 60 cartas):")
-                try:
-                    msg = await dm.esperar_respuesta(ctx.bot, author, timeout=600.0)
-                    decklist = decks.decklist(msg.content)
-                except decks.DeckInvalido as e:
-                    await author.send(f"❌ {e.mensaje}. No se actualizó.")
-                except asyncio.TimeoutError:
-                    await author.send("⏰ Tiempo agotado. No se actualizó la decklist.")
-
-            elif contenido == "4":
-                await author.send("Sube la nueva **sideboard** (máx 15 cartas, o 'N/A'):")
-                try:
-                    msg = await dm.esperar_respuesta(ctx.bot, author, timeout=300.0)
-                    sideboard = decks.sideboard(msg.content)
-                except decks.DeckInvalido as e:
-                    await author.send(f"❌ {e.mensaje}. No se actualizó.")
-                except asyncio.TimeoutError:
-                    await author.send("⏰ Tiempo agotado. No se actualizó la sideboard.")
-
-    return nombre_deck, formato, archetype, decklist, sideboard, mensaje_deck
+        return await _subir_deck_dm(ctx, author, formato_torneo)
+    return await _editar_deck_dm(ctx, author, codigo_torneo, formato_torneo)
 
 async def submitted_deck_handle(ctx, codigo_torneo: str = None):
     await borrar_mensaje_seguro(ctx)

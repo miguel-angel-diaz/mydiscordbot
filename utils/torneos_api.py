@@ -1368,6 +1368,56 @@ async def _rondas_challonge_web(guild, participantes: list, partidos: list) -> l
             for r in sorted(rondas_dict)]
 
 
+async def _rondas_swiss_web(guild, torneo_codigo: str) -> list:
+    """Rondas de un torneo suizo para la web (nombres desde la caché de miembros)."""
+    rondas_data = await leer_rondas(_bot_instance, torneo_codigo)
+    resultado = []
+    for ronda in (rondas_data or {}).get("rondas", []):
+        partidos = []
+        for emp in ronda.get("emparejamientos", []):
+            j1, j2 = emp.get("j1"), emp.get("j2")
+            partido = {"jugador1": await nombre_miembro(guild, j1, f"Usuario {j1}"), "jugador1_id": j1}
+            if j2 is None:
+                partido.update({"jugador2": None, "jugador2_id": None, "resultado": "BYE"})
+            else:
+                partido.update({"jugador2": await nombre_miembro(guild, j2, f"Usuario {j2}"), "jugador2_id": j2,
+                                "resultado": emp.get("resultado") or None})
+            partidos.append(partido)
+        resultado.append({"ronda": ronda.get("numero"), "completa": ronda.get("completa", False), "partidos": partidos})
+    return resultado
+
+
+async def _rondas_challonge_para_web(guild, torneo_codigo: str, torneo: dict):
+    """
+    Rondas de un torneo antiguo de Challonge: de la caché si tiene partidos y participantes; si no, se piden a
+    Challonge (solo para torneos nuestros) y se guardan. Devuelve la respuesta web.
+    """
+    torneo_cache = next((t for t in (leer_cache() or {}).get("torneos", []) if t.get("codigo") == torneo_codigo), None)
+    if torneo_cache and torneo_cache.get("matches") and torneo_cache.get("participants"):
+        rondas = await _rondas_challonge_web(guild, torneo_cache["participants"], torneo_cache["matches"])
+        return web.json_response({"rondas": rondas})
+
+    # Un torneo propio que no es suizo (Battle Royale) no tiene rondas que mostrar ni está en Challonge
+    if torneo is not None and torneo.get("tipo") not in (None, "challonge"):
+        return web.json_response({"rondas": []})
+    # Solo se consulta Challonge para torneos nuestros (en el estado del bot o ya en caché);
+    # cualquier otro código devuelve vacío y no se escribe nada en la caché
+    if torneo is None and torneo_cache is None:
+        return web.json_response({"rondas": []})
+
+    try:
+        participants_data, matches_data = await challonge.participantes_y_partidos(torneo_codigo)
+    except challonge.ErrorChallonge as e:
+        log.warning(f"⚠️ torneo-enfrentamientos {torneo_codigo}: {e}")
+        return web.json_response({"error": "No se pudieron obtener los enfrentamientos"}, status=503)
+    participantes = challonge.participantes_simplificados(participants_data)
+    partidos = challonge.partidos_simplificados(matches_data)
+    await cache_web.actualizar_torneo(
+        torneo_codigo, {"participants": participantes, "matches": partidos},
+        nuevo=lambda: {"codigo": torneo_codigo, "nombre": (torneo or {}).get("nombre", torneo_codigo)})
+    return web.json_response({"rondas": await _rondas_challonge_web(guild, participantes, partidos)})
+
+
 async def api_torneo_enfrentamientos(request):
     token = obtener_token(request)
     torneo_codigo = v.codigo_torneo(request.query.get("torneo"))
@@ -1375,97 +1425,20 @@ async def api_torneo_enfrentamientos(request):
     payload = verificar_token(token)
     if not payload:
         return web.json_response({"error": "Sesión no válida"}, status=401)
-
     if _bot_instance is None:
         return web.json_response({"error": "Servicio no disponible"}, status=503)
-
     guild = _bot_instance.get_guild(config.GUILD_ID_ADMISION)
     if not guild:
         return web.json_response({"error": "Servicio no disponible"}, status=503)
-
-    discord_id = payload["discord_id"]
-    miembro = guild.get_member(int(discord_id))
-    if not miembro:
+    if not guild.get_member(int(payload["discord_id"])):
         return web.json_response({"error": "No se pudo verificar tu membresía"}, status=403)
 
     try:
-        # 1️⃣ CASO SWISS: torneo guardado en estado de Discord
         estado = await leer_estado(_bot_instance)
         torneo = next((t for t in estado.get("torneos", []) if t.get("codigo") == torneo_codigo), None)
-
         if torneo and torneo.get("tipo") == "swiss":
-            # --- Código para Swiss (sin cambios, igual que antes) ---
-            rondas_data = await leer_rondas(_bot_instance, torneo_codigo)
-            if not rondas_data:
-                return web.json_response({"rondas": []})
-            rondas = rondas_data.get("rondas", [])
-            resultado = []
-            for ronda in rondas:
-                ronda_num = ronda.get("numero")
-                emparejamientos = ronda.get("emparejamientos", [])
-                ronda_data = {
-                    "ronda": ronda_num,
-                    "completa": ronda.get("completa", False),
-                    "partidos": []
-                }
-                for emp in emparejamientos:
-                    j1 = emp.get("j1")
-                    j2 = emp.get("j2")
-                    resultado_emp = emp.get("resultado")
-
-                    nombre1 = await nombre_miembro(guild, j1, f"Usuario {j1}")
-
-                    if j2 is None:
-                        partido = {
-                            "jugador1": nombre1,
-                            "jugador1_id": j1,
-                            "jugador2": None,
-                            "jugador2_id": None,
-                            "resultado": "BYE"
-                        }
-                    else:
-                        nombre2 = await nombre_miembro(guild, j2, f"Usuario {j2}")
-                        partido = {
-                            "jugador1": nombre1,
-                            "jugador1_id": j1,
-                            "jugador2": nombre2,
-                            "jugador2_id": j2,
-                            "resultado": resultado_emp if resultado_emp else None
-                        }
-                    ronda_data["partidos"].append(partido)
-                resultado.append(ronda_data)
-            response = web.json_response({"rondas": resultado})
-            return response
-
-        # 2️⃣ CASO CHALLONGE: de la caché si tiene partidos y participantes
-        torneo_cache = next((t for t in (leer_cache() or {}).get("torneos", []) if t.get("codigo") == torneo_codigo), None)
-        if torneo_cache and torneo_cache.get("matches") and torneo_cache.get("participants"):
-            rondas = await _rondas_challonge_web(guild, torneo_cache["participants"], torneo_cache["matches"])
-            return web.json_response({"rondas": rondas})
-
-        # Un torneo propio que no es suizo (Battle Royale) no tiene rondas que mostrar ni está en Challonge
-        if torneo is not None and torneo.get("tipo") not in (None, "challonge"):
-            return web.json_response({"rondas": []})
-
-        # Solo se consulta Challonge para torneos nuestros (en el estado del bot o ya en caché);
-        # cualquier otro código devuelve vacío y no se escribe nada en la caché
-        if torneo is None and torneo_cache is None:
-            return web.json_response({"rondas": []})
-
-        # 3️⃣ No estaba en caché → llamar a Challonge y guardar en caché (formato compacto)
-        try:
-            participants_data, matches_data = await challonge.participantes_y_partidos(torneo_codigo)
-        except challonge.ErrorChallonge as e:
-            log.warning(f"⚠️ torneo-enfrentamientos {torneo_codigo}: {e}")
-            return web.json_response({"error": "No se pudieron obtener los enfrentamientos"}, status=503)
-
-        participantes = challonge.participantes_simplificados(participants_data)
-        partidos = challonge.partidos_simplificados(matches_data)
-        await cache_web.actualizar_torneo(
-            torneo_codigo, {"participants": participantes, "matches": partidos},
-            nuevo=lambda: {"codigo": torneo_codigo, "nombre": (torneo or {}).get("nombre", torneo_codigo)})
-        return web.json_response({"rondas": await _rondas_challonge_web(guild, participantes, partidos)})
-
+            return web.json_response({"rondas": await _rondas_swiss_web(guild, torneo_codigo)})
+        return await _rondas_challonge_para_web(guild, torneo_codigo, torneo)
     except Exception as e:
         log.exception(f"❌ Error en api_torneo_enfrentamientos: {e}")
         return _error_interno("api_torneo_enfrentamientos", status=500)

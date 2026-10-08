@@ -518,22 +518,7 @@ async def _siguiente_ronda_automatica(bot, codigo: str, guild: discord.Guild = N
     # PUBLICAR NUEVOS EMPAREJAMIENTOS EN EL CANAL DE CITAS
     # ============================================================
     if guild:
-        canal_citas = canales.get_canal(guild, canales.CITAS)
-        if canal_citas:
-            rondas_data = await leer_rondas(bot, codigo)
-            if rondas_data:
-                rondas = rondas_data.get("rondas", [])
-                if rondas:
-                    ultima_ronda = rondas[-1]
-                    mensaje_citas = cabecera_emparejamientos(codigo, ultima_ronda['numero']) + "\n"
-                    for emp in ultima_ronda.get("emparejamientos", []):
-                        j1 = emp["j1"]
-                        j2 = emp["j2"]
-                        if j2 is None:
-                            mensaje_citas += f"<@{j1}> → BYE\n"
-                        else:
-                            mensaje_citas += f"<@{j1}> vs <@{j2}>\n"
-                    await canal_citas.send(mensaje_citas)
+        await publicar_emparejamientos(bot, guild, codigo)
 
     # Actualizar clasificación
     # publicar_clasificacion_swiss ya recalcula; sin guild solo se calcula y guarda
@@ -644,6 +629,24 @@ async def eliminar_ronda_swiss(bot, codigo: str, ronda_num: int, guild: discord.
 # ============================================================
 # PUBLICAR CLASIFICACIÓN (sin dependencia de ctx)
 # ============================================================
+
+def texto_emparejamientos(codigo: str, ronda: dict) -> str:
+    """Mensaje de emparejamientos de una ronda para #🍸-citas‐a‐ciegas (las menciones "<@id>" no piden nada a la API)."""
+    lineas = [cabecera_emparejamientos(codigo, ronda["numero"])]
+    for emp in ronda.get("emparejamientos", []):
+        lineas.append(f"<@{emp['j1']}> → BYE" if emp.get("j2") is None else f"<@{emp['j1']}> vs <@{emp['j2']}>")
+    return "\n".join(lineas) + "\n"
+
+
+async def publicar_emparejamientos(bot, guild, codigo: str):
+    """Publica en #🍸-citas‐a‐ciegas los emparejamientos de la última ronda del torneo (antes, 4 copias de esto)."""
+    canal = canales.get_canal(guild, canales.CITAS)
+    if not canal:
+        return
+    rondas = ((await leer_rondas(bot, codigo)) or {}).get("rondas", [])
+    if rondas:
+        await canal.send(texto_emparejamientos(codigo, rondas[-1]))
+
 
 async def publicar_clasificacion_swiss(bot, guild, codigo: str):
     canal_ranking = canales.get_canal(guild, canales.RANKING)

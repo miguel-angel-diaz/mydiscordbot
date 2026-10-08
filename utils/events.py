@@ -6,10 +6,16 @@ from datetime import datetime, timezone
 import asyncio
 import config
 
+from discord.ext.commands.view import StringView
+
 from utils import canales
+from utils import dm
+from utils import ayuda
 from utils.jugadores import enviar_comandos_a_miembro
 
 log = logging.getLogger(__name__)
+
+PREFIJO = "!"
 
 tiempos_entrada = {}  # { user_id: datetime }
 
@@ -52,179 +58,170 @@ async def registrar_mensaje_borrado_handle(message: discord.Message):
         log.exception(f"registrando mensaje borrado: {e}")
 
 async def bienvenida_y_comandos_handle(message: discord.Message):
+    """Presentación en el vestíbulo con las reglas aceptadas -> pasa a miembro, recibe la bienvenida y se registra."""
     if message.author.bot or not message.guild:
         return
-
-    # Asegúrate de que es el canal #presentation
     canal_presentaciones = canales.get_canal(message.guild, canales.VESTIBULO)
     if not canal_presentaciones or message.channel.id != canal_presentaciones.id:
         return
 
     member = message.author
-    guild = member.guild
-
-    # Roles de bienvenida
-    rol_welcome = canales.get_rol(guild, canales.ROL_ACEPTA_BIENVENIDA)
-    rol_rules = canales.get_rol(guild, canales.ROL_ACEPTA_REGLAS)
-    rol_miembro = canales.get_rol(guild, canales.ROL_MIEMBRO)
-
-    # 0️⃣ Verificar que tiene ambos roles
     roles_usuario = {role.name for role in member.roles}
     if not set(canales.ROLES_BIENVENIDA).issubset(roles_usuario):
-        return  # Si no tiene ambos roles, no sigue
+        return  # sin los dos roles de bienvenida no sigue
 
-    roles_bienvenida = [r for r in (rol_welcome, rol_rules) if r in member.roles]
+    if not await _pasar_a_miembro(member):
+        return
+    dms_abiertos = await _enviar_bienvenida(member, roles_usuario | {canales.ROL_MIEMBRO})
+    await _registrar_nuevo_miembro(message, member, roles_usuario, dms_abiertos)
 
-    # 1️⃣ Blacklist / expulsados: se comprueba ANTES de tocar ningún rol
+
+async def _pasar_a_miembro(member) -> bool:
+    """
+    Veto -> rol 'miembro' -> quitar los de bienvenida. Devuelve False si no debe seguir (vetado o sin poder dar el rol).
+    'miembro' se asigna ANTES de quitar los de bienvenida: si falla, el usuario no se queda sin roles.
+    """
+    guild = member.guild
+    roles_bienvenida = [r for r in (canales.get_rol(guild, canales.ROL_ACEPTA_BIENVENIDA),
+                                    canales.get_rol(guild, canales.ROL_ACEPTA_REGLAS)) if r in member.roles]
+
+    # Blacklist / expulsados: se comprueba ANTES de tocar ningún rol
     if await _esta_vetado(member, guild):
         await castigar_usuario(member)
         await _quitar_roles(member, roles_bienvenida, "Vetado: no pasa a miembro")
-        return
+        return False
 
-    # 2️⃣ Asignar 'miembro' ANTES de quitar los de bienvenida: si falla, el usuario no se queda sin roles
+    rol_miembro = canales.get_rol(guild, canales.ROL_MIEMBRO)
     if rol_miembro and rol_miembro not in member.roles:
         try:
             await member.add_roles(rol_miembro, reason="Aceptó reglas y bienvenida")
             log.info(f"Rol 'miembro' asignado a {member.display_name}")
         except discord.HTTPException as e:
             log.warning(f"No pude asignar el rol 'miembro' a {member.display_name}: {e}")
-            return
+            return False
 
-    # 3️⃣ Quitar roles de bienvenida
     await _quitar_roles(member, roles_bienvenida, "Ya obtuvo el rol 'miembro'")
-     # Simula que tiene el rol definitivo
-    roles_simulados = roles_usuario | {canales.ROL_MIEMBRO}
+    return True
 
-    # 📌 Comandos disponibles
-    comandos_disponibles = []
-    for comando in config.COMANDOS_INFO:
-        roles_permitidos = comando["roles_permitidos"]
-        if any(rol in roles_simulados for rol in roles_permitidos):
-            comandos_disponibles.append(f"!{comando['comando']} - {comando['descripcion']}")
 
-    # 📌 Torneos a los que puede apuntarse (del estado del bot: abiertos y no solo para socios)
-    torneos_activos = await _torneos_para_nuevo_miembro(message.guild)
-
-    # 📌 Sorteos activos
-    canal_sorteos = canales.get_canal(guild, canales.SORTEOS_ACTIVOS)
+async def _enviar_bienvenida(member, roles_simulados: set) -> bool:
+    """DMs de bienvenida: comandos disponibles, torneos y sorteos. Devuelve si tiene los DMs abiertos."""
+    comandos_disponibles = [f"!{c['comando']} - {c['descripcion']}" for c in ayuda.comandos_info()
+                            if any(rol in roles_simulados for rol in c["roles_permitidos"])]
+    torneos_activos = await _torneos_para_nuevo_miembro(member.guild)
     sorteos_activos = []
+    canal_sorteos = canales.get_canal(member.guild, canales.SORTEOS_ACTIVOS)
     if canal_sorteos:
         async for msg in canal_sorteos.history(limit=50):
-            if msg.pinned:
-                continue
-            sorteos_activos.append(msg.content)
+            if not msg.pinned:
+                sorteos_activos.append(msg.content)
 
-    # ✅ Enviar bienvenida (si tiene los DMs cerrados se sigue: el registro se hace igualmente)
+    # Si tiene los DMs cerrados se sigue: el registro se hace igualmente
     dms_abiertos = await _dm(member, f"👋 ¡Bienvenido/a al servidor, {member.display_name}! 🎉")
+    if not dms_abiertos:
+        return False
+    for titulo, lineas, separador, color in (
+        ("📋 Tus comandos disponibles", comandos_disponibles, "\n", discord.Color.green()),
+        ("🎮 Torneos activos", torneos_activos[:5], "\n\n", discord.Color.blue()),       # los primeros 5
+        ("🎁 Sorteos activos", sorteos_activos[:5], "\n\n", discord.Color.purple()),
+    ):
+        if lineas:
+            await _dm(member, embed=discord.Embed(title=titulo, description=_recortar(separador.join(lineas), 4096),
+                                                  color=color))
+    return True
 
-    # ✅ Enviar comandos
-    if dms_abiertos and comandos_disponibles:
-        embed_comandos = discord.Embed(
-            title="📋 Tus comandos disponibles",
-            description=_recortar("\n".join(comandos_disponibles), 4096),
-            color=discord.Color.green()
-        )
-        await _dm(member, embed=embed_comandos)
 
-    # ✅ Enviar torneos
-    if dms_abiertos and torneos_activos:
-        embed_torneos = discord.Embed(
-            title="🎮 Torneos activos",
-            description=_recortar("\n\n".join(torneos_activos[:5]), 4096),  # los primeros 5
-            color=discord.Color.blue()
-        )
-        await _dm(member, embed=embed_torneos)
-
-    # ✅ Enviar sorteos
-    if dms_abiertos and sorteos_activos:
-        embed_sorteos = discord.Embed(
-            title="🎁 Sorteos activos",
-            description=_recortar("\n\n".join(sorteos_activos[:5]), 4096),  # los primeros 5
-            color=discord.Color.purple()
-        )
-        await _dm(member, embed=embed_sorteos)
-
-    # 5️⃣ Registrar en canal #registro-de-usuarios
+async def _registrar_nuevo_miembro(message, member, roles_usuario: set, dms_abiertos: bool):
+    """Ficha en #registro-de-usuarios."""
     canal_registro = canales.get_canal(message.guild, canales.REGISTRO_USUARIOS)
-    if canal_registro:
-        embed_registro = discord.Embed(
-            title="📥 Nuevo miembro registrado",
-            color=discord.Color.blue()
-        )
-        embed_registro.set_thumbnail(url=member.display_avatar.url)
-        embed_registro.add_field(name="Usuario", value=f"{member} (ID: {member.id})", inline=False)
-        embed_registro.add_field(name="Apodo en servidor", value=member.display_name, inline=False)
-        embed_registro.add_field(name="Roles asignados", value=_recortar(", ".join(roles_usuario) or "Sin roles"), inline=False)
-        embed_registro.add_field(name="Cuenta creada", value=member.created_at.strftime("%d/%m/%Y %H:%M:%S"), inline=False)
-        embed_registro.add_field(name="Se unió al servidor", value=member.joined_at.strftime("%d/%m/%Y %H:%M:%S") if member.joined_at else "Desconocida", inline=False)
-        embed_registro.add_field(name="DMs", value="✅ Bienvenida enviada" if dms_abiertos else "⚠️ DMs cerrados: no recibió la bienvenida", inline=False)
-        embed_registro.add_field(name="Mensaje de presentación", value=_recortar(message.content or "(sin texto: solo adjuntos)"), inline=False)
+    if not canal_registro:
+        return
+    embed = discord.Embed(title="📥 Nuevo miembro registrado", color=discord.Color.blue())
+    embed.set_thumbnail(url=member.display_avatar.url)
+    embed.add_field(name="Usuario", value=f"{member} (ID: {member.id})", inline=False)
+    embed.add_field(name="Apodo en servidor", value=member.display_name, inline=False)
+    embed.add_field(name="Roles asignados", value=_recortar(", ".join(roles_usuario) or "Sin roles"), inline=False)
+    embed.add_field(name="Cuenta creada", value=member.created_at.strftime("%d/%m/%Y %H:%M:%S"), inline=False)
+    embed.add_field(name="Se unió al servidor", value=member.joined_at.strftime("%d/%m/%Y %H:%M:%S") if member.joined_at else "Desconocida", inline=False)
+    embed.add_field(name="DMs", value="✅ Bienvenida enviada" if dms_abiertos else "⚠️ DMs cerrados: no recibió la bienvenida", inline=False)
+    embed.add_field(name="Mensaje de presentación", value=_recortar(message.content or "(sin texto: solo adjuntos)"), inline=False)
+    try:
+        await canal_registro.send(embed=embed)
+    except discord.HTTPException as e:
+        log.warning(f"No pude registrar a {member} en #registro-de-usuarios: {e}")
 
-        try:
-            await canal_registro.send(embed=embed_registro)
-        except discord.HTTPException as e:
-            log.warning(f"No pude registrar a {member} en #registro-de-usuarios: {e}")
+
+def mapa_alias_con_espacios(bot: commands.Bot) -> dict:
+    """
+    {"subir deck": comando, ...} generado desde los comandos registrados: sus alias con espacio y su nombre con
+    espacios en vez de guiones. Discord.py no puede invocar nombres con espacio ("!subir deck" busca "subir"),
+    por eso se reconocen aquí. Antes era una lista a mano, incompleta y con nombres que ya no existían.
+    """
+    mapa = {}
+    for comando in bot.walk_commands():
+        for nombre in (comando.qualified_name, *comando.aliases):
+            for variante in (nombre, nombre.replace("-", " ").replace("_", " ")):
+                if " " in variante:
+                    mapa.setdefault(variante.lower(), comando)
+    return mapa
+
+
+def _alias_del_mensaje(mapa: dict, texto: str):
+    """(alias, resto) con el alias MÁS LARGO al principio del texto (seguido de espacio o fin), o (None, None)."""
+    for alias in sorted(mapa, key=len, reverse=True):
+        if texto == alias or texto.startswith(alias + " "):
+            return alias, texto[len(alias):].strip()
+    return None, None
 
 
 async def reconocer_comando_handle(bot: commands.Bot, message: discord.Message):
-    if not message.content.startswith("!"):
+    """
+    "!subir deck ..." -> pregunta por DM si se quería "!subir-deck" y, si se confirma, lo ejecuta con bot.invoke:
+    pasa los permisos, el bloqueo de Out/Strike y los conversores como cualquier comando (antes ctx.invoke se los
+    saltaba y un usuario sancionado podía subir decks, agendar o apuntarse a sorteos así).
+    """
+    if not message.content.startswith(PREFIJO):
         return False  # No es comando, seguimos
 
-    comandos_alias = {
-        "mis comandos": "mis-comandos",
-        "cartas mas jugadas": "cartas-mas-jugadas",
-        "ver inscritos": "ver-inscritos",
-        "reportar resultado": "reportar-resultado",
-        "modificar resultado": "modificar-resultado",
-        "partidos pendientes": "partidos-pendientes",
-        "inscribirse sorteo": "inscribirse-sorteo",
-        "subir deck": "subir-deck",
-        "editar deck": "editar-deck",
-        "agendar partida": "agendar-partida",
-        "modificar agenda": "modificar-agenda",
-        "eventos hoy": "eventos-hoy",
-        "nueva peticion": "nueva-peticion",
-        "nuevo comunicado": "nuevo-comunicado"
-    }
-
-    comando_texto = message.content[1:].lower().strip()
-
-    # Solo ejecutar wizard si el comando tiene espacio
-    if comando_texto not in comandos_alias or " " not in comando_texto:
+    texto = message.content[len(PREFIJO):].strip()
+    alias, resto = _alias_del_mensaje(mapa_alias_con_espacios(bot), texto.lower())
+    if alias is None:
         return False  # No es un alias con espacio, seguimos
-
-    sugerido = comandos_alias[comando_texto]
+    comando = mapa_alias_con_espacios(bot)[alias]
+    resto = texto[len(texto) - len(resto):] if resto else ""     # los argumentos con sus mayúsculas originales
 
     try:
-        dm = await message.author.create_dm()
+        canal_dm = await message.author.create_dm()
         embed = discord.Embed(
             title="⚡ He detectado tu comando",
-            description=f"¿Querías usar `!{sugerido}`? (responde con **sí** o **no**)",
+            description=f"¿Querías usar `{PREFIJO}{comando.qualified_name}`? (responde con **sí** o **no**)",
             color=0x00ffcc
         )
-        await dm.send(embed=embed)
+        await canal_dm.send(embed=embed)
 
         def check(m):
             return (
                 m.author == message.author
-                and m.channel == dm
-                and m.content.lower() in ["sí", "si", "no"]
+                and m.channel == canal_dm
+                and m.content.strip().lower() in ["sí", "si", "no"]
             )
 
         respuesta = await bot.wait_for("message", timeout=30.0, check=check)
 
-        if respuesta.content.lower() in ["sí", "si"]:
-            # Crear contexto y ejecutar comando directamente
+        if dm.es_si(respuesta.content):
             ctx = await bot.get_context(message)
-            await ctx.invoke(bot.get_command(sugerido))
+            ctx.command, ctx.invoked_with = comando, comando.qualified_name
+            ctx.view = StringView(resto)
+            await bot.invoke(ctx)          # con comprobaciones; los errores llegan a on_command_error
         else:
-            await dm.send("❌ Comando cancelado.")
+            await canal_dm.send("❌ Comando cancelado.")
     except asyncio.TimeoutError:
-        await dm.send("⏰ Tiempo agotado. Comando cancelado automáticamente.")
+        await canal_dm.send("⏰ Tiempo agotado. Comando cancelado automáticamente.")
     except Exception as e:
         log.exception(f"Error en wizard: {e}")
 
     return True  # Indicamos que el mensaje fue manejado
+
 async def evento_socio_handle(before: discord.Member, after: discord.Member):
     # Nombre del rol que quieres detectar
     ROL_SOCIO = "socio"
@@ -405,76 +402,52 @@ def _recortar(texto, limite: int = 1024) -> str:
     texto = str(texto) if texto not in (None, "") else "—"
     return texto if len(texto) <= limite else texto[:limite - 1] + "…"
 
+MIN_SEGUNDOS_SALIDA = 60     # al salir de voz se registra si estuvo al menos 1 minuto (y no estaba solo)
+MIN_SEGUNDOS_CAMBIO = 300    # al cambiar de canal, si estuvo al menos 5 minutos en el anterior
+
+
 async def member_join_handle(member, before, after):
-    # Usuario entra a un canal de voz
-    if before.channel is None and after.channel is not None:
-        tiempos_entrada[member.id] = datetime.now(timezone.utc)
+    """Registro de voz (on_voice_state_update): cuánto estuvo alguien en un canal y con quién."""
+    ahora = datetime.now(timezone.utc)
+    if before.channel is None and after.channel is not None:          # entra en voz
+        tiempos_entrada[member.id] = ahora
+        return
+    if before.channel is None or before.channel == after.channel:      # silenciar, ensordecer...: nada
+        return
 
-    # Usuario sale del canal
-    elif before.channel is not None and after.channel is None:
-        if member.id in tiempos_entrada:
-            inicio = tiempos_entrada.pop(member.id)
-            duracion = (datetime.now(timezone.utc) - inicio).total_seconds()
+    inicio = tiempos_entrada.pop(member.id, None)
+    if after.channel is not None:                                      # cambia de canal: empieza a contar en el nuevo
+        tiempos_entrada[member.id] = ahora
+    if inicio is None:
+        return
+    duracion = (ahora - inicio).total_seconds()
+    companeros = [m.display_name for m in before.channel.members if m.id != member.id]
 
-            if duracion >= 60:  # 5 minutos
-                canal_registro = canales.get_canal(member.guild, canales.OYENTES)
-                if canal_registro:
-                    minutos = int(duracion // 60)
-                    segundos = int(duracion % 60)
+    if after.channel is None:                                          # sale de voz
+        if duracion >= MIN_SEGUNDOS_SALIDA and companeros:
+            await _registrar_voz(member, canales.OYENTES, "estuvo en un canal de voz.", discord.Color.blue(),
+                                 before.channel, ("Canal", "Duración"), duracion, ", ".join(companeros))
+    elif duracion >= MIN_SEGUNDOS_CAMBIO:
+        await _registrar_voz(member, canales.REGISTRO_VOZ, "cambió de canal de voz.", discord.Color.green(),
+                             before.channel, ("Canal anterior", "Tiempo en canal"), duracion,
+                             ", ".join(companeros) or "Estuvo solo 🗿")
 
-                    # Compañeros que estaban en el canal (sin incluir al usuario)
-                    companeros = [m.display_name for m in before.channel.members if m.id != member.id]
-                    if companeros:
-                    
-                        companeros_txt = ", ".join(companeros)
 
-                        embed = discord.Embed(
-                            title="📋 Registro de voz",
-                            description=f"**{member.display_name}** estuvo en un canal de voz.",
-                            color=discord.Color.blue(),
-                            timestamp=datetime.now(timezone.utc)
-                        )
-                        embed.add_field(name="Canal", value=before.channel.name, inline=True)
-                        embed.add_field(name="Duración", value=f"{minutos}m {segundos}s", inline=True)
-                        embed.add_field(name="Con quién estuvo", value=_recortar(companeros_txt), inline=False)
-                        embed.set_footer(text=f"ID Usuario: {member.id}", icon_url=member.display_avatar.url)
-
-                        await canal_registro.send(embed=embed)
-
-    # Usuario cambia de un canal a otro
-    elif before.channel != after.channel:
-        if member.id in tiempos_entrada:
-            inicio = tiempos_entrada.pop(member.id)
-            duracion = (datetime.now(timezone.utc) - inicio).total_seconds()
-
-            if duracion >= 300:
-                canal_registro = canales.get_canal(member.guild, canales.REGISTRO_VOZ)
-                if canal_registro:
-                    minutos = int(duracion // 60)
-                    segundos = int(duracion % 60)
-
-                    # Compañeros del canal anterior (sin incluir al usuario)
-                    companeros = [m.display_name for m in before.channel.members if m.id != member.id]
-                    if not companeros:
-                        companeros_txt = "Estuvo solo 🗿"
-                    else:
-                        companeros_txt = ", ".join(companeros)
-
-                    embed = discord.Embed(
-                        title="📋 Registro de voz",
-                        description=f"**{member.display_name}** cambió de canal de voz.",
-                        color=discord.Color.green(),
-                        timestamp=datetime.now(timezone.utc)
-                    )
-                    embed.add_field(name="Canal anterior", value=before.channel.name, inline=True)
-                    embed.add_field(name="Tiempo en canal", value=f"{minutos}m {segundos}s", inline=True)
-                    embed.add_field(name="Con quién estuvo", value=_recortar(companeros_txt), inline=False)
-                    embed.set_footer(text=f"ID Usuario: {member.id}", icon_url=member.display_avatar.url)
-
-                    await canal_registro.send(embed=embed)
-
-        # Reiniciar el tiempo en el nuevo canal
-        tiempos_entrada[member.id] = datetime.now(timezone.utc)
+async def _registrar_voz(member, nombre_canal: str, accion: str, color, canal_voz, etiquetas, duracion: float,
+                         companeros_txt: str):
+    canal_registro = canales.get_canal(member.guild, nombre_canal)
+    if not canal_registro:
+        return
+    embed = discord.Embed(title="📋 Registro de voz", description=f"**{member.display_name}** {accion}",
+                          color=color, timestamp=datetime.now(timezone.utc))
+    embed.add_field(name=etiquetas[0], value=canal_voz.name, inline=True)
+    embed.add_field(name=etiquetas[1], value=f"{int(duracion // 60)}m {int(duracion % 60)}s", inline=True)
+    embed.add_field(name="Con quién estuvo", value=_recortar(companeros_txt), inline=False)
+    embed.set_footer(text=f"ID Usuario: {member.id}", icon_url=member.display_avatar.url)
+    try:
+        await canal_registro.send(embed=embed)
+    except discord.HTTPException as e:
+        log.warning(f"No pude enviar el registro de voz de {member}: {e}")
 
 async def _esta_registrado_en_canal(guild: discord.Guild, member_id: int) -> bool:
     """Comprueba si el miembro tiene una entrada en #registro-de-usuarios."""

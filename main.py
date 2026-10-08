@@ -8,6 +8,7 @@ import os
 import unicodedata
 
 from utils import canales
+from utils import ayuda
 
 from utils.torneos_api import iniciar_servidor_web, set_bot_instance
 
@@ -95,6 +96,7 @@ bot = commands.Bot(
     case_insensitive=True 
 )
 set_bot_instance(bot)
+ayuda.registrar_bot(bot)          # la ayuda se genera desde los comandos registrados
 
 def normalize_string(s: str) -> str:
     """Convierte a minúsculas y elimina acentos"""
@@ -156,6 +158,7 @@ def comando_roles_permitidos(*roles):
             f"❌ Necesitas uno de estos roles para usar `{comando}`: {', '.join(sorted(roles))}."
         )
 
+    predicate.roles_permitidos = tuple(roles)   # lo lee utils/ayuda.py para generar la ayuda
     return commands.check(predicate)
 
 ################################## COMANDOS ADMINISTRADOR ###############################################
@@ -367,6 +370,7 @@ async def tournament_report(ctx):
 
 @bot.command(name="actualizar-web",
     aliases=["actualizar web", "actualizar_web"])
+@comando_roles_permitidos(canales.ROL_ADMIN)
 async def actualizar_web(ctx):
     await actualizar_web_handle(ctx)
 

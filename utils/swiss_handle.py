@@ -1,5 +1,6 @@
 import logging
 import discord
+from typing import List, Optional, Tuple
 import asyncio
 import re
 from datetime import datetime
@@ -18,7 +19,7 @@ from utils.torneos_estado import (
 from utils import decks
 from utils.commons import (borrar_mensaje_seguro, buscar_usuario_en_servidor, validar_canal_correcto,
                            obtener_torneo_usuario, enviar_en_trozos, nombre_miembro,
-                           cabecera_emparejamientos, es_mensaje_emparejamientos, codigo_etiquetado)
+                           es_mensaje_emparejamientos, codigo_etiquetado)
 from utils.jugadores import submitted_deck_handle
 from utils.validacion_web import EntradaInvalida, resultado as validar_resultado
 from utils.swiss_core import (
@@ -33,7 +34,8 @@ from utils.swiss_core import (
     eliminar_ronda_swiss,
     publicar_clasificacion_swiss,  # Importamos la función desde swiss_core
     rondas_necesarias,
-    lock_torneo
+    lock_torneo,
+    publicar_emparejamientos
 )
 
 log = logging.getLogger(__name__)
@@ -307,6 +309,106 @@ async def swiss_desinscribir_asistente_handle(ctx):
 # COMANDO: iniciar-swiss (asistente) - solo admin
 # ============================================================
 
+async def _elegir_torneo_para_iniciar(ctx) -> Optional[dict]:
+    torneos = await obtener_torneos_activos(ctx.bot)
+    disponibles = [t for t in torneos if t.get("estado") == "abierto" and t.get("ronda_actual", 0) == 0]
+    if not disponibles:
+        await ctx.author.send("❌ No hay torneos listos para iniciar (deben estar en estado 'abierto' y sin rondas).")
+        return None
+    mensaje = "📋 **Torneos listos para iniciar:**\n"
+    for i, t in enumerate(disponibles, 1):
+        mensaje += f"{i}. `{t['codigo']}` → {t['nombre']} ({len(t.get('inscritos_ids', []))} inscritos)\n"
+    await ctx.author.send(mensaje + "\nEscribe el **número** del torneo:")
+
+    seleccion_msg = await dm.esperar_respuesta(ctx.bot, ctx.author, timeout=60)
+    if dm.es_cancelar(seleccion_msg.content):
+        return None
+    idx = dm.indice_elegido(seleccion_msg.content, len(disponibles))
+    if idx is None:
+        await ctx.author.send("❌ Número no válido.")
+        return None
+    return disponibles[idx]
+
+
+async def _jugadores_sin_deck(ctx, torneo: dict) -> Tuple[List[str], List[dict]]:
+    """(nombres con deck ✅, [{name, user_id}] sin deck) de los inscritos del torneo."""
+    decks_subidos = await decks.codigos_subidos(ctx.guild)
+    con_deck, sin_deck = [], []
+    for uid in torneo.get("inscritos_ids", []):
+        miembro = ctx.guild.get_member(int(uid))
+        nombre = miembro.display_name if miembro else f"<@{uid}>"
+        if f"{torneo['codigo']}_{uid}" in decks_subidos:
+            con_deck.append(f"{nombre} ✅")
+        else:
+            sin_deck.append({"name": nombre, "user_id": uid})
+    return con_deck, sin_deck
+
+
+async def _decidir_sin_deck(ctx, inscritos_ids: list, con_deck: list, sin_deck: list) -> Optional[list]:
+    """Pregunta qué hacer con quien no subió deck. Devuelve la lista a quitar ([] = continuar) o None si se cancela."""
+    await ctx.author.send(
+        "**Revisión de decks antes de iniciar el torneo:**\n\n"
+        "Jugadores con deck subido:\n" + "\n".join(con_deck) + "\n\n"
+        "Jugadores SIN deck subido:\n" + "\n".join(p["name"] + " ❌" for p in sin_deck) + "\n\n"
+        "❓ ¿Qué deseas hacer con los jugadores que NO subieron deck?\n"
+        "Responde con **'continuar'** para iniciar el torneo con todos los participantes, \n"
+        "o **'eliminar'** para quitar a los que no subieron el deck. Tienes 90 segundos."
+    )
+    accion = (await dm.esperar_respuesta(ctx.bot, ctx.author, timeout=90.0)).content.lower().strip()
+    if accion == "eliminar":
+        # se eliminarán AL CONFIRMAR: si luego se cancela, no se toca a nadie
+        if len(inscritos_ids) - len(sin_deck) < 2:
+            await ctx.author.send("❌ Si se eliminan, quedan menos de 2 jugadores. No se puede iniciar el torneo.")
+            return None
+        if sin_deck:
+            await ctx.author.send("🗑️ Al iniciar se eliminarán: " + ", ".join(p["name"] for p in sin_deck))
+        return list(sin_deck)
+    if accion == "continuar":
+        await ctx.author.send("✅ Se iniciará el torneo con todos los participantes, aunque algunos no hayan subido deck.")
+        return []
+    await ctx.author.send("❌ Opción no reconocida. Cancelo la operación.")
+    return None
+
+
+async def _iniciar_torneo(ctx, codigo: str, quitar: list) -> bool:
+    """
+    Cierra inscripciones y genera la ronda 1 con el lock del torneo y sobre los datos ACTUALES (durante las
+    preguntas otro admin pudo iniciarlo o alguien inscribirse). Si falla, todo vuelve atrás.
+    """
+    ids_quitar = {p["user_id"] for p in quitar}
+    async with lock_torneo(codigo):
+        actual = await obtener_torneo(ctx.bot, codigo)
+        if not actual or actual.get("estado") != "abierto" or actual.get("ronda_actual", 0) != 0:
+            await ctx.author.send(f"❌ El torneo `{codigo}` ya no está abierto (¿lo ha iniciado otro admin?). No se ha cambiado nada.")
+            return False
+        inscritos_ahora = actual.get("inscritos_ids", [])
+        restantes = [uid for uid in inscritos_ahora if uid not in ids_quitar]
+        if len(restantes) < 2:
+            await ctx.author.send("❌ Quedan menos de 2 jugadores. No se puede iniciar el torneo.")
+            return False
+        cambios = {"estado": "en desarrollo"}
+        if ids_quitar:
+            cambios["inscritos_ids"] = restantes
+        await actualizar_torneo_estado(ctx.bot, codigo, cambios)
+        ok, msg = await generar_ronda(ctx.bot, codigo)
+        if not ok:
+            await actualizar_torneo_estado(ctx.bot, codigo, {"estado": "abierto", "inscritos_ids": inscritos_ahora})
+            await ctx.author.send(f"❌ {msg}")
+            return False
+    return True
+
+
+async def _avisar_eliminados(ctx, codigo: str, quitar: list):
+    for p in quitar:
+        await ctx.author.send(f"✅ Eliminado del torneo: {p['name']}")
+        miembro = ctx.guild.get_member(int(p["user_id"]))
+        if miembro:
+            try:
+                await miembro.send(f"❌ Has quedado fuera del torneo `{codigo}` porque no subiste tu deck antes del inicio.")
+            except discord.HTTPException:
+                pass
+
+
 async def swiss_iniciar_asistente_handle(ctx):
     """Inicia un torneo suizo después de verificar que los jugadores han subido deck."""
     await borrar_mensaje_seguro(ctx)
@@ -316,151 +418,32 @@ async def swiss_iniciar_asistente_handle(ctx):
 
     try:
         await ctx.author.send("🚀 **Iniciar torneo suizo con verificación de decks**\nEscribe `cancelar` para salir.")
-
-        # 1️⃣ Obtener torneos disponibles (abiertos y sin rondas)
-        torneos = await obtener_torneos_activos(ctx.bot)
-        disponibles = [t for t in torneos if t.get("estado") == "abierto" and t.get("ronda_actual", 0) == 0]
-        if not disponibles:
-            await ctx.author.send("❌ No hay torneos listos para iniciar (deben estar en estado 'abierto' y sin rondas).")
+        torneo = await _elegir_torneo_para_iniciar(ctx)
+        if not torneo:
             return
-
-        mensaje = "📋 **Torneos listos para iniciar:**\n"
-        for i, t in enumerate(disponibles, 1):
-            inscritos = len(t.get("inscritos_ids", []))
-            mensaje += f"{i}. `{t['codigo']}` → {t['nombre']} ({inscritos} inscritos)\n"
-        mensaje += "\nEscribe el **número** del torneo:"
-        await ctx.author.send(mensaje)
-
-        seleccion_msg = await dm.esperar_respuesta(ctx.bot, ctx.author, timeout=60)
-        if dm.es_cancelar(seleccion_msg.content):
-            return
-        idx = dm.indice_elegido(seleccion_msg.content, len(disponibles))
-        if idx is None:
-            await ctx.author.send("❌ Número no válido.")
-            return
-        torneo = disponibles[idx]
-
         codigo = torneo["codigo"]
-
-        # 2️⃣ Decks subidos (canal entero, con el lector común de utils/decks.py)
-        decks_subidos = await decks.codigos_subidos(ctx.guild)
-
-        # 3️⃣ Obtener inscritos del torneo y separar quienes tienen deck
         inscritos_ids = torneo.get("inscritos_ids", [])
         if len(inscritos_ids) < 2:
             await ctx.author.send("❌ Se necesitan al menos 2 jugadores para iniciar el torneo.")
             return
 
-        participantes = []
-        no_subieron = []
-        for uid in inscritos_ids:
-            member = ctx.guild.get_member(int(uid))
-            nombre = member.display_name if member else f"<@{uid}>"
-            codigo_deck = f"{codigo}_{uid}"
-            if codigo_deck in decks_subidos:
-                participantes.append(f"{nombre} ✅")
-            else:
-                no_subieron.append({
-                    "name": nombre,
-                    "user_id": uid
-                })
-
-        # 4️⃣ Mostrar resumen y preguntar qué hacer
-        mensaje_dm = "**Revisión de decks antes de iniciar el torneo:**\n\n"
-        mensaje_dm += "Jugadores con deck subido:\n" + "\n".join(participantes) + "\n\n"
-        mensaje_dm += "Jugadores SIN deck subido:\n" + "\n".join([p['name'] + " ❌" for p in no_subieron]) + "\n\n"
-        mensaje_dm += (
-            "❓ ¿Qué deseas hacer con los jugadores que NO subieron deck?\n"
-            "Responde con **'continuar'** para iniciar el torneo con todos los participantes, \n"
-            "o **'eliminar'** para quitar a los que no subieron el deck. Tienes 90 segundos."
-        )
-        await ctx.author.send(mensaje_dm)
-
-        respuesta = await dm.esperar_respuesta(ctx.bot, ctx.author, timeout=90.0)
-        accion = respuesta.content.lower().strip()
-
-        quitar = []   # jugadores sin deck que se eliminarán AL CONFIRMAR (si se cancela, no se toca a nadie)
-        if accion == "eliminar":
-            quitar = list(no_subieron)
-            if len(inscritos_ids) - len(quitar) < 2:
-                await ctx.author.send("❌ Si se eliminan, quedan menos de 2 jugadores. No se puede iniciar el torneo.")
-                return
-            if quitar:
-                await ctx.author.send("🗑️ Al iniciar se eliminarán: " + ", ".join(p["name"] for p in quitar))
-        elif accion == "continuar":
-            await ctx.author.send("✅ Se iniciará el torneo con todos los participantes, aunque algunos no hayan subido deck.")
-        else:
-            await ctx.author.send("❌ Opción no reconocida. Cancelo la operación.")
+        con_deck, sin_deck = await _jugadores_sin_deck(ctx, torneo)
+        quitar = await _decidir_sin_deck(ctx, inscritos_ids, con_deck, sin_deck)
+        if quitar is None:
             return
 
-        # 5️⃣ Confirmación final
-        confirmacion_msg = (
-            "¿Deseas iniciar el torneo ahora? Responde con **'sí'** para continuar o **'no'** para cancelar. Tienes 60 segundos."
-        )
-        await ctx.author.send(confirmacion_msg)
-        respuesta_confirmacion = await dm.esperar_respuesta(ctx.bot, ctx.author, timeout=60.0)
-        if not dm.es_si(respuesta_confirmacion.content):
+        await ctx.author.send("¿Deseas iniciar el torneo ahora? Responde con **'sí'** para continuar o **'no'** para cancelar. Tienes 60 segundos.")
+        if not dm.es_si((await dm.esperar_respuesta(ctx.bot, ctx.author, timeout=60.0)).content):
             await ctx.author.send("❌ Inicio de torneo cancelado.")
             return
 
-        # 6️⃣ Cerrar inscripciones y generar la ronda 1, con el lock del torneo y sobre los datos ACTUALES
-        #     (durante las preguntas otro admin pudo iniciarlo o alguien inscribirse). Si falla, todo vuelve atrás.
-        ids_quitar = {p["user_id"] for p in quitar}
-        async with lock_torneo(codigo):
-            actual = await obtener_torneo(ctx.bot, codigo)
-            if not actual or actual.get("estado") != "abierto" or actual.get("ronda_actual", 0) != 0:
-                await ctx.author.send(f"❌ El torneo `{codigo}` ya no está abierto (¿lo ha iniciado otro admin?). No se ha cambiado nada.")
-                return
-            inscritos_ahora = actual.get("inscritos_ids", [])
-            restantes = [uid for uid in inscritos_ahora if uid not in ids_quitar]
-            if len(restantes) < 2:
-                await ctx.author.send("❌ Quedan menos de 2 jugadores. No se puede iniciar el torneo.")
-                return
-            cambios = {"estado": "en desarrollo"}
-            if ids_quitar:
-                cambios["inscritos_ids"] = restantes
-            await actualizar_torneo_estado(ctx.bot, codigo, cambios)
-            ok, msg = await generar_ronda(ctx.bot, codigo)
-            if not ok:
-                await actualizar_torneo_estado(ctx.bot, codigo, {"estado": "abierto", "inscritos_ids": inscritos_ahora})
-                await ctx.author.send(f"❌ {msg}")
-                return
-
-        for p in quitar:
-            await ctx.author.send(f"✅ Eliminado del torneo: {p['name']}")
-            miembro = ctx.guild.get_member(int(p["user_id"]))
-            if miembro:
-                try:
-                    await miembro.send(
-                        f"❌ Has quedado fuera del torneo `{codigo}` porque no subiste tu deck antes del inicio."
-                    )
-                except discord.HTTPException:
-                    pass
+        if not await _iniciar_torneo(ctx, codigo, quitar):
+            return
+        await _avisar_eliminados(ctx, codigo, quitar)
         await ctx.author.send(f"✅ Torneo `{codigo}` iniciado. Ronda 1 generada.")
 
-        # 7️⃣ Publicar emparejamientos en #🍸-citas‐a‐ciegas
-        canal_citas = canales.get_canal(ctx.guild, canales.CITAS)
-        if canal_citas:
-            rondas_data = await leer_rondas(ctx.bot, codigo)
-            if rondas_data:
-                rondas = rondas_data.get("rondas", [])
-                if rondas:
-                    ronda1 = rondas[0]
-                    mensaje_citas = cabecera_emparejamientos(codigo, 1) + "\n"
-                    for emp in ronda1.get("emparejamientos", []):
-                        j1 = emp["j1"]
-                        j2 = emp["j2"]
-                        # La mención es "<@id>": no hace falta pedir el miembro a la API
-                        if j2 is None:
-                            mensaje_citas += f"<@{j1}> → BYE\n"
-                        else:
-                            mensaje_citas += f"<@{j1}> vs <@{j2}>\n"
-                    await canal_citas.send(mensaje_citas)
-
-        # 8️⃣ Publicar clasificación inicial
+        await publicar_emparejamientos(ctx.bot, ctx.guild, codigo)
         await publicar_clasificacion_swiss(ctx.bot, ctx.guild, codigo)
-
-        # 9️⃣ Anunciar en canal de resultados
         canal_resultados = canales.get_canal(ctx.guild, canales.RESULTADOS)
         if canal_resultados:
             await canal_resultados.send(f"🏁 **Torneo `{codigo}` iniciado.** ¡Buena suerte a todos!")
@@ -822,22 +805,7 @@ async def swiss_siguiente_ronda_asistente_handle(ctx):
         # ============================================================
         # 1️⃣ PUBLICAR EMPAREJAMIENTOS EN 🍸-citas‐a‐ciegas
         # ============================================================
-        canal_citas = canales.get_canal(ctx.guild, canales.CITAS)
-        if canal_citas:
-            rondas_data = await leer_rondas(ctx.bot, torneo["codigo"])
-            if rondas_data:
-                rondas = rondas_data.get("rondas", [])
-                if rondas:
-                    ultima_ronda = rondas[-1]
-                    mensaje_citas = cabecera_emparejamientos(torneo['codigo'], ultima_ronda['numero']) + "\n"
-                    for emp in ultima_ronda.get("emparejamientos", []):
-                        j1 = emp["j1"]
-                        j2 = emp["j2"]
-                        if j2 is None:
-                            mensaje_citas += f"<@{j1}> → BYE\n"
-                        else:
-                            mensaje_citas += f"<@{j1}> vs <@{j2}>\n"
-                    await canal_citas.send(mensaje_citas)
+        await publicar_emparejamientos(ctx.bot, ctx.guild, torneo["codigo"])
 
         # ============================================================
         # 2️⃣ ACTUALIZAR CLASIFICACIÓN Y PUBLICAR EN 🍺-el‐ranking‐de‐la‐barra
@@ -1129,24 +1097,7 @@ async def swiss_eliminar_ronda_asistente_handle(ctx):
                     ok_gen, msg_gen = await generar_ronda(ctx.bot, torneo["codigo"])
                     if ok_gen:
                         await ctx.author.send(f"✅ {msg_gen}")
-                        canal_citas = canales.get_canal(ctx.guild, canales.CITAS)
-                        if canal_citas:
-                            torneo_actual = await obtener_torneo(ctx.bot, torneo["codigo"])
-                            if torneo_actual:
-                                rondas_data = await leer_rondas(ctx.bot, torneo["codigo"])
-                                if rondas_data:
-                                    rondas_actual = rondas_data.get("rondas", [])
-                                    if rondas_actual:
-                                        ultima_ronda = rondas_actual[-1]
-                                        mensaje_citas = cabecera_emparejamientos(torneo['codigo'], ultima_ronda['numero']) + "\n"
-                                        for emp in ultima_ronda.get("emparejamientos", []):
-                                            j1 = emp["j1"]
-                                            j2 = emp["j2"]
-                                            if j2 is None:
-                                                mensaje_citas += f"<@{j1}> → BYE\n"
-                                            else:
-                                                mensaje_citas += f"<@{j1}> vs <@{j2}>\n"
-                                        await canal_citas.send(mensaje_citas)
+                        await publicar_emparejamientos(ctx.bot, ctx.guild, torneo["codigo"])
                         await publicar_clasificacion_swiss(ctx.bot, ctx.guild, torneo["codigo"])
                     else:
                         await ctx.author.send(f"❌ Error al generar la ronda: {msg_gen}")

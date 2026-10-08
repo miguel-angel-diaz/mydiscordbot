@@ -1,0 +1,530 @@
+{
+  "strike": {
+    "seccion": "ADMIN - MODERACIÓN",
+    "descripcion": "Aplica un strike a un miembro del servidor",
+    "tutorial": [
+      "Escribe `!strike` en `#preguntale-a-el-barbas` (o con mención: `!strike @usuario`).",
+      "Si no pasas mención, el bot te preguntará por DM a quién quieres aplicar el strike.",
+      "El bot asignará el rol `Strike` al usuario y le enviará un mensaje privado explicándole la situación."
+    ],
+    "permisos_discord": [
+      "manage_messages",
+      "manage_roles"
+    ]
+  },
+  "out": {
+    "seccion": "ADMIN - MODERACIÓN",
+    "descripcion": "Aplica el rol 'Out' a un miembro del servidor",
+    "tutorial": [
+      "Escribe `!out` (o `!out @usuario`) en `#preguntale-a-el-barbas`.",
+      "El bot asignará el rol `Out` y le enviará un mensaje privado de expulsión.",
+      "Se registrará el evento en el canal `#blacklist`."
+    ],
+    "permisos_discord": [
+      "manage_messages",
+      "manage_roles"
+    ]
+  },
+  "eliminar-mensajes": {
+    "seccion": "ADMIN - MODERACIÓN",
+    "descripcion": "Elimina una cantidad específica de mensajes en un canal",
+    "tutorial": [
+      "Escribe `!eliminar-mensajes` en `#preguntale-a-el-barbas`.",
+      "El bot te preguntará por DM: canal, cantidad (1-1000), orden (recientes/antiguos) y si incluir fijados.",
+      "Los mensajes se eliminan y se registra el evento en `#mensajes-borrados`."
+    ],
+    "permisos_discord": [
+      "manage_messages",
+      "manage_roles"
+    ]
+  },
+  "cerrar-peticion": {
+    "seccion": "ADMIN - MODERACIÓN",
+    "descripcion": "Cierra una petición y envía la respuesta al usuario",
+    "tutorial": [
+      "Escribe `!cerrar-peticion` en `#preguntale-a-el-barbas`.",
+      "El bot te pedirá por DM el código de la petición y la respuesta.",
+      "Se envía la respuesta por DM al autor, se borra del canal `#peticiones-de-usuarios` y se publica el resumen en `#resolucion-de-peticiones`."
+    ],
+    "permisos_discord": [
+      "manage_messages",
+      "manage_roles"
+    ]
+  },
+  "nuevo-comunicado": {
+    "seccion": "ADMIN - MODERACIÓN",
+    "descripcion": "Envía un comunicado al canal 📰-tablón-anuncios",
+    "tutorial": [
+      "Escribe `!nuevo-comunicado <mensaje>` o solo `!nuevo-comunicado` (el bot te lo pedirá por DM).",
+      "El mensaje se publica como embed en `#📰-tablon-anuncios` con `@everyone`."
+    ],
+    "permisos_discord": [
+      "manage_messages",
+      "manage_roles"
+    ]
+  },
+  "nuevo-sorteo": {
+    "seccion": "ADMIN - SORTEOS",
+    "descripcion": "Crea un nuevo sorteo con sus datos",
+    "tutorial": [
+      "Escribe `!nuevo-sorteo` en `#preguntale-a-el-barbas`.",
+      "El bot te pedirá por DM: código, fecha límite y regalo del sorteo.",
+      "El sorteo se publica en `#📰-tablon-anuncios` y `#sorteos-activos`."
+    ],
+    "permisos_discord": [
+      "manage_guild"
+    ]
+  },
+  "realizar-sorteo": {
+    "seccion": "ADMIN - SORTEOS",
+    "descripcion": "Ejecuta un sorteo ya creado por su código",
+    "tutorial": [
+      "Escribe `!realizar-sorteo <código>` en `#preguntale-a-el-barbas`.",
+      "El bot elegirá un ganador aleatorio entre los inscritos en `#inscritos-sorteos`.",
+      "Se notifica por DM al ganador y se publica el resultado en `#tablon-anuncios`."
+    ],
+    "permisos_discord": [
+      "manage_guild"
+    ]
+  },
+  "nuevo-swiss": {
+    "seccion": "ADMIN - TORNEOS SWISS",
+    "descripcion": "Crea un nuevo torneo suizo (Swiss)",
+    "tutorial": [
+      "Escribe `!nuevo-swiss` en `#preguntale-a-el-barbas`.",
+      "El bot te preguntará por DM: nombre, formato (Premodern/Pauper), jugadores máximos, nivel (`todos`/`socios`) y fecha de inicio (DD/MM/YYYY).",
+      "El torneo se publica en `#torneos-activos` y `#📰-cartelera-torneos`."
+    ],
+    "permisos_discord": [
+      "manage_messages",
+      "manage_roles"
+    ]
+  },
+  "iniciar-swiss": {
+    "seccion": "ADMIN - TORNEOS SWISS",
+    "descripcion": "Inicia un torneo suizo tras verificar los decks subidos",
+    "tutorial": [
+      "Escribe `!iniciar-swiss` en `#preguntale-a-el-barbas`.",
+      "Elige el torneo entre los activos.",
+      "El bot te muestra quién subió deck y quién no. Puedes eliminarlos o continuar.",
+      "Se genera la Ronda 1 y se publican los emparejamientos en `#🍸-citas-a-ciegas`."
+    ],
+    "permisos_discord": [
+      "manage_messages",
+      "manage_roles"
+    ]
+  },
+  "siguiente-ronda-swiss": {
+    "seccion": "ADMIN - TORNEOS SWISS",
+    "descripcion": "Genera la siguiente ronda del torneo suizo",
+    "tutorial": [
+      "Escribe `!siguiente-ronda-swiss` en `#preguntale-a-el-barbas`.",
+      "Elige el torneo. Se calculan los emparejamientos según la clasificación actual.",
+      "Se publica la nueva ronda y se actualiza la clasificación."
+    ],
+    "permisos_discord": [
+      "manage_messages",
+      "manage_roles"
+    ]
+  },
+  "reiniciar-swiss": {
+    "seccion": "ADMIN - TORNEOS SWISS",
+    "descripcion": "Reinicia un torneo suizo (borra rondas y clasificación)",
+    "tutorial": [
+      "Escribe `!reiniciar-swiss` en `#preguntale-a-el-barbas`.",
+      "Elige el torneo y confirma.",
+      "Se borran las rondas, la clasificación y los mensajes de citas a ciegas. El torneo queda en estado `abierto`."
+    ],
+    "permisos_discord": [
+      "manage_messages",
+      "manage_roles"
+    ]
+  },
+  "eliminar-swiss": {
+    "seccion": "ADMIN - TORNEOS SWISS",
+    "descripcion": "Elimina un torneo suizo permanentemente",
+    "tutorial": [
+      "Escribe `!eliminar-swiss` en `#preguntale-a-el-barbas`.",
+      "Elige el torneo y confirma.",
+      "Se borran todos los datos del torneo (estado, rondas, clasificación)."
+    ],
+    "permisos_discord": [
+      "manage_messages",
+      "manage_roles"
+    ]
+  },
+  "modificar-resultado-swiss": {
+    "seccion": "ADMIN - TORNEOS SWISS",
+    "descripcion": "Modifica un resultado ya reportado en un torneo suizo",
+    "tutorial": [
+      "Escribe `!modificar-resultado-swiss` en `#preguntale-a-el-barbas`.",
+      "Elige el torneo y el partido a modificar (se muestra una lista de los ya reportados).",
+      "Introduce el nuevo resultado en formato `X-Y` y confirma.",
+      "La clasificación se recalcula automáticamente."
+    ],
+    "permisos_discord": [
+      "manage_messages",
+      "manage_roles"
+    ]
+  },
+  "nuevo-battle": {
+    "seccion": "ADMIN - BATTLE ROYALE",
+    "descripcion": "Crea un Battle Royale (sistema propio, sin Challonge)",
+    "tutorial": [
+      "Escribe `!nuevo-battle` (o `!nuevo-battle <nombre>`).",
+      "Por DM indica el nombre y el formato (Premodern / Pauper).",
+      "El bot te da el código del battle y lo anuncia en la cartelera."
+    ],
+    "permisos_discord": [
+      "manage_messages",
+      "manage_roles"
+    ]
+  },
+  "iniciar-battle": {
+    "seccion": "ADMIN - BATTLE ROYALE",
+    "descripcion": "Apunta un enfrentamiento en un Battle Royale",
+    "tutorial": [
+      "Escribe `!iniciar-battle <código> @jugador1 @jugador2` (o solo `!iniciar-battle` y responde por DM).",
+      "Una misma pareja puede enfrentarse como máximo 2 veces por battle.",
+      "Los dos jugadores reciben un DM con el enfrentamiento."
+    ],
+    "permisos_discord": [
+      "manage_messages",
+      "manage_roles"
+    ]
+  },
+  "modificar-resultado-battle": {
+    "seccion": "ADMIN - BATTLE ROYALE",
+    "descripcion": "Corrige el resultado de un enfrentamiento de un Battle Royale",
+    "tutorial": [
+      "Escribe `!modificar-resultado-battle <código>`.",
+      "Elige el enfrentamiento de la lista e introduce el resultado `X-Y`.",
+      "También funciona con battles ya finalizados; la clasificación se vuelve a publicar."
+    ],
+    "permisos_discord": [
+      "manage_messages",
+      "manage_roles"
+    ]
+  },
+  "actualizar-clasificacion-battle": {
+    "seccion": "ADMIN - BATTLE ROYALE",
+    "descripcion": "Vuelve a publicar la clasificación de un Battle Royale",
+    "tutorial": [
+      "Escribe `!actualizar-clasificacion-battle <código>`.",
+      "La clasificación se publica en `#🍺-el‐ranking‐de‐la‐barra` (se actualiza sola al reportar)."
+    ],
+    "permisos_discord": [
+      "manage_messages",
+      "manage_roles"
+    ]
+  },
+  "finalizar-battle": {
+    "seccion": "ADMIN - BATTLE ROYALE",
+    "descripcion": "Cierra un Battle Royale y publica la clasificación final",
+    "tutorial": [
+      "Escribe `!finalizar-battle <código>` y confirma con `si` por DM.",
+      "Los enfrentamientos sin resultado se anulan y no puntúan."
+    ],
+    "permisos_discord": [
+      "manage_messages",
+      "manage_roles"
+    ]
+  },
+  "reportar-torneo": {
+    "seccion": "ADMIN - INFORMES Y WEB (consulta de resultados)",
+    "descripcion": "Genera un informe completo del torneo con análisis IA",
+    "tutorial": [
+      "Escribe `!reportar-torneo` en `#preguntale-a-el-barbas`.",
+      "Elige el torneo (debe estar completado).",
+      "El bot analiza las cartas más jugadas, los mejores decks y genera un informe con IA que se publica en `#🧠📈analisis-torneos`."
+    ],
+    "permisos_discord": [
+      "manage_messages",
+      "manage_roles"
+    ]
+  },
+  "actualizar-web": {
+    "seccion": "ADMIN - INFORMES Y WEB (consulta de resultados)",
+    "descripcion": "Actualiza la caché de torneos para la web",
+    "tutorial": [
+      "Escribe `!actualizar-web` en `#preguntale-a-el-barbas`.",
+      "El bot regenera `cache/torneos.json` con la clasificación de los torneos finalizados.",
+      "La web mostrará los datos actualizados."
+    ],
+    "permisos_discord": [
+      "manage_messages"
+    ]
+  },
+  "inscribir-swiss": {
+    "seccion": "JUGADOR - INSCRIPCIONES",
+    "descripcion": "Te inscribe en un torneo suizo",
+    "tutorial": [
+      "Escribe `!inscribir-swiss` en `#preguntale-a-el-barbas`.",
+      "El bot te muestra los torneos abiertos. Elige el número.",
+      "Se te inscribe y el bot te pregunta por DM si quieres subir tu deck ahora."
+    ],
+    "permisos_discord": [
+      "manage_messages",
+      "manage_roles"
+    ]
+  },
+  "desinscribir-swiss": {
+    "seccion": "JUGADOR - INSCRIPCIONES",
+    "descripcion": "Te desinscribe de un torneo suizo",
+    "tutorial": [
+      "Escribe `!desinscribir-swiss` en `#preguntale-a-el-barbas`.",
+      "Elige el torneo de la lista de tus inscripciones.",
+      "Se te desinscribe y se elimina tu deck si lo habías subido."
+    ],
+    "permisos_discord": [
+      "manage_messages",
+      "manage_roles"
+    ]
+  },
+  "ver-inscritos": {
+    "seccion": "JUGADOR - INSCRIPCIONES",
+    "descripcion": "Muestra los inscritos en un torneo (con estado de deck para admin)",
+    "tutorial": [
+      "Escribe `!ver-inscritos` en `#preguntale-a-el-barbas`.",
+      "Elige el torneo.",
+      "Si eres admin, verás la lista completa con ✅/❌ según si cada uno ha subido deck.",
+      "Si eres jugador, verás solo tu estado (inscrito y si has subido deck)."
+    ],
+    "permisos_discord": [
+      "manage_messages",
+      "manage_roles"
+    ]
+  },
+  "subir-deck": {
+    "seccion": "JUGADOR - DECKS",
+    "descripcion": "Sube tu decklist para un torneo",
+    "tutorial": [
+      "Escribe `!subir-deck` en `#preguntale-a-el-barbas`.",
+      "Elige el torneo (debes estar inscrito y no tener deck subido ya).",
+      "El bot te pedirá por DM: nombre, formato, arquetipo, decklist (mín. 60) y sideboard (máx. 15 o N/A).",
+      "El deck se publica en `#submitted-decks`."
+    ],
+    "permisos_discord": [
+      "manage_messages",
+      "manage_roles"
+    ]
+  },
+  "editar-deck": {
+    "seccion": "JUGADOR - DECKS",
+    "descripcion": "Edita tu decklist para un torneo",
+    "tutorial": [
+      "Escribe `!editar-deck` en `#preguntale-a-el-barbas`.",
+      "Elige el torneo. Si ya subiste deck, podrás modificar sus campos.",
+      "Si el torneo ya comenzó, solo tienes **1 edición disponible** (post-inicio).",
+      "Si el torneo no ha comenzado, puedes editar todas las veces que quieras."
+    ],
+    "permisos_discord": [
+      "manage_messages",
+      "manage_roles"
+    ]
+  },
+  "reportar-swiss": {
+    "seccion": "JUGADOR - RESULTADOS",
+    "descripcion": "Reporta el resultado de un partido en un torneo suizo",
+    "tutorial": [
+      "Escribe `!reportar-swiss` en `#preguntale-a-el-barbas`.",
+      "Elige el torneo, elige los jugadores y el resultado (X-Y).",
+      "Solo pueden reportar los jugadores implicados o un admin.",
+      "El bot actualiza la clasificación automáticamente."
+    ],
+    "permisos_discord": [
+      "manage_messages",
+      "manage_roles"
+    ]
+  },
+  "clasificacion-swiss": {
+    "seccion": "JUGADOR - RESULTADOS",
+    "descripcion": "Muestra la clasificación actual del torneo suizo",
+    "tutorial": [
+      "Escribe `!clasificacion-swiss` en `#preguntale-a-el-barbas`.",
+      "Elige el torneo.",
+      "Se te muestra la clasificación por DM."
+    ],
+    "permisos_discord": [
+      "manage_messages",
+      "manage_roles"
+    ]
+  },
+  "partidos-pendientes": {
+    "seccion": "JUGADOR - RESULTADOS",
+    "descripcion": "Muestra los partidos pendientes de la ronda actual",
+    "tutorial": [
+      "Escribe `!partidos-pendientes` en `#preguntale-a-el-barbas`.",
+      "Elige el torneo.",
+      "El bot lista los partidos sin resultado de la ronda actual."
+    ],
+    "permisos_discord": [
+      "manage_messages",
+      "manage_roles"
+    ]
+  },
+  "agendar-partida": {
+    "seccion": "JUGADOR - AGENDA",
+    "descripcion": "Agenda una partida entre dos jugadores",
+    "tutorial": [
+      "Escribe `!agendar-partida` en `#preguntale-a-el-barbas`.",
+      "El bot te pedirá por DM: fecha (DD/MM/YYYY), hora (HH:MM) y los dos jugadores.",
+      "La partida se publica en `#partidos-agendados` y se notifica por DM a los implicados."
+    ],
+    "permisos_discord": [
+      "manage_messages",
+      "manage_roles"
+    ]
+  },
+  "modificar-agenda": {
+    "seccion": "JUGADOR - AGENDA",
+    "descripcion": "Modifica o elimina una partida agendada",
+    "tutorial": [
+      "Escribe `!modificar-agenda` en `#preguntale-a-el-barbas`.",
+      "El bot te muestra tus partidas agendadas. Elige una.",
+      "Podrás modificar fecha, hora, jugadores, o eliminarla."
+    ],
+    "permisos_discord": [
+      "manage_messages",
+      "manage_roles"
+    ]
+  },
+  "eventos-hoy": {
+    "seccion": "JUGADOR - AGENDA",
+    "descripcion": "Muestra los eventos programados para hoy",
+    "tutorial": [
+      "Escribe `!eventos-hoy` en `#preguntale-a-el-barbas`.",
+      "El bot te envía por DM la lista de partidas agendadas para hoy."
+    ],
+    "permisos_discord": [
+      "manage_messages",
+      "manage_roles"
+    ]
+  },
+  "reportar-resultado-battle": {
+    "seccion": "JUGADOR - BATTLE ROYALE",
+    "descripcion": "Reporta el resultado de un enfrentamiento Battle Royale",
+    "tutorial": [
+      "Escribe `!reportar-resultado-battle` en `#preguntale-a-el-barbas`.",
+      "Por DM elige tu enfrentamiento pendiente e indica el resultado (X-Y, p. ej. `2-1`).",
+      "Solo pueden reportar los dos jugadores o un admin, y cada enfrentamiento una sola vez.",
+      "El bot avisa a los jugadores y actualiza la clasificación del battle."
+    ],
+    "permisos_discord": [
+      "manage_messages",
+      "manage_roles"
+    ]
+  },
+  "cartas-mas-jugadas": {
+    "seccion": "JUGADOR - ESTADÍSTICAS",
+    "descripcion": "Muestra las cartas más jugadas en un torneo o en todos",
+    "tutorial": [
+      "Escribe `!cartas-mas-jugadas` en `#preguntale-a-el-barbas`.",
+      "Elige un torneo completado o `todos`.",
+      "El bot genera un gráfico tipo donut con las cartas más jugadas (sin tierras básicas)."
+    ],
+    "permisos_discord": [
+      "manage_messages",
+      "manage_roles"
+    ]
+  },
+  "best-decks": {
+    "seccion": "JUGADOR - ESTADÍSTICAS",
+    "descripcion": "Analiza los mejores decks de un torneo (top 4 + último)",
+    "tutorial": [
+      "Escribe `!best-decks` en `#preguntale-a-el-barbas`.",
+      "Elige el torneo.",
+      "El bot muestra los decks del top 4 y del último clasificado."
+    ],
+    "permisos_discord": [
+      "manage_messages",
+      "manage_roles"
+    ]
+  },
+  "nueva-peticion": {
+    "seccion": "JUGADOR - PETICIONES",
+    "descripcion": "Crea una nueva petición o sugerencia al equipo",
+    "tutorial": [
+      "Escribe `!nueva-peticion <descripción>` en `#preguntale-a-el-barbas`.",
+      "Si no incluyes descripción, el bot te la pedirá por DM.",
+      "Se publica en `#peticiones-de-usuarios` con un código único."
+    ],
+    "permisos_discord": [
+      "manage_messages",
+      "manage_roles"
+    ]
+  },
+  "mis-comandos": {
+    "seccion": "JUGADOR - PETICIONES",
+    "descripcion": "Abre el asistente para buscar un comando y ver su tutorial",
+    "tutorial": [
+      "Escribe `!mis-comandos` en `#preguntale-a-el-barbas`.",
+      "El bot te abre un asistente por DM: te muestra la lista de comandos disponibles.",
+      "Responde con el número o nombre del comando.",
+      "El bot te muestra su descripción y te pregunta si quieres un tutorial paso a paso."
+    ],
+    "permisos_discord": []
+  },
+  "eliminar-decks": {
+    "seccion": "ADMIN - TORNEOS SWISS",
+    "descripcion": "Elimina decks subidos a un torneo",
+    "tutorial": [
+      "Escribe `!eliminar-decks <código>` (o solo `!eliminar-decks` y elige el torneo por DM).",
+      "El bot te lista los decks de ese torneo y eliges cuáles borrar (números separados por coma o `todos`).",
+      "Pide confirmación antes de borrar."
+    ],
+    "permisos_discord": [
+      "manage_messages",
+      "manage_roles"
+    ]
+  },
+  "eliminar-ronda-swiss": {
+    "seccion": "ADMIN - TORNEOS SWISS",
+    "descripcion": "Elimina la última ronda de un torneo suizo",
+    "tutorial": [
+      "Escribe `!eliminar-ronda-swiss` y elige el torneo y la ronda por DM.",
+      "Solo se puede eliminar la última ronda; si el torneo estaba finalizado, se reabre.",
+      "La clasificación se recalcula y se borra el mensaje de emparejamientos de esa ronda."
+    ],
+    "permisos_discord": [
+      "manage_messages",
+      "manage_roles"
+    ]
+  },
+  "finalizar-swiss": {
+    "seccion": "ADMIN - TORNEOS SWISS",
+    "descripcion": "Marca un torneo suizo como finalizado",
+    "tutorial": [
+      "Escribe `!finalizar-swiss` y elige el torneo por DM.",
+      "Confirma con `sí`: el torneo pasa a finalizado y se publica la clasificación final."
+    ],
+    "permisos_discord": [
+      "manage_messages",
+      "manage_roles"
+    ]
+  },
+  "sorteo-torneo": {
+    "seccion": "ADMIN - SORTEOS",
+    "descripcion": "Sortea un premio entre los inscritos de un torneo",
+    "tutorial": [
+      "Escribe `!sorteo-torneo <código> <premio>`.",
+      "El bot elige un ganador al azar entre los inscritos del torneo y lo anuncia."
+    ],
+    "permisos_discord": [
+      "manage_messages",
+      "manage_roles"
+    ]
+  },
+  "inscribirse-sorteo": {
+    "seccion": "JUGADOR - INSCRIPCIONES",
+    "descripcion": "Te apunta a un sorteo activo",
+    "tutorial": [
+      "Escribe `!inscribirse-sorteo <código>` en `#preguntale-a-el-barbas`.",
+      "Solo puedes apuntarte una vez a cada sorteo; el bot te confirma tu número por DM."
+    ],
+    "permisos_discord": [
+      "manage_messages",
+      "manage_roles"
+    ]
+  }
+}

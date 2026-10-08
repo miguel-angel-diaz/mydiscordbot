@@ -622,6 +622,10 @@ async def obtener_deck_en_canal(guild: discord.Guild, codigo_deck: str):
 # ============================================================
 
 async def analizar_torneo_con_ia(ctx, cartas_data, decks_data):
+    if not config.OPENROUTER_API_KEY:
+        await ctx.send("⚠️ El análisis con IA no está configurado (falta OPENROUTER_API_KEY). "
+                       "Las cartas y los mejores decks ya se han publicado.")
+        return
     memoria = await cargar_memoria_ia(ctx.guild, limite=10)
     analisis = await generar_analisis_ia(cartas_data, decks_data, memoria)
     if not analisis or analisis.strip() == "":
@@ -663,6 +667,9 @@ Escribe un análisis completo con varios párrafos y conclusión clara.
     return await llamar_a_openrouter(prompt)
 
 async def llamar_a_openrouter(prompt: str):
+    if not config.OPENROUTER_API_KEY:
+        log.warning("⚠️ Análisis con IA pedido sin OPENROUTER_API_KEY configurada.")
+        return None
     url = "https://openrouter.ai/api/v1/chat/completions"
     headers = {
         "Authorization": f"Bearer {config.OPENROUTER_API_KEY}",
