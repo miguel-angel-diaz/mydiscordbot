@@ -107,7 +107,7 @@ Criterio: el sistema suizo propio gestiona los torneos (inscripción, emparejami
 
 ## Fase 4 · Reorganización
 
-- [ ] **64.** Pasar `main.py` a Cogs (Admin, Jugadores, Swiss, Eventos) con permisos en `cog_check` y carga en `setup_hook`.
+- [x] **64.** (Hecho: main.py de 571 a 83 líneas, con una clase Bot (setup_hook carga las extensiones, on_message enruta los atajos); cogs/admin, jugadores, swiss y eventos; permisos en utils/permisos.py con CogConRoles.cog_check (los de gestión del suizo siguen con has_permissions, marcados con extras SOLO_ADMIN); la ayuda lee los roles del Cog; mismos 42 comandos, alias, argumentos y roles; había dos funciones `agendar_partida` (la de !modificar-agenda), que en un Cog se habrían pisado)  Pasar `main.py` a Cogs (Admin, Jugadores, Swiss, Eventos) con permisos en `cog_check` y carga en `setup_hook`.
 - [ ] **65.** Separar el suizo en `engine.py` (lógica pura con tests), `service.py` (locks) y `presentacion.py`, con una única fuente de estadísticas.
 - [ ] **66.** Convertir `torneos_api.py` en un paquete `api/` (auth, torneos, decks, partidas, contenido, routes) con el decorador `@requiere_sesion`.
 - [ ] **67.** Capa de servicios compartida entre comandos y API (inscribir, reportar, subir y editar deck).

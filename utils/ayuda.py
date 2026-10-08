@@ -23,14 +23,13 @@ def registrar_bot(bot):
 
 
 def roles_de(comando) -> List[str]:
-    """Roles que ven el comando: los del decorador comando_roles_permitidos (+ admin), solo admin si exige
-    permiso de administrador, o todos los roles si no tiene restricción."""
-    for check in comando.checks:
-        roles = getattr(check, "roles_permitidos", None)
-        if roles is not None:
-            return sorted({*roles, canales.ROL_ADMIN})
+    """Roles que ven el comando: solo admin si exige permiso de administrador, los `roles_permitidos` de su Cog
+    (+ admin, ver utils/permisos.py), o todos los roles si no tiene restricción."""
     if any(getattr(c, "__qualname__", "").startswith("has_permissions") for c in comando.checks):
         return [canales.ROL_ADMIN]
+    roles = getattr(comando.cog, "roles_permitidos", None)
+    if roles is not None:
+        return sorted({*roles, canales.ROL_ADMIN})
     return sorted(config.ROLES_TODOS)
 
 
