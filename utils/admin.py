@@ -5,23 +5,13 @@ import asyncio
 import random
 import re
 
+from utils import dm
+from utils import canales
 from utils import decks
 from utils.commons import borrar_mensaje_seguro, validar_canal_correcto, buscar_usuario_en_servidor, obtener_torneo_usuario, enviar_en_trozos, leer_inscritos_sorteo
 
-# Canal de anuncios: por ID y, si no, por nombre (con el guion especial U+2010 o con guion normal)
-CANAL_ANUNCIOS_ID = 1387389356464934993
-CANAL_ANUNCIOS_NOMBRES = ("📰-tablon‐anuncios", "📰-tablon-anuncios")
-
-
-def obtener_canal_anuncios(guild):
-    canal = guild.get_channel(CANAL_ANUNCIOS_ID)
-    if canal:
-        return canal
-    for nombre in CANAL_ANUNCIOS_NOMBRES:
-        canal = discord.utils.get(guild.text_channels, name=nombre)
-        if canal:
-            return canal
-    return None
+# Tablón de anuncios: por ID y, si no, por nombre (ver utils/canales.py)
+obtener_canal_anuncios = canales.canal_anuncios
 
 
 async def _obtener_objetivo_sancion(ctx, miembro, accion: str):
@@ -32,14 +22,12 @@ async def _obtener_objetivo_sancion(ctx, miembro, accion: str):
     author = ctx.author
 
     if miembro is None:
-        def dm_check(m):
-            return m.author == author and isinstance(m.channel, discord.DMChannel)
         try:
             await author.send(
                 f"⚠️ Vamos a aplicar un **{accion}**.\n"
                 f"¿A quién? Escribe su nombre, apodo, ID o mención tal como aparece en el servidor:"
             )
-            respuesta = await ctx.bot.wait_for("message", check=dm_check, timeout=60)
+            respuesta = await dm.esperar_respuesta(ctx.bot, author, timeout=60)
         except asyncio.TimeoutError:
             await author.send(f"⏰ Tiempo agotado. Vuelve a intentarlo con `!{accion}`.")
             return None
@@ -58,7 +46,7 @@ async def _obtener_objetivo_sancion(ctx, miembro, accion: str):
         motivo = "No puedes sancionarte a ti mismo."
     elif miembro == ctx.guild.owner:
         motivo = "No se puede sancionar al dueño del servidor."
-    elif miembro.guild_permissions.administrator or any(r.name.lower() == "admin" for r in miembro.roles):
+    elif miembro.guild_permissions.administrator or any(r.name.lower() == canales.ROL_ADMIN for r in miembro.roles):
         motivo = "No se puede sancionar a un admin."
 
     if motivo:
@@ -73,7 +61,7 @@ async def _obtener_objetivo_sancion(ctx, miembro, accion: str):
 async def aplicar_strike(ctx, miembro: discord.Member):
      # Intentar eliminar el mensaje del canal público
     await borrar_mensaje_seguro(ctx)
-    if not await validar_canal_correcto(ctx, "preguntale-a-el-barbas", "!strike"):
+    if not await validar_canal_correcto(ctx, canales.COMANDOS, "!strike"):
         return
 
     servidor = ctx.guild
@@ -86,7 +74,7 @@ async def aplicar_strike(ctx, miembro: discord.Member):
     if miembro is None:
         return
 
-    rol_strike = discord.utils.get(servidor.roles, name="Strike")
+    rol_strike = canales.get_rol(servidor, canales.ROL_STRIKE)
     if not rol_strike:
         await ctx.send("⚠️ El rol `Strike` no existe en el servidor.")
         return
@@ -111,7 +99,7 @@ async def aplicar_strike(ctx, miembro: discord.Member):
 async def aplicar_out(ctx, miembro: discord.Member):
      # Intentar eliminar el mensaje del canal público
     await borrar_mensaje_seguro(ctx)
-    if not await validar_canal_correcto(ctx, "preguntale-a-el-barbas", "!out"):
+    if not await validar_canal_correcto(ctx, canales.COMANDOS, "!out"):
         return
         
     servidor = ctx.guild
@@ -124,7 +112,7 @@ async def aplicar_out(ctx, miembro: discord.Member):
     if miembro is None:
         return
     
-    rol_out = discord.utils.get(servidor.roles, name="Out")
+    rol_out = canales.get_rol(servidor, canales.ROL_OUT)
     if not rol_out:
         await ctx.author.send("⚠️ El rol `Out` no existe en el servidor.")
         return
@@ -155,7 +143,7 @@ async def aplicar_out(ctx, miembro: discord.Member):
 
     await ctx.author.send(f"✅ {miembro.mention} ha sido expulsado de la comunidad.")
 
-    canal_info = discord.utils.get(ctx.guild.text_channels, name="blacklist")
+    canal_info = canales.get_canal(ctx.guild, canales.BLACKLIST)
     if canal_info:
         embed = discord.Embed(
             title="👋 Usuario expulsado del servidor",
@@ -179,9 +167,6 @@ async def eliminar_mensajes(ctx, canal: discord.TextChannel = None, cantidad: in
 
     author = ctx.author
 
-    def dm_check(m):
-        return m.author == author and isinstance(m.channel, discord.DMChannel)
-
     try:
         # Preguntas por DM si faltan datos
         if canal is None or cantidad is None or orden is None or incluir_fijados is None:
@@ -189,16 +174,16 @@ async def eliminar_mensajes(ctx, canal: discord.TextChannel = None, cantidad: in
 
             if canal is None:
                 await author.send("1️⃣ ¿En qué canal quieres borrar mensajes? Escribe el nombre exacto del canal (sin `#`):")
-                respuesta_canal = await ctx.bot.wait_for("message", check=dm_check, timeout=60)
+                respuesta_canal = await dm.esperar_respuesta(ctx.bot, author, timeout=60)
                 canal_nombre = respuesta_canal.content.strip().lower()
-                canal = discord.utils.get(ctx.guild.text_channels, name=canal_nombre)
+                canal = canales.get_canal(ctx.guild, canal_nombre)
                 if not canal:
                     await author.send("❌ No encontré ese canal. Asegúrate de escribir el nombre exacto.")
                     return
 
             if cantidad is None:
                 await author.send("2️⃣ ¿Cuántos mensajes quieres eliminar? (entre 1 y 1000):")
-                respuesta_cantidad = await ctx.bot.wait_for("message", check=dm_check, timeout=60)
+                respuesta_cantidad = await dm.esperar_respuesta(ctx.bot, author, timeout=60)
                 try:
                     cantidad = int(respuesta_cantidad.content.strip())
                 except ValueError:
@@ -207,7 +192,7 @@ async def eliminar_mensajes(ctx, canal: discord.TextChannel = None, cantidad: in
 
             if orden is None:
                 await author.send("3️⃣ ¿Cómo quieres borrar los mensajes? Escribe `recientes` o `antiguos`:")
-                respuesta_orden = await ctx.bot.wait_for("message", check=dm_check, timeout=60)
+                respuesta_orden = await dm.esperar_respuesta(ctx.bot, author, timeout=60)
                 orden = respuesta_orden.content.strip().lower()
                 if orden not in ("recientes", "antiguos"):
                     await author.send("❌ Opción no válida. Usa `recientes` o `antiguos`.")
@@ -215,8 +200,8 @@ async def eliminar_mensajes(ctx, canal: discord.TextChannel = None, cantidad: in
 
             if incluir_fijados is None:
                 await author.send("4️⃣ ¿Quieres borrar también los mensajes fijados? Responde `sí` o `no`:")
-                respuesta_fijados = await ctx.bot.wait_for("message", check=dm_check, timeout=60)
-                incluir_fijados = respuesta_fijados.content.strip().lower() in ("sí", "si", "yes", "y")
+                respuesta_fijados = await dm.esperar_respuesta(ctx.bot, author, timeout=60)
+                incluir_fijados = dm.es_si(respuesta_fijados.content)
 
         if cantidad <= 0 or cantidad > 1000:
             await author.send("⚠️ La cantidad debe estar entre 1 y 1000.")
@@ -230,8 +215,8 @@ async def eliminar_mensajes(ctx, canal: discord.TextChannel = None, cantidad: in
             f"({'los más recientes' if orden == 'recientes' else 'los más antiguos'}, "
             f"{'incluidos' if incluir_fijados else 'sin'} los fijados). Esta acción no se puede deshacer. ¿Confirmas? (sí/no)"
         )
-        confirmacion = await ctx.bot.wait_for("message", check=dm_check, timeout=60)
-        if confirmacion.content.strip().lower() not in ("sí", "si", "yes", "y"):
+        confirmacion = await dm.esperar_respuesta(ctx.bot, author, timeout=60)
+        if not dm.es_si(confirmacion.content):
             await author.send("❌ Operación cancelada. No se ha borrado nada.")
             return
 
@@ -250,7 +235,7 @@ async def eliminar_mensajes(ctx, canal: discord.TextChannel = None, cantidad: in
         )
 
         # 🔔 Logs en #mensajes-borrados
-        log_channel = discord.utils.get(ctx.guild.text_channels, name="mensajes-borrados")
+        log_channel = canales.get_canal(ctx.guild, canales.MENSAJES_BORRADOS)
         if log_channel:
             embed = discord.Embed(
                 title="🧹 Mensajes eliminados",
@@ -295,7 +280,7 @@ async def _avisar_admin(ctx, texto: str):
 async def asignar_strike_automatico(ctx):
     autor = ctx.author
     servidor = ctx.guild
-    rol_strike = discord.utils.get(servidor.roles, name="Strike")
+    rol_strike = canales.get_rol(servidor, canales.ROL_STRIKE)
 
     if not rol_strike:
         await ctx.send("⚠️ El rol `Strike` no existe.")
@@ -329,7 +314,7 @@ def get_mensaje_strike():
 async def cerrar_peticion_handle(ctx, codigo: str = None, respuesta: str = None):
     await borrar_mensaje_seguro(ctx)
     
-    if not await validar_canal_correcto(ctx, "peticiones-de-usuarios", "!cerrar-peticion"):
+    if not await validar_canal_correcto(ctx, canales.PETICIONES, "!cerrar-peticion"):
         return
 
     if not await moderador_permisos_handle(ctx):
@@ -337,21 +322,18 @@ async def cerrar_peticion_handle(ctx, codigo: str = None, respuesta: str = None)
 
     author = ctx.author
 
-    def dm_check(m):
-        return m.author == author and isinstance(m.channel, discord.DMChannel)
-
     try:
         if codigo is None or respuesta is None:
             await author.send("📩 Vamos a cerrar una petición. Responde a las siguientes preguntas:")
 
             if codigo is None:
                 await author.send("1️⃣ ¿Cuál es el **código** de la petición que quieres cerrar?")
-                respuesta_codigo = await ctx.bot.wait_for("message", check=dm_check, timeout=90)
+                respuesta_codigo = await dm.esperar_respuesta(ctx.bot, author, timeout=90)
                 codigo = respuesta_codigo.content.strip()
 
             if respuesta is None:
                 await author.send("2️⃣ ¿Cuál es la **respuesta** que quieres enviar al usuario?")
-                respuesta_msg = await ctx.bot.wait_for("message", check=dm_check, timeout=180)
+                respuesta_msg = await dm.esperar_respuesta(ctx.bot, author, timeout=180)
                 respuesta = respuesta_msg.content.strip()
 
     except asyncio.TimeoutError:
@@ -366,8 +348,8 @@ async def cerrar_peticion_handle(ctx, codigo: str = None, respuesta: str = None)
         return
 
     # Buscar mensaje original en #peticiones-de-usuarios
-    canal_peticiones = discord.utils.get(ctx.guild.text_channels, name="peticiones-de-usuarios")
-    canal_resolucion = discord.utils.get(ctx.guild.text_channels, name="resolucion-de-peticiones")
+    canal_peticiones = canales.get_canal(ctx.guild, canales.PETICIONES)
+    canal_resolucion = canales.get_canal(ctx.guild, canales.RESOLUCION_PETICIONES)
 
     if not canal_peticiones or not canal_resolucion:
         await author.send("❌ No se encontraron los canales `#peticiones-de-usuarios` o `#resolucion-de-peticiones`.")
@@ -434,7 +416,7 @@ async def cerrar_peticion_handle(ctx, codigo: str = None, respuesta: str = None)
 
 async def sorteo_torneo_handle(ctx, codigo_torneo: str, premio: str = "Premio del sorteo"):
     await borrar_mensaje_seguro(ctx)
-    if not await validar_canal_correcto(ctx, "preguntale-a-el-barbas", "!sorteo-torneo"):
+    if not await validar_canal_correcto(ctx, canales.COMANDOS, "!sorteo-torneo"):
         return
     if not await moderador_permisos_handle(ctx):
         return
@@ -446,10 +428,7 @@ async def sorteo_torneo_handle(ctx, codigo_torneo: str, premio: str = "Premio de
                 "Por favor, respóndeme con el **código del torneo** del que quieres hacer el sorteo. Tienes 60 segundos."
             )
 
-            def dm_check(m):
-                return m.author == ctx.author and isinstance(m.channel, discord.DMChannel)
-
-            respuesta = await ctx.bot.wait_for("message", check=dm_check, timeout=60.0)
+            respuesta = await dm.esperar_respuesta(ctx.bot, ctx.author, timeout=60.0)
             codigo_torneo = respuesta.content.strip()
 
             if not codigo_torneo:
@@ -509,7 +488,7 @@ async def moderador_permisos_handle(ctx, only_check: bool = False) -> bool:
                 pass
         return False
     es_dueno = autor == servidor.owner
-    rol_moderador = discord.utils.get(servidor.roles, name="admin")
+    rol_moderador = canales.get_rol(servidor, canales.ROL_ADMIN)
     # Mismo criterio que comando_roles_permitidos: dueño, rol "admin" o permiso de administrador
     permisos = getattr(autor, "guild_permissions", None)
     tiene_permiso = (
@@ -533,28 +512,25 @@ async def nuevo_sorteo_handle(ctx, *, args: str = None):
     if not await moderador_permisos_handle(ctx):
         return
 
-    if not await validar_canal_correcto(ctx, "preguntale-a-el-barbas", "!nuevo_sorteo"):
+    if not await validar_canal_correcto(ctx, canales.COMANDOS, "!nuevo_sorteo"):
         return
 
     author = ctx.author
-
-    def dm_check(m):
-        return m.author == author and isinstance(m.channel, discord.DMChannel)
 
     try:
         if not args or len([p.strip() for p in args.split("|")]) < 4:
             await author.send("📩 Vamos a crear un nuevo sorteo. Responde a las siguientes preguntas:")
 
             await author.send("1️⃣ ¿Cuál es el **código** del sorteo?")
-            codigo_msg = await ctx.bot.wait_for("message", check=dm_check, timeout=90)
+            codigo_msg = await dm.esperar_respuesta(ctx.bot, author, timeout=90)
             codigo = codigo_msg.content.strip()
 
             await author.send("2️⃣ ¿Cuál es la **fecha límite** del sorteo?")
-            fecha_msg = await ctx.bot.wait_for("message", check=dm_check, timeout=90)
+            fecha_msg = await dm.esperar_respuesta(ctx.bot, author, timeout=90)
             fecha = fecha_msg.content.strip()
 
             await author.send("3️⃣ ¿Cuál es el **regalo** del sorteo?")
-            regalo_msg = await ctx.bot.wait_for("message", check=dm_check, timeout=90)
+            regalo_msg = await dm.esperar_respuesta(ctx.bot, author, timeout=90)
             regalo = regalo_msg.content.strip()
 
         else:
@@ -581,7 +557,7 @@ async def nuevo_sorteo_handle(ctx, *, args: str = None):
     else:
         await author.send("⚠️ No encontré el canal de anuncios (`#📰-tablon‐anuncios`).")
 
-    canal_sorteos_activos = discord.utils.get(ctx.guild.text_channels, name="sorteos-activos")
+    canal_sorteos_activos = canales.get_canal(ctx.guild, canales.SORTEOS_ACTIVOS)
     if canal_sorteos_activos:
         await canal_sorteos_activos.send(f"🎉 **Sorteo activo:** `{codigo}`\n📅 **Fecha:** {fecha}\n🎁 **Regalo:** {regalo}")
         await author.send(f"🎉 **se ha creado un nuevo sorteo con el codigo:** `{codigo}`")
@@ -594,7 +570,7 @@ async def realizar_sorteo_handle(ctx, codigo: str):
     if not await moderador_permisos_handle(ctx):
         return
 
-    if not await validar_canal_correcto(ctx, "preguntale-a-el-barbas", "!realizar-sorteo"):
+    if not await validar_canal_correcto(ctx, canales.COMANDOS, "!realizar-sorteo"):
         return
     
     if codigo is None:
@@ -604,10 +580,7 @@ async def realizar_sorteo_handle(ctx, codigo: str):
                 "Por favor, respóndeme con el **código del sorteo** del que quieres hacer el sorteo. Tienes 60 segundos."
             )
 
-            def dm_check(m):
-                return m.author == ctx.author and isinstance(m.channel, discord.DMChannel)
-
-            respuesta = await ctx.bot.wait_for("message", check=dm_check, timeout=60.0)
+            respuesta = await dm.esperar_respuesta(ctx.bot, ctx.author, timeout=60.0)
             codigo = respuesta.content.strip()
 
             if not codigo:
@@ -621,8 +594,8 @@ async def realizar_sorteo_handle(ctx, codigo: str):
             await ctx.send("❌ No puedo enviarte mensajes privados. Activa los DMs para continuar.")
             return
 
-    canal_inscritos = discord.utils.get(ctx.guild.text_channels, name="inscritos-sorteos")
-    canal_sorteos_activos = discord.utils.get(ctx.guild.text_channels, name="sorteos-activos")
+    canal_inscritos = canales.get_canal(ctx.guild, canales.INSCRITOS_SORTEOS)
+    canal_sorteos_activos = canales.get_canal(ctx.guild, canales.SORTEOS_ACTIVOS)
     canal_publicacion = obtener_canal_anuncios(ctx.guild)
 
     # Todos los canales se comprueban ANTES de notificar al ganador o borrar nada
@@ -685,10 +658,7 @@ async def nuevo_comunicado_handle(ctx, mensaje: str = None):
                 "Por favor, respóndeme con el mensaje que quieras transmitir. Tienes 60 segundos."
             )
 
-            def dm_check(m):
-                return m.author == ctx.author and isinstance(m.channel, discord.DMChannel)
-
-            respuesta = await ctx.bot.wait_for("message", check=dm_check, timeout=60.0)
+            respuesta = await dm.esperar_respuesta(ctx.bot, ctx.author, timeout=60.0)
             mensaje = respuesta.content.strip()
 
             if not mensaje:
@@ -752,11 +722,8 @@ async def eliminar_decks_handle(ctx, codigo_torneo: str = None):
         "o escribe `todos` para eliminar todos los decks. Tienes 120 segundos."
     )
 
-    def dm_check(m):
-        return m.author == ctx.author and isinstance(m.channel, discord.DMChannel)
-
     try:
-        respuesta = await ctx.bot.wait_for("message", check=dm_check, timeout=120)
+        respuesta = await dm.esperar_respuesta(ctx.bot, ctx.author, timeout=120)
         contenido = respuesta.content.strip().lower()
 
         if contenido in ("todos", "all"):
@@ -775,8 +742,8 @@ async def eliminar_decks_handle(ctx, codigo_torneo: str = None):
             f"⚠️ Vas a eliminar **{len(to_delete)}** deck(s) del torneo `{codigo_torneo}`. "
             "Esta acción no se puede deshacer. ¿Confirmas? (sí/no)"
         )
-        confirmacion = await ctx.bot.wait_for("message", check=dm_check, timeout=60)
-        if confirmacion.content.strip().lower() not in ("sí", "si", "yes", "y"):
+        confirmacion = await dm.esperar_respuesta(ctx.bot, ctx.author, timeout=60)
+        if not dm.es_si(confirmacion.content):
             return await ctx.author.send("❌ Operación cancelada. No se ha eliminado ningún deck.")
 
     except ValueError:

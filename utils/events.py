@@ -1,11 +1,15 @@
 ######## events.py #######
+import logging
 import discord
 from discord.ext import commands
 from datetime import datetime, timezone
 import asyncio
 import config
 
+from utils import canales
 from utils.jugadores import enviar_comandos_a_miembro
+
+log = logging.getLogger(__name__)
 
 tiempos_entrada = {}  # { user_id: datetime }
 
@@ -18,7 +22,7 @@ async def registrar_mensaje_borrado_handle(message: discord.Message):
         return
 
     guild = message.guild
-    canal_log = discord.utils.get(guild.text_channels, name="mensajes-borrados")
+    canal_log = canales.get_canal(guild, canales.MENSAJES_BORRADOS)
     if not canal_log:
         return
 
@@ -45,14 +49,14 @@ async def registrar_mensaje_borrado_handle(message: discord.Message):
         await canal_log.send(embed=embed)
 
     except Exception as e:
-        print(f"[ERROR] registrando mensaje borrado: {e}")
+        log.exception(f"registrando mensaje borrado: {e}")
 
 async def bienvenida_y_comandos_handle(message: discord.Message):
     if message.author.bot or not message.guild:
         return
 
     # Asegúrate de que es el canal #presentation
-    canal_presentaciones = discord.utils.get(message.guild.text_channels, name="🪞-vestíbulo‐")
+    canal_presentaciones = canales.get_canal(message.guild, canales.VESTIBULO)
     if not canal_presentaciones or message.channel.id != canal_presentaciones.id:
         return
 
@@ -60,13 +64,13 @@ async def bienvenida_y_comandos_handle(message: discord.Message):
     guild = member.guild
 
     # Roles de bienvenida
-    rol_welcome = discord.utils.get(guild.roles, name="Accept Welcome")
-    rol_rules = discord.utils.get(guild.roles, name="Accept Rules")
-    rol_miembro = discord.utils.get(guild.roles, name="miembro")
+    rol_welcome = canales.get_rol(guild, canales.ROL_ACEPTA_BIENVENIDA)
+    rol_rules = canales.get_rol(guild, canales.ROL_ACEPTA_REGLAS)
+    rol_miembro = canales.get_rol(guild, canales.ROL_MIEMBRO)
 
     # 0️⃣ Verificar que tiene ambos roles
     roles_usuario = {role.name for role in member.roles}
-    if not {"Accept Welcome", "Accept Rules"}.issubset(roles_usuario):
+    if not set(canales.ROLES_BIENVENIDA).issubset(roles_usuario):
         return  # Si no tiene ambos roles, no sigue
 
     roles_bienvenida = [r for r in (rol_welcome, rol_rules) if r in member.roles]
@@ -81,15 +85,15 @@ async def bienvenida_y_comandos_handle(message: discord.Message):
     if rol_miembro and rol_miembro not in member.roles:
         try:
             await member.add_roles(rol_miembro, reason="Aceptó reglas y bienvenida")
-            print(f"[INFO] Rol 'miembro' asignado a {member.display_name}")
+            log.info(f"Rol 'miembro' asignado a {member.display_name}")
         except discord.HTTPException as e:
-            print(f"[WARN] No pude asignar el rol 'miembro' a {member.display_name}: {e}")
+            log.warning(f"No pude asignar el rol 'miembro' a {member.display_name}: {e}")
             return
 
     # 3️⃣ Quitar roles de bienvenida
     await _quitar_roles(member, roles_bienvenida, "Ya obtuvo el rol 'miembro'")
      # Simula que tiene el rol definitivo
-    roles_simulados = roles_usuario | {"miembro"}
+    roles_simulados = roles_usuario | {canales.ROL_MIEMBRO}
 
     # 📌 Comandos disponibles
     comandos_disponibles = []
@@ -102,7 +106,7 @@ async def bienvenida_y_comandos_handle(message: discord.Message):
     torneos_activos = await _torneos_para_nuevo_miembro(message.guild)
 
     # 📌 Sorteos activos
-    canal_sorteos = discord.utils.get(guild.text_channels, name="sorteos-activos")
+    canal_sorteos = canales.get_canal(guild, canales.SORTEOS_ACTIVOS)
     sorteos_activos = []
     if canal_sorteos:
         async for msg in canal_sorteos.history(limit=50):
@@ -141,7 +145,7 @@ async def bienvenida_y_comandos_handle(message: discord.Message):
         await _dm(member, embed=embed_sorteos)
 
     # 5️⃣ Registrar en canal #registro-de-usuarios
-    canal_registro = discord.utils.get(message.guild.text_channels, name="registro-de-usuarios")
+    canal_registro = canales.get_canal(message.guild, canales.REGISTRO_USUARIOS)
     if canal_registro:
         embed_registro = discord.Embed(
             title="📥 Nuevo miembro registrado",
@@ -159,7 +163,7 @@ async def bienvenida_y_comandos_handle(message: discord.Message):
         try:
             await canal_registro.send(embed=embed_registro)
         except discord.HTTPException as e:
-            print(f"[WARN] No pude registrar a {member} en #registro-de-usuarios: {e}")
+            log.warning(f"No pude registrar a {member} en #registro-de-usuarios: {e}")
 
 
 async def reconocer_comando_handle(bot: commands.Bot, message: discord.Message):
@@ -218,7 +222,7 @@ async def reconocer_comando_handle(bot: commands.Bot, message: discord.Message):
     except asyncio.TimeoutError:
         await dm.send("⏰ Tiempo agotado. Comando cancelado automáticamente.")
     except Exception as e:
-        print(f"Error en wizard: {e}")
+        log.exception(f"Error en wizard: {e}")
 
     return True  # Indicamos que el mensaje fue manejado
 async def evento_socio_handle(before: discord.Member, after: discord.Member):
@@ -248,9 +252,9 @@ async def evento_socio_handle(before: discord.Member, after: discord.Member):
 
         try:
             await after.send(mensaje)
-            print(f"[INFO] Mensaje de socio enviado a {after}")
+            log.info(f"Mensaje de socio enviado a {after}")
         except discord.Forbidden:
-            print(f"[WARN] No pude enviar mensaje privado a {after}")
+            log.warning(f"No pude enviar mensaje privado a {after}")
          
 async def usuario_salio_handle(bot: commands.Bot, member: discord.Member):
     # Retirarlo de sus torneos (suizos) y borrar sus partidas agendadas
@@ -258,11 +262,11 @@ async def usuario_salio_handle(bot: commands.Bot, member: discord.Member):
     try:
         resumen_torneos = await gestionar_abandono_torneos(bot, member)
     except Exception as e:
-        print(f"❌ Error gestionando torneos de {member.id} al salir: {e}")
+        log.exception(f"❌ Error gestionando torneos de {member.id} al salir: {e}")
         resumen_torneos = ["❌ Error al revisar sus torneos, revisar a mano."]
 
     # Canal donde se detallará la info del usuario que se fue
-    canal_info = discord.utils.get(member.guild.text_channels, name="usuarios-que-nos-dejaron")
+    canal_info = canales.get_canal(member.guild, canales.USUARIOS_QUE_SE_FUERON)
     if canal_info:
         embed = discord.Embed(
             title="👋 Usuario ha abandonado el servidor",
@@ -280,7 +284,7 @@ async def usuario_salio_handle(bot: commands.Bot, member: discord.Member):
 
     # Canal de anuncios
     # canal_anuncios = ctx.guild.get_channel(1387389356464934993)
-    # canal_anuncios = discord.utils.get(member.guild.text_channels, name="📰-tablon‐anuncios")
+    # canal_anuncios = canales.canal_anuncios(member.guild)
     # if canal_anuncios:
     #     await canal_anuncios.send(f"📢 El usuario **{member.display_name}** ha abandonado **The Klub**.")
 
@@ -290,7 +294,7 @@ async def _torneos_para_nuevo_miembro(guild) -> list:
     try:
         estado = await leer_estado(guild._state._get_client())
     except Exception as e:
-        print(f"[WARN] No pude leer los torneos para la bienvenida: {e}")
+        log.warning(f"No pude leer los torneos para la bienvenida: {e}")
         return []
 
     def fecha(t):
@@ -312,7 +316,7 @@ async def _dm(member, contenido=None, **kwargs) -> bool:
         await member.send(contenido, **kwargs)
         return True
     except discord.HTTPException:
-        print(f"[INFO] No pude enviar DM a {member}")
+        log.info(f"No pude enviar DM a {member}")
         return False
 
 
@@ -322,7 +326,7 @@ async def _quitar_roles(member, roles, motivo: str):
     try:
         await member.remove_roles(*roles, reason=motivo)
     except discord.HTTPException as e:
-        print(f"[WARN] No pude quitar roles a {member.display_name}: {e}")
+        log.warning(f"No pude quitar roles a {member.display_name}: {e}")
 
 
 async def _esta_vetado(member, guild) -> bool:
@@ -334,7 +338,7 @@ async def _esta_vetado(member, guild) -> bool:
     """
     if member.id in config.BLACKLIST_USERS:
         return True
-    canal_blacklist = discord.utils.get(guild.text_channels, name="blacklist")
+    canal_blacklist = canales.get_canal(guild, canales.BLACKLIST)
     if not canal_blacklist:
         return False
     uid = str(member.id)
@@ -354,12 +358,12 @@ async def castigar_usuario(member: discord.Member):
     )
 
     # Asignar rol Out (sin dejar escapar el error si faltan permisos)
-    rol_out = discord.utils.get(member.guild.roles, name="Out")
+    rol_out = canales.get_rol(member.guild, canales.ROL_OUT)
     if rol_out:
         try:
             await member.add_roles(rol_out, reason="Usuario en blacklist o expulsado previamente")
         except discord.HTTPException as e:
-            print(f"[WARN] No pude asignar el rol 'Out' a {member}: {e}")
+            log.warning(f"No pude asignar el rol 'Out' a {member}: {e}")
 
 async def log_comando_handle(bot, usuario, comando, tipo, error=None, fecha=None):
     canal_log = bot.get_channel(1413079518440198206)
@@ -393,7 +397,7 @@ async def log_comando_handle(bot, usuario, comando, tipo, error=None, fecha=None
     try:
         await canal_log.send(embed=embed)
     except discord.HTTPException as e:
-        print(f"⚠️ No se pudo enviar el log del comando: {e}")
+        log.warning(f"⚠️ No se pudo enviar el log del comando: {e}")
 
 
 def _recortar(texto, limite: int = 1024) -> str:
@@ -413,7 +417,7 @@ async def member_join_handle(member, before, after):
             duracion = (datetime.now(timezone.utc) - inicio).total_seconds()
 
             if duracion >= 60:  # 5 minutos
-                canal_registro = discord.utils.get(member.guild.text_channels, name="oyentes-en-canales")
+                canal_registro = canales.get_canal(member.guild, canales.OYENTES)
                 if canal_registro:
                     minutos = int(duracion // 60)
                     segundos = int(duracion % 60)
@@ -444,7 +448,7 @@ async def member_join_handle(member, before, after):
             duracion = (datetime.now(timezone.utc) - inicio).total_seconds()
 
             if duracion >= 300:
-                canal_registro = discord.utils.get(member.guild.text_channels, name="registro-canales-voz")
+                canal_registro = canales.get_canal(member.guild, canales.REGISTRO_VOZ)
                 if canal_registro:
                     minutos = int(duracion // 60)
                     segundos = int(duracion % 60)
@@ -474,7 +478,7 @@ async def member_join_handle(member, before, after):
 
 async def _esta_registrado_en_canal(guild: discord.Guild, member_id: int) -> bool:
     """Comprueba si el miembro tiene una entrada en #registro-de-usuarios."""
-    canal_registro = discord.utils.get(guild.text_channels, name="registro-de-usuarios")
+    canal_registro = canales.get_canal(guild, canales.REGISTRO_USUARIOS)
     if not canal_registro:
         return False
 
@@ -498,7 +502,7 @@ async def member_update_handle(before: discord.Member, after: discord.Member):
     roles_despues = {r.name for r in after.roles}
 
     # Si acaba de obtener el rol "miembro"
-    if "miembro" not in roles_antes and "miembro" in roles_despues:
+    if canales.ROL_MIEMBRO not in roles_antes and canales.ROL_MIEMBRO in roles_despues:
         await comprobar_registro_y_enviar_comandos(after)
 
     # Aquí puedes añadir el resto de lógica de evento_socio_handle
@@ -514,5 +518,5 @@ async def comprobar_registro_y_enviar_comandos(member: discord.Member):
 
     registrado = await _esta_registrado_en_canal(member.guild, member.id)
     if not registrado:
-        print(f"[INFO] {member.display_name} no está registrado → enviando comandos.")
+        log.info(f"{member.display_name} no está registrado → enviando comandos.")
         await enviar_comandos_a_miembro(member)

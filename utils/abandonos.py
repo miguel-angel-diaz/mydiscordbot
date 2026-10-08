@@ -1,3 +1,4 @@
+import logging
 """
 Qué hacer con los torneos cuando un jugador abandona el servidor.
 
@@ -9,20 +10,22 @@ Qué hacer con los torneos cuando un jugador abandona el servidor.
 - Torneos de otro tipo (Challonge): no se tocan, se avisa para revisión manual.
 """
 import asyncio
-import traceback
 from typing import List
 
 import discord
 
+from utils import canales
 from utils.torneos_estado import leer_estado
 from utils.swiss_core import retirar_por_abandono  # reportar_resultado ya publica la clasificación
 from utils.jugadores import actualizar_proximas_partidas
 from utils import battle
 from utils.commons import es_mensaje_emparejamientos
 
-CANAL_RESULTADOS = "🍺-quién‐se‐lleva‐la‐ronda"
-CANAL_CITAS = "🍸-citas‐a‐ciegas"
-CANAL_AGENDA = "partidos-agendados"
+log = logging.getLogger(__name__)
+
+CANAL_RESULTADOS = canales.RESULTADOS
+CANAL_CITAS = canales.CITAS
+CANAL_AGENDA = canales.AGENDA
 
 SOLO_USUARIOS = discord.AllowedMentions(everyone=False, roles=False, users=True)
 
@@ -54,7 +57,7 @@ async def gestionar_abandono_torneos(bot, member: discord.Member) -> List[str]:
             if estado_antes != "abierto":
                 await _anunciar_retirada(bot, guild, codigo, uid, msg, rival)
         except Exception:
-            print(f"❌ Error retirando a {uid} de {codigo}:\n{traceback.format_exc()}")
+            log.exception(f"❌ Error retirando a {uid} de {codigo}")
             resumen.append(f"❌ `{codigo}`: error al retirarlo, revisar a mano.")
 
     borradas = await _borrar_partidas_agendadas(bot, guild, uid)
@@ -73,12 +76,12 @@ async def _abandono_battle(bot, guild, torneo: dict, uid: str, resumen: List[str
         if anulados:
             resumen.append(f"`{codigo}` (battle): {anulados} enfrentamiento(s) pendiente(s) anulado(s).")
     except Exception:
-        print(f"❌ Error anulando enfrentamientos de {uid} en {codigo}:\n{traceback.format_exc()}")
+        log.exception(f"❌ Error anulando enfrentamientos de {uid} en {codigo}")
         resumen.append(f"❌ `{codigo}` (battle): error al anular sus enfrentamientos, revisar a mano.")
 
 
 async def _anunciar_retirada(bot, guild, codigo: str, uid: str, msg: str, rival):
-    canal = discord.utils.get(guild.text_channels, name=CANAL_RESULTADOS)
+    canal = canales.get_canal(guild, CANAL_RESULTADOS)
     if canal:
         await canal.send(
             f"🚪 <@{uid}> ha abandonado el servidor y se retira del torneo `{codigo}`.\n{msg}",
@@ -87,7 +90,7 @@ async def _anunciar_retirada(bot, guild, codigo: str, uid: str, msg: str, rival)
 
     # Quitar su línea del mensaje de emparejamientos de la ronda, si sigue publicado
     if rival:
-        canal_citas = discord.utils.get(guild.text_channels, name=CANAL_CITAS)
+        canal_citas = canales.get_canal(guild, CANAL_CITAS)
         if canal_citas:
             async for m in canal_citas.history(limit=100):
                 if m.author != bot.user or not es_mensaje_emparejamientos(m.content, codigo):
@@ -106,7 +109,7 @@ async def _anunciar_retirada(bot, guild, codigo: str, uid: str, msg: str, rival)
 
 
 async def _borrar_partidas_agendadas(bot, guild, uid: str) -> int:
-    canal = discord.utils.get(guild.text_channels, name=CANAL_AGENDA)
+    canal = canales.get_canal(guild, CANAL_AGENDA)
     if not canal:
         return 0
     borradas = 0

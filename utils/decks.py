@@ -13,6 +13,7 @@ from typing import AsyncIterator, Dict, List, Optional, Tuple
 
 import discord
 
+from utils import canales
 from utils.commons import (
     CAMPO_EDICIONES,
     PATRON_CODIGO_ETIQUETADO,
@@ -110,7 +111,7 @@ def sideboard(valor) -> str:
 # EMBED DE #submitted-decks
 # ============================================================
 
-CANAL_DECKS = "submitted-decks"
+CANAL_DECKS = canales.DECKS
 TITULO_SUBIDO = "🃏 Deck Subido: "
 TITULO_ACTUALIZADO = "🃏 Deck Actualizado: "
 _PATRON_TITULO = re.compile(r"^🃏\s*Deck (?:Subido|Actualizado):\s*")
@@ -192,7 +193,7 @@ def leer_embed(embed) -> Optional[Dict]:
 # ============================================================
 
 def canal_decks(guild):
-    return discord.utils.get(guild.text_channels, name=CANAL_DECKS) if guild else None
+    return canales.get_canal(guild, CANAL_DECKS) if guild else None
 
 
 async def _recorrer(guild) -> AsyncIterator[Dict]:

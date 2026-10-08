@@ -18,6 +18,8 @@ from zoneinfo import ZoneInfo
 
 import discord
 
+from utils import canales
+from utils import dm
 from utils.commons import borrar_mensaje_seguro, buscar_usuario_en_servidor, trocear_lista, validar_canal_correcto
 from utils.swiss_core import calcular_estadisticas, _desempate_final
 from utils.swiss_handle import _es_admin
@@ -38,9 +40,9 @@ MAX_POR_PAREJA = 2
 FORMATOS = ("Premodern", "Pauper")
 TIMEOUT_DM = 90
 
-CANAL_COMANDOS = "preguntale-a-el-barbas"
-CANAL_RANKING = "🍺-el‐ranking‐de‐la‐barra"
-CANAL_CARTELERA = "📰-cartelera‐torneos"
+CANAL_COMANDOS = canales.COMANDOS
+CANAL_RANKING = canales.RANKING
+CANAL_CARTELERA = canales.CARTELERA_TORNEOS
 
 SOLO_USUARIOS = discord.AllowedMentions(everyone=False, roles=False, users=True)
 TZ = ZoneInfo("Europe/Madrid")
@@ -274,7 +276,7 @@ def textos_clasificacion(guild, codigo: str, nombre_battle: str, clasificacion: 
 
 async def publicar_clasificacion_battle(bot, guild, codigo: str) -> bool:
     """Recalcula y publica la clasificación en el ranking, sustituyendo la anterior (todos sus trozos)."""
-    canal = discord.utils.get(guild.text_channels, name=CANAL_RANKING)
+    canal = canales.get_canal(guild, CANAL_RANKING)
     battle = await obtener_battle(bot, codigo)
     if not canal or not battle:
         return False
@@ -306,36 +308,12 @@ async def _dm(destinatario, texto: str) -> bool:
 
 
 async def _preguntar(ctx, texto: str) -> Optional[str]:
-    """Pregunta por DM y devuelve la respuesta, o None si se agota el tiempo o escribe 'cancelar'."""
-    autor = ctx.author
-    await autor.send(texto)
-    try:
-        resp = await ctx.bot.wait_for(
-            "message", timeout=TIMEOUT_DM,
-            check=lambda m: m.author.id == autor.id and isinstance(m.channel, discord.DMChannel))
-    except asyncio.TimeoutError:
-        await autor.send("⏰ Tiempo agotado. Vuelve a intentarlo.")
-        return None
-    contenido = resp.content.strip()
-    if contenido.lower() == "cancelar":
-        await autor.send("❌ Operación cancelada.")
-        return None
-    return contenido
+    """Pregunta por DM (None si se agota el tiempo o escribe 'cancelar'): ver utils/dm.py."""
+    return await dm.preguntar(ctx.bot, ctx.author, texto, TIMEOUT_DM)
 
 
 async def _elegir_de_lista(ctx, titulo: str, opciones: List[str]) -> Optional[int]:
-    """Muestra una lista numerada (troceada si es larga) y devuelve el índice elegido."""
-    texto = f"{titulo}\n" + "\n".join(f"{i}. {o}" for i, o in enumerate(opciones, 1))
-    trozos = trocear_lista(texto, 1900)
-    for t in trozos[:-1]:
-        await ctx.author.send(t)
-    resp = await _preguntar(ctx, f"{trozos[-1]}\n\nEscribe el número (o `cancelar`).")
-    if resp is None:
-        return None
-    if not resp.isdigit() or not 1 <= int(resp) <= len(opciones):
-        await ctx.author.send("❌ Número no válido. Operación cancelada.")
-        return None
-    return int(resp) - 1
+    return await dm.elegir_de_lista(ctx.bot, ctx.author, titulo, opciones, TIMEOUT_DM)
 
 
 async def _elegir_battle(ctx, codigo: Optional[str], solo_en_curso: bool = True) -> Optional[dict]:
@@ -396,7 +374,7 @@ async def nuevo_battle_handle(ctx, nombre: str = None):
         f"✅ Battle **{nombre}** creado con código `{codigo}`.\n"
         f"Apunta enfrentamientos con `!iniciar-battle {codigo} @jugador1 @jugador2` "
         f"(máximo {MAX_POR_PAREJA} por pareja) y ciérralo con `!finalizar-battle {codigo}`.")
-    cartelera = discord.utils.get(ctx.guild.text_channels, name=CANAL_CARTELERA)
+    cartelera = canales.get_canal(ctx.guild, CANAL_CARTELERA)
     if cartelera:
         await cartelera.send(f"⚔️ **Nuevo Battle Royale: {nombre}** ({formato})\n🏷️ Código: `{codigo}`",
                              allowed_mentions=discord.AllowedMentions.none())

@@ -25,12 +25,14 @@ import string
 from collections import defaultdict
 from typing import List, Dict, Optional, Tuple
 
+from utils import canales
+
 log = logging.getLogger(__name__)
 
 CANALES = {
-    "estado": "torneos-estado",
-    "rondas": "rondas-torneo",
-    "clasificacion": "clasificaciones-torneo"
+    "estado": canales.ESTADO_TORNEOS,
+    "rondas": canales.RONDAS_TORNEOS,
+    "clasificacion": canales.CLASIFICACIONES_TORNEOS
 }
 PREFIX = "📊 TORNEO: "
 CABECERA = re.compile(r"^📊 TORNEO: (\S+)(?:\s*\|\s*PARTE\s*(\d+)/(\d+))?(?:\s*\|\s*v=(\d+))?\s*$")
@@ -53,7 +55,7 @@ def _lock(tipo: str, codigo: str) -> asyncio.Lock:
 async def _get_channel(bot, tipo: str):
     """Obtiene el canal correspondiente según el tipo."""
     for guild in bot.guilds:
-        channel = discord.utils.get(guild.text_channels, name=CANALES[tipo])
+        channel = canales.get_canal(guild, CANALES[tipo])
         if channel:
             return channel
     return None

@@ -1,8 +1,10 @@
 ######## config.py #######
 
+import logging
 import os
 
 import secrets
+from utils import canales
 
 def get_jwt_secret():
     # 1. Intentar desde variable de entorno (prioridad máxima)
@@ -21,8 +23,9 @@ def get_jwt_secret():
     secret = secrets.token_urlsafe(32)
     with open(".jwt_secret", "w") as f:
         f.write(secret)
-    print(f"⚠️ JWT_SECRET generada y guardada en .jwt_secret: {secret}")
-    print("📌 Cópiala y añádela como variable de entorno para mantenerla entre despliegues.")
+    logging.getLogger(__name__).warning(
+        f"⚠️ JWT_SECRET generada y guardada en .jwt_secret: {secret}\n"
+        "📌 Cópiala y añádela como variable de entorno para mantenerla entre despliegues.")
     return secret
 
 # Leer variables de entorno
@@ -89,11 +92,11 @@ if not JWT_SECRET:
         "Define JWT_SECRET en las variables de entorno o en config_token.py."
     )
 SESSION_EXPIRATION_SECONDS = 7 * 24 * 3600  
-ROLES_TODOS = {"miembro", "socio", "second-chance-socio", "second-chance-miembro", "admin"}
-ROLES_BORRADOS = {"miembro", "socio", "second-chance-socio", "second-chance-miembro"}
-CANALES_EXCLUIDOS = {"preguntale-a-el-barbas", "🍺-el‐ranking‐de‐la‐barra"}
-ROLES_BIENVENIDA = {"Accept Welcome", "Accept Rules"}
-ROLES_SOCIOS = {"socio", "second-chance-socio", "admin"}
+ROLES_TODOS = {*canales.ROLES_JUGADORES, canales.ROL_ADMIN}
+ROLES_BORRADOS = set(canales.ROLES_JUGADORES)
+CANALES_EXCLUIDOS = {canales.COMANDOS, canales.RANKING}
+ROLES_BIENVENIDA = set(canales.ROLES_BIENVENIDA)
+ROLES_SOCIOS = {canales.ROL_SOCIO, canales.ROL_SOCIO_2C, canales.ROL_ADMIN}
 COMANDOS_INFO = [
     # ============================================================
     # ADMIN - MODERACIÓN

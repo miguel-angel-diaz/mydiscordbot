@@ -1,4 +1,5 @@
 ######## jugadores.py #######
+import logging
 import discord
 import asyncio
 from collections import Counter
@@ -7,6 +8,8 @@ import io
 import re
 import config
 
+from utils import dm
+from utils import canales
 from utils.torneos_estado import generar_codigo_unico, obtener_torneo_estado
 
 
@@ -38,6 +41,8 @@ from utils.commons import (
 
 import config
 
+log = logging.getLogger(__name__)
+
 MAX_ERRORES = 3
 TIEMPO_LIMITE_MINUTOS = 10
 intentos_fallidos = {}  # Guardado temporal por usuario
@@ -45,11 +50,8 @@ intentos_fallidos = {}  # Guardado temporal por usuario
 async def agendar_partida_handle(ctx, fecha=None, hora=None, jugador1=None, _vs=None, jugador2=None):
     await borrar_mensaje_seguro(ctx)
 
-    if not await validar_canal_correcto(ctx, "preguntale-a-el-barbas", "!agendar-partida"):
+    if not await validar_canal_correcto(ctx, canales.COMANDOS, "!agendar-partida"):
         return
-
-    def dm_check(m):
-        return m.author == ctx.author and isinstance(m.channel, discord.DMChannel)
 
     # Si falta algún argumento, empieza la conversación por DM
     if not all([fecha, hora, jugador1, jugador2]) or _vs is None or _vs.lower() != "vs":
@@ -57,7 +59,7 @@ async def agendar_partida_handle(ctx, fecha=None, hora=None, jugador1=None, _vs=
             await ctx.author.send("📅 Vamos a agendar una partida. Responde a las siguientes preguntas:")
 
             await ctx.author.send("1️⃣ ¿Qué **fecha** es la partida? (formato: `dd/mm/yyyy`)")
-            respuesta_fecha = await ctx.bot.wait_for("message", check=dm_check, timeout=90)
+            respuesta_fecha = await dm.esperar_respuesta(ctx.bot, ctx.author, timeout=90)
             fecha = respuesta_fecha.content.strip()
             try:
                 datetime.strptime(fecha, "%d/%m/%Y")
@@ -66,7 +68,7 @@ async def agendar_partida_handle(ctx, fecha=None, hora=None, jugador1=None, _vs=
                 return
 
             await ctx.author.send("2️⃣ ¿A qué **hora** es la partida? (formato: `hh:mm`)")
-            respuesta_hora = await ctx.bot.wait_for("message", check=dm_check, timeout=90)
+            respuesta_hora = await dm.esperar_respuesta(ctx.bot, ctx.author, timeout=90)
             hora = respuesta_hora.content.strip()
             try:
                 datetime.strptime(hora, "%H:%M")
@@ -75,11 +77,11 @@ async def agendar_partida_handle(ctx, fecha=None, hora=None, jugador1=None, _vs=
                 return
 
             await ctx.author.send("3️⃣ Escribe el nombre o apodo del **jugador 1** tal como aparece en el servidor:")
-            respuesta_j1 = await ctx.bot.wait_for("message", check=dm_check, timeout=90)
+            respuesta_j1 = await dm.esperar_respuesta(ctx.bot, ctx.author, timeout=90)
             jugador1 = buscar_usuario_en_servidor(ctx.guild, respuesta_j1.content.strip())
 
             await ctx.author.send("4️⃣ Escribe el nombre o apodo del **jugador 2** tal como aparece en el servidor:")
-            respuesta_j2 = await ctx.bot.wait_for("message", check=dm_check, timeout=90)
+            respuesta_j2 = await dm.esperar_respuesta(ctx.bot, ctx.author, timeout=90)
             jugador2 = buscar_usuario_en_servidor(ctx.guild, respuesta_j2.content.strip())
 
             if not jugador1 or not jugador2:
@@ -94,7 +96,7 @@ async def agendar_partida_handle(ctx, fecha=None, hora=None, jugador1=None, _vs=
             raise e
 
     # Envío a canal de agenda
-    canal_destino = discord.utils.get(ctx.guild.text_channels, name="partidos-agendados")
+    canal_destino = canales.get_canal(ctx.guild, canales.AGENDA)
     if not canal_destino:
         await ctx.author.send("❌ No se encontró el canal `#partidos-agendados`.")
         return
@@ -128,13 +130,13 @@ async def extraer_mencion(mensaje, ctx):
     else:
         try:
             return await ctx.guild.fetch_member(int(mensaje.content.strip("<@!>")))
-        except:
+        except (ValueError, discord.HTTPException):
             return None
 
 async def modificar_partida_agendada_handle(ctx):
     await borrar_mensaje_seguro(ctx)
 
-    canal_destino = discord.utils.get(ctx.guild.text_channels, name="partidos-agendados")
+    canal_destino = canales.get_canal(ctx.guild, canales.AGENDA)
     if not canal_destino:
         await ctx.send("❌ No se encontró el canal `#partidos-agendados`.")
         return
@@ -144,9 +146,6 @@ async def modificar_partida_agendada_handle(ctx):
         await ctx.send("❌ No tienes partidas agendadas recientemente.")
         return
 
-    def dm_check(m): 
-        return m.author == ctx.author and isinstance(m.channel, discord.DMChannel)
-
     # Selección de partida si hay varias
     if len(mensajes) > 1:
         opciones = "\n".join([f"{i+1}. {m.content}" for i, m in enumerate(mensajes[:5])])
@@ -155,12 +154,14 @@ async def modificar_partida_agendada_handle(ctx):
             "Responde con el número de la que quieras modificar o eliminar:"
         )
         try:
-            resp = await ctx.bot.wait_for("message", check=dm_check, timeout=90)
-            idx = int(resp.content.strip()) - 1
-            mensaje = mensajes[idx]
-        except (asyncio.TimeoutError, ValueError, IndexError):
+            resp = await dm.esperar_respuesta(ctx.bot, ctx.author, timeout=90)
+        except asyncio.TimeoutError:
+            resp = None
+        idx = dm.indice_elegido(resp.content, len(mensajes[:5])) if resp else None
+        if idx is None:
             await ctx.author.send("❌ Selección inválida o tiempo agotado. No se modificó ninguna partida.")
             return
+        mensaje = mensajes[idx]
     else:
         mensaje = mensajes[0]
 
@@ -195,7 +196,7 @@ async def modificar_partida_agendada_handle(ctx):
         )
 
         try:
-            respuesta = await ctx.bot.wait_for("message", check=dm_check, timeout=120.0)
+            respuesta = await dm.esperar_respuesta(ctx.bot, ctx.author, timeout=120.0)
         except asyncio.TimeoutError:
             await ctx.author.send("⏰ Tiempo agotado. No se modificó la partida agendada.")
             return
@@ -213,19 +214,19 @@ async def modificar_partida_agendada_handle(ctx):
         try:
             if opcion == "1":
                 await ctx.author.send("📅 Nueva fecha (dd/mm/yyyy):")
-                resp = await ctx.bot.wait_for("message", check=dm_check, timeout=60)
+                resp = await dm.esperar_respuesta(ctx.bot, ctx.author, timeout=60)
                 fecha = resp.content.strip()
             elif opcion == "2":
                 await ctx.author.send("⏰ Nueva hora (hh:mm):")
-                resp = await ctx.bot.wait_for("message", check=dm_check, timeout=60)
+                resp = await dm.esperar_respuesta(ctx.bot, ctx.author, timeout=60)
                 hora = resp.content.strip()
             elif opcion == "3":
                 await ctx.author.send("👤 Nuevo Jugador 1 (mención o nombre):")
-                resp = await ctx.bot.wait_for("message", check=dm_check, timeout=60)
+                resp = await dm.esperar_respuesta(ctx.bot, ctx.author, timeout=60)
                 jugador1 = resp.content.strip()
             elif opcion == "4":
                 await ctx.author.send("👤 Nuevo Jugador 2 (mención o nombre):")
-                resp = await ctx.bot.wait_for("message", check=dm_check, timeout=60)
+                resp = await dm.esperar_respuesta(ctx.bot, ctx.author, timeout=60)
                 jugador2 = resp.content.strip()
             else:
                 await ctx.author.send("❌ Opción no válida.")
@@ -239,8 +240,8 @@ async def modificar_partida_agendada_handle(ctx):
     await actualizar_proximas_partidas(ctx)
 
 async def actualizar_proximas_partidas(ctx):
-    canal_destino = discord.utils.get(ctx.guild.text_channels, name="partidos-agendados")
-    canal_proximas = discord.utils.get(ctx.guild.text_channels, name="🎭-cartelera‐proximas-partidas")
+    canal_destino = canales.get_canal(ctx.guild, canales.AGENDA)
+    canal_proximas = canales.get_canal(ctx.guild, canales.CARTELERA_PARTIDAS)
     if not canal_destino or not canal_proximas:
         return
 
@@ -291,10 +292,10 @@ async def eventos_hoy_handle(ctx):
     await borrar_mensaje_seguro(ctx)
     
     # Validar canal correcto
-    if not await validar_canal_correcto(ctx, "preguntale-a-el-barbas", "!eventos-hoy"):
+    if not await validar_canal_correcto(ctx, canales.COMANDOS, "!eventos-hoy"):
         return
 
-    canal = discord.utils.get(ctx.guild.text_channels, name="partidos-agendados")
+    canal = canales.get_canal(ctx.guild, canales.AGENDA)
     if not canal:
         await ctx.author.send("❌ No se encontró el canal `#partidos-agendados`.")
         return
@@ -336,7 +337,7 @@ async def eventos_hoy_handle(ctx):
 async def nueva_peticion_handle(ctx, descripcion):
     # Eliminar mensaje original si es posible
     await borrar_mensaje_seguro(ctx)
-    if not await validar_canal_correcto(ctx, "preguntale-a-el-barbas", "!nueva-peticion"):
+    if not await validar_canal_correcto(ctx, canales.COMANDOS, "!nueva-peticion"):
         return
 
     # Validar descripción
@@ -347,10 +348,7 @@ async def nueva_peticion_handle(ctx, descripcion):
                 "Por favor, respóndeme con la descripción de tu sugerencia o petición (tienes 90 segundos)."
             )
 
-            def dm_check(m):
-                return m.author == ctx.author and isinstance(m.channel, discord.DMChannel)
-
-            respuesta = await ctx.bot.wait_for("message", check=dm_check, timeout=90.0)
+            respuesta = await dm.esperar_respuesta(ctx.bot, ctx.author, timeout=90.0)
             descripcion = respuesta.content.strip()
 
             if not descripcion:
@@ -365,7 +363,7 @@ async def nueva_peticion_handle(ctx, descripcion):
             return
 
     # Obtener canal destino
-    canal_destino = discord.utils.get(ctx.guild.text_channels, name="peticiones-de-usuarios")
+    canal_destino = canales.get_canal(ctx.guild, canales.PETICIONES)
     if not canal_destino:
         try:
             await ctx.author.send("❌ No se encontró el canal `#peticiones-de-usuarios`.")
@@ -401,7 +399,7 @@ async def nueva_peticion_handle(ctx, descripcion):
 
 async def ver_inscritos_handler(ctx, codigo_torneo: str = None):
     await borrar_mensaje_seguro(ctx)
-    if not await validar_canal_correcto(ctx, "preguntale-a-el-barbas", "!ver-inscritos"):
+    if not await validar_canal_correcto(ctx, canales.COMANDOS, "!ver-inscritos"):
         return
 
     # 1️⃣ Obtener código de torneo si no se proporcionó
@@ -485,10 +483,7 @@ async def inscribirse_sorteo_handle(ctx, codigo: str):
                 "Por favor, respóndeme con el **código del sorteo** para apuntarte al sorteo. Tienes 60 segundos."
             )
 
-            def dm_check(m):
-                return m.author == ctx.author and isinstance(m.channel, discord.DMChannel)
-
-            respuesta = await ctx.bot.wait_for("message", check=dm_check, timeout=60.0)
+            respuesta = await dm.esperar_respuesta(ctx.bot, ctx.author, timeout=60.0)
             codigo = respuesta.content.strip()
 
             if not codigo:
@@ -503,7 +498,7 @@ async def inscribirse_sorteo_handle(ctx, codigo: str):
             return
 
     # Verificar que el sorteo está activo
-    canal_activos = discord.utils.get(guild.text_channels, name="sorteos-activos")
+    canal_activos = canales.get_canal(guild, canales.SORTEOS_ACTIVOS)
     if not canal_activos:
         await user.send("⚠️ No se encontró el canal `#sorteos-activos`.")
         return
@@ -513,7 +508,7 @@ async def inscribirse_sorteo_handle(ctx, codigo: str):
         return
 
     # Inscribir al usuario en el canal #inscritos-sorteos
-    canal_inscritos = discord.utils.get(guild.text_channels, name="inscritos-sorteos")
+    canal_inscritos = canales.get_canal(guild, canales.INSCRITOS_SORTEOS)
     if not canal_inscritos:
         await user.send("⚠️ No se encontró el canal `#inscritos-sorteos`.")
         return
@@ -537,14 +532,11 @@ async def inscribirse_sorteo_handle(ctx, codigo: str):
 async def mis_comandos_handle(ctx):
     """Asistente de búsqueda de comandos con tutorial - !mis-comandos"""
     await borrar_mensaje_seguro(ctx)
-    if not await validar_canal_correcto(ctx, "preguntale-a-el-barbas", "!mis-comandos"):
+    if not await validar_canal_correcto(ctx, canales.COMANDOS, "!mis-comandos"):
         return
 
     author = ctx.author
     guild = ctx.guild
-
-    def dm_check(m):
-        return m.author == author and isinstance(m.channel, discord.DMChannel)
 
     # 1️⃣ Filtrar comandos disponibles según los roles del autor
     roles_usuario = [rol.name for rol in author.roles]
@@ -594,7 +586,7 @@ async def mis_comandos_handle(ctx):
         await author.send("✏️ Responde con el **número** o el **nombre** del comando que buscas (o escribe `cancelar`):")
 
         # 3️⃣ Esperar respuesta del usuario
-        respuesta = await ctx.bot.wait_for("message", check=dm_check, timeout=120.0)
+        respuesta = await dm.esperar_respuesta(ctx.bot, author, timeout=120.0)
         contenido = respuesta.content.strip().lower()
 
         if contenido == "cancelar":
@@ -639,8 +631,8 @@ async def mis_comandos_handle(ctx):
         # 6️⃣ Preguntar si quiere tutorial
         await author.send("❓ ¿Quieres ver un **tutorial paso a paso** sobre cómo usarlo? (sí/no)")
 
-        resp_tut = await ctx.bot.wait_for("message", check=dm_check, timeout=120.0)
-        if resp_tut.content.strip().lower() not in ("sí", "si", "yes", "y", "s"):
+        resp_tut = await dm.esperar_respuesta(ctx.bot, author, timeout=120.0)
+        if not dm.es_si(resp_tut.content):
             await author.send(
                 "👌 Perfecto. Si necesitas más ayuda, vuelve a escribir `!mis-comandos` en el canal."
             )
@@ -673,7 +665,7 @@ async def mis_comandos_handle(ctx):
     except discord.Forbidden:
         await ctx.send("❌ No puedo enviarte mensajes privados. Activa los DMs para continuar.")
     except Exception as e:
-        print(f"❌ Error en mis_comandos_wizard_handle: {e}")
+        log.exception(f"❌ Error en mis_comandos_wizard_handle: {e}")
 
 async def enviar_comandos_a_miembro(member: discord.Member):
     """Envía por DM la lista de comandos disponibles (sin necesitar ctx)."""
@@ -695,7 +687,7 @@ async def enviar_comandos_a_miembro(member: discord.Member):
                 "Si crees que deberías tener acceso, contacta con un moderador del servidor."
             )
         except discord.Forbidden:
-            print(f"[INFO] No pude enviar DM a {member}")
+            log.info(f"No pude enviar DM a {member}")
         return
 
     mensaje_intro = (
@@ -724,7 +716,7 @@ async def enviar_comandos_a_miembro(member: discord.Member):
         await member.send(embed=embed)
         await member.send(mensaje_ayuda)
     except discord.Forbidden:
-        print(f"[INFO] No pude enviar comandos a {member}")
+        log.info(f"No pude enviar comandos a {member}")
 
 
 INTENTOS_LISTA = 3   # veces que se vuelve a pedir la decklist o el sideboard si no son válidos
@@ -735,8 +727,6 @@ async def deck_dm_flow(ctx, author: discord.Member, codigo_torneo: str, modo: st
     Flujo de DM para subir o editar un deck.
     Retorna: nombre_deck, formato, archetype, decklist, sideboard, mensaje_deck
     """
-    def dm_check(m):
-        return m.author == author and isinstance(m.channel, discord.DMChannel)
 
     await author.send(f"📝 Vamos a {'subir tu deck' if modo=='subir' else 'editar tu deck'}.")
 
@@ -749,7 +739,7 @@ async def deck_dm_flow(ctx, author: discord.Member, codigo_torneo: str, modo: st
             await author.send("1️⃣ Nombre de tu deck:")
             for intento in range(INTENTOS_LISTA):
                 try:
-                    nombre_deck = decks.nombre_deck((await ctx.bot.wait_for("message", check=dm_check, timeout=120.0)).content)
+                    nombre_deck = decks.nombre_deck((await dm.esperar_respuesta(ctx.bot, author, timeout=120.0)).content)
                     break
                 except decks.DeckInvalido as e:
                     if intento == INTENTOS_LISTA - 1:
@@ -763,7 +753,7 @@ async def deck_dm_flow(ctx, author: discord.Member, codigo_torneo: str, modo: st
                 f"*(Por defecto: {formato_torneo})*"
             )
             while True:
-                msg = await ctx.bot.wait_for("message", check=dm_check, timeout=120.0)
+                msg = await dm.esperar_respuesta(ctx.bot, author, timeout=120.0)
                 formato = decks.formato(msg.content) if msg.content.strip() else formato_torneo
                 if formato:
                     break
@@ -778,7 +768,7 @@ async def deck_dm_flow(ctx, author: discord.Member, codigo_torneo: str, modo: st
             pendiente = None   # nombre escrito tras ver sugerencias: se procesa sin pedirlo otra vez
             while True:
                 if pendiente is None:
-                    msg = await ctx.bot.wait_for("message", check=dm_check, timeout=120.0)
+                    msg = await dm.esperar_respuesta(ctx.bot, author, timeout=120.0)
                     archetype_raw = msg.content.strip()
                 else:
                     archetype_raw, pendiente = pendiente, None
@@ -804,7 +794,7 @@ async def deck_dm_flow(ctx, author: discord.Member, codigo_torneo: str, modo: st
                 )
 
                 try:
-                    msg_opcion = await ctx.bot.wait_for("message", check=dm_check, timeout=120.0)
+                    msg_opcion = await dm.esperar_respuesta(ctx.bot, author, timeout=120.0)
                     contenido = msg_opcion.content.strip()
                     if contenido.isdigit():
                         indice = int(contenido) - 1
@@ -824,7 +814,7 @@ async def deck_dm_flow(ctx, author: discord.Member, codigo_torneo: str, modo: st
             await author.send("4️⃣ Sube tu **decklist** (solo el Main, mínimo 60 cartas):")
             for intento in range(INTENTOS_LISTA):
                 try:
-                    decklist = decks.decklist((await ctx.bot.wait_for("message", check=dm_check, timeout=600.0)).content)
+                    decklist = decks.decklist((await dm.esperar_respuesta(ctx.bot, author, timeout=600.0)).content)
                     break
                 except decks.DeckInvalido as e:
                     if intento == INTENTOS_LISTA - 1:
@@ -836,7 +826,7 @@ async def deck_dm_flow(ctx, author: discord.Member, codigo_torneo: str, modo: st
             await author.send("5️⃣ Sube tu **sideboard** (máx 15 cartas, o 'N/A'):")
             for intento in range(INTENTOS_LISTA):
                 try:
-                    sideboard = decks.sideboard((await ctx.bot.wait_for("message", check=dm_check, timeout=300.0)).content)
+                    sideboard = decks.sideboard((await dm.esperar_respuesta(ctx.bot, author, timeout=300.0)).content)
                     break
                 except decks.DeckInvalido as e:
                     if intento == INTENTOS_LISTA - 1:
@@ -883,7 +873,7 @@ async def deck_dm_flow(ctx, author: discord.Member, codigo_torneo: str, modo: st
             )
 
             try:
-                respuesta = await ctx.bot.wait_for("message", check=dm_check, timeout=300.0)
+                respuesta = await dm.esperar_respuesta(ctx.bot, author, timeout=300.0)
             except asyncio.TimeoutError:
                 await author.send("⏰ No respondiste a tiempo. Se mantiene tu deck sin cambios.")
                 break
@@ -895,7 +885,7 @@ async def deck_dm_flow(ctx, author: discord.Member, codigo_torneo: str, modo: st
             elif contenido == "1":
                 await author.send("Escribe el nuevo **nombre del deck**:")
                 try:
-                    msg = await ctx.bot.wait_for("message", check=dm_check, timeout=120.0)
+                    msg = await dm.esperar_respuesta(ctx.bot, author, timeout=120.0)
                     nombre_deck = decks.nombre_deck(msg.content)
                 except decks.DeckInvalido as e:
                     await author.send(f"❌ {e.mensaje}. No se actualizó el nombre.")
@@ -910,7 +900,7 @@ async def deck_dm_flow(ctx, author: discord.Member, codigo_torneo: str, modo: st
 
                 while True:
                     try:
-                        msg = await ctx.bot.wait_for("message", check=dm_check, timeout=120.0)
+                        msg = await dm.esperar_respuesta(ctx.bot, author, timeout=120.0)
                     except asyncio.TimeoutError:
                         await author.send("⏰ Tiempo agotado. Cancelando selección de arquetipo.")
                         return None
@@ -939,7 +929,7 @@ async def deck_dm_flow(ctx, author: discord.Member, codigo_torneo: str, modo: st
                     )
 
                     try:
-                        msg_opcion = await ctx.bot.wait_for("message", check=dm_check, timeout=120.0)
+                        msg_opcion = await dm.esperar_respuesta(ctx.bot, author, timeout=120.0)
                     except asyncio.TimeoutError:
                         await author.send("⏰ Tiempo agotado. Cancelando selección de arquetipo.")
                         return None
@@ -982,7 +972,7 @@ async def deck_dm_flow(ctx, author: discord.Member, codigo_torneo: str, modo: st
             elif contenido == "3":
                 await author.send("Sube la nueva **decklist** (Main, mínimo 60 cartas):")
                 try:
-                    msg = await ctx.bot.wait_for("message", check=dm_check, timeout=600.0)
+                    msg = await dm.esperar_respuesta(ctx.bot, author, timeout=600.0)
                     decklist = decks.decklist(msg.content)
                 except decks.DeckInvalido as e:
                     await author.send(f"❌ {e.mensaje}. No se actualizó.")
@@ -992,7 +982,7 @@ async def deck_dm_flow(ctx, author: discord.Member, codigo_torneo: str, modo: st
             elif contenido == "4":
                 await author.send("Sube la nueva **sideboard** (máx 15 cartas, o 'N/A'):")
                 try:
-                    msg = await ctx.bot.wait_for("message", check=dm_check, timeout=300.0)
+                    msg = await dm.esperar_respuesta(ctx.bot, author, timeout=300.0)
                     sideboard = decks.sideboard(msg.content)
                 except decks.DeckInvalido as e:
                     await author.send(f"❌ {e.mensaje}. No se actualizó.")
@@ -1003,15 +993,12 @@ async def deck_dm_flow(ctx, author: discord.Member, codigo_torneo: str, modo: st
 
 async def submitted_deck_handle(ctx, codigo_torneo: str = None):
     await borrar_mensaje_seguro(ctx)
-    if not await validar_canal_correcto(ctx, "preguntale-a-el-barbas", "!subir-deck"):
+    if not await validar_canal_correcto(ctx, canales.COMANDOS, "!subir-deck"):
         return
     author = ctx.author
     if ctx.guild is None:
         await author.send("❌ Este comando debe ejecutarse desde el servidor del torneo.")
         return
-
-    def dm_check(m):
-        return m.author == ctx.author and isinstance(m.channel, discord.DMChannel)
 
     if not codigo_torneo:
         codigo_torneo = await obtener_torneo_usuario(
@@ -1037,7 +1024,7 @@ async def submitted_deck_handle(ctx, codigo_torneo: str = None):
     # Iniciar flujo manual directamente
     datos = await deck_dm_flow(ctx, author, codigo_torneo, modo="subir")
     if not datos or len(datos) != 6:
-        print(f"❌ deck_dm_flow devolvió datos inesperados: {datos}")
+        log.error(f"❌ deck_dm_flow devolvió datos inesperados: {datos}")
         return
 
     nombre_deck, formato, archetype, decklist, sideboard, _ = datos
@@ -1057,7 +1044,7 @@ async def submitted_deck_handle(ctx, codigo_torneo: str = None):
 async def editar_deck_handle(ctx, codigo_torneo: str = None):
     await borrar_mensaje_seguro(ctx)
 
-    if not await validar_canal_correcto(ctx, "preguntale-a-el-barbas", "!editar-deck"):
+    if not await validar_canal_correcto(ctx, canales.COMANDOS, "!editar-deck"):
         return
 
     author = ctx.author
@@ -1106,11 +1093,8 @@ async def editar_deck_handle(ctx, codigo_torneo: str = None):
             "¿Deseas continuar? (Escribe `si` para subir tu deck o espera 30 segundos para cancelar)"
         )
 
-        def dm_check(m):
-            return m.author == author and isinstance(m.channel, discord.DMChannel)
-
         try:
-            msg = await ctx.bot.wait_for("message", check=dm_check, timeout=30.0)
+            msg = await dm.esperar_respuesta(ctx.bot, author, timeout=30.0)
             if msg.content.strip().lower() not in ["si", "sí", "yes", "continuar"]:
                 await author.send("❌ Operación cancelada.")
                 return
@@ -1146,11 +1130,8 @@ async def editar_deck_handle(ctx, codigo_torneo: str = None):
             "¿Deseas continuar? (Escribe `continuar` o espera 30 segundos para cancelar)"
         )
 
-        def dm_check(m):
-            return m.author == author and isinstance(m.channel, discord.DMChannel)
-
         try:
-            msg = await ctx.bot.wait_for("message", check=dm_check, timeout=30.0)
+            msg = await dm.esperar_respuesta(ctx.bot, author, timeout=30.0)
             if msg.content.strip().lower() != "continuar":
                 await author.send("❌ Edición cancelada.")
                 return
@@ -1166,11 +1147,8 @@ async def editar_deck_handle(ctx, codigo_torneo: str = None):
             "¿Deseas continuar? (Escribe `continuar` o espera 30 segundos para cancelar)"
         )
 
-        def dm_check(m):
-            return m.author == author and isinstance(m.channel, discord.DMChannel)
-
         try:
-            msg = await ctx.bot.wait_for("message", check=dm_check, timeout=30.0)
+            msg = await dm.esperar_respuesta(ctx.bot, author, timeout=30.0)
             if msg.content.strip().lower() != "continuar":
                 await author.send("❌ Edición cancelada.")
                 return
@@ -1181,7 +1159,7 @@ async def editar_deck_handle(ctx, codigo_torneo: str = None):
     # 🔹 Continuar flujo normal de edición
     datos = await deck_dm_flow(ctx, author, codigo_torneo, modo="editar")
     if not datos or len(datos) != 6:
-        print(f"❌ deck_dm_flow devolvió datos inesperados: {datos}")
+        log.error(f"❌ deck_dm_flow devolvió datos inesperados: {datos}")
         await author.send("❌ Edición cancelada.")
         return
 
@@ -1256,7 +1234,7 @@ async def subir_deck_desde_edicion(ctx, author: discord.Member, codigo_torneo: s
     # 🔹 Flujo de subida
     datos = await deck_dm_flow(ctx, author, codigo_torneo, modo="subir")
     if not datos or len(datos) != 6:
-        print(f"❌ deck_dm_flow devolvió datos inesperados: {datos}")
+        log.error(f"❌ deck_dm_flow devolvió datos inesperados: {datos}")
         await author.send("❌ Subida cancelada.")
         return
 

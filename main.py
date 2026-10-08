@@ -7,6 +7,8 @@ import logging
 import os
 import unicodedata
 
+from utils import canales
+
 from utils.torneos_api import iniciar_servidor_web, set_bot_instance
 
 from utils.admin import (
@@ -79,8 +81,8 @@ from utils.commons import best_decks_handle;
 
 DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
 
-# Configurar logging
-logging.basicConfig(level=logging.INFO)
+# Configurar logging: un único formato para el bot y discord.py (bot.run usa log_handler=None para no duplicar)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)-7s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
 
 intents = discord.Intents.default()
@@ -103,8 +105,8 @@ def normalize_string(s: str) -> str:
     )
     return s
 
-ROL_ADMIN = "admin"
-ROLES_SANCIONADOS = {"out", "strike"}  # bloquean los comandos aunque se tenga un rol permitido
+ROL_ADMIN = canales.ROL_ADMIN
+ROLES_SANCIONADOS = {canales.ROL_OUT.lower(), canales.ROL_STRIKE.lower()}  # bloquean los comandos aunque se tenga un rol permitido
 
 
 async def _denegar_comando(ctx, mensaje: str) -> bool:
@@ -159,54 +161,54 @@ def comando_roles_permitidos(*roles):
 ################################## COMANDOS ADMINISTRADOR ###############################################
 
 @bot.command(name="strike")
-@comando_roles_permitidos("admin")
+@comando_roles_permitidos(canales.ROL_ADMIN)
 async def strike(ctx, miembro: discord.Member = None):
     """Aplica un strike a un miembro del servidor - !strike <usuario>"""
     await aplicar_strike(ctx, miembro)
 
 @bot.command(name="out")
-@comando_roles_permitidos("admin")
+@comando_roles_permitidos(canales.ROL_ADMIN)
 async def out(ctx, miembro: discord.Member = None):
     """aplica el rol 'Out' a un miembro del servidor - !out <usuario>"""
     await aplicar_out(ctx, miembro)
 
 @bot.command(name="eliminar-mensajes",
     aliases=["eliminar mensajes", "eliminar_mensajes"])
-@comando_roles_permitidos("admin")
+@comando_roles_permitidos(canales.ROL_ADMIN)
 async def clearMessajes(ctx, canal: discord.TextChannel = None, cantidad: int = None):
     """Elimina una cantidad específica de mensajes en un canal - !eliminar-mensajes <canal> <cantidad>"""
     await eliminar_mensajes(ctx, canal, cantidad)
 
 @bot.command(name="eliminar-decks",
     aliases=["eliminar decks", "eliminar_decks"])
-@comando_roles_permitidos("admin")
+@comando_roles_permitidos(canales.ROL_ADMIN)
 async def clearDecks(ctx, codigo: str = None):
     """Elimina los decks submiteados para un torneo - !eliminar-decks <torneo>"""
     await eliminar_decks_handle(ctx,codigo)
 
 @bot.command(name="cerrar-peticion",
     aliases=["cerrar peticion", "cerrar_peticion"])
-@comando_roles_permitidos("admin")
+@comando_roles_permitidos(canales.ROL_ADMIN)
 async def cerrar_peticion(ctx, codigo: str = None, *, respuesta: str = None):
     """Cierra una petición y envía la respuesta al usuario - !cerrar-peticion <código> <respuesta>"""
     await cerrar_peticion_handle(ctx, codigo, respuesta)
 
 @bot.command(name="sorteo-torneo",
     aliases=["sorteo torneo", "sorteo_torneo"])
-@comando_roles_permitidos("admin")
+@comando_roles_permitidos(canales.ROL_ADMIN)
 async def sorteo_torneo(ctx, codigo_torneo: str = None, *, premio: str = "Premio del sorteo"):
     """Realiza un sorteo entre los inscritos de un torneo - !sorteo-torneo <código_torneo> <premio>"""
     await sorteo_torneo_handle(ctx, codigo_torneo, premio)
 
 @bot.command(name="nuevo-sorteo",
     aliases=["nuevo sorteo", "nuevo_sorteo"])
-@comando_roles_permitidos("admin")
+@comando_roles_permitidos(canales.ROL_ADMIN)
 async def nuevo_sorteo(ctx, *, args: str = None):
     await nuevo_sorteo_handle(ctx, args=args)
 
 @bot.command(name="realizar-sorteo",
     aliases=["realizar sorteo", "realizar_sorteo"])
-@comando_roles_permitidos("admin")
+@comando_roles_permitidos(canales.ROL_ADMIN)
 async def realizar_sorteo(ctx, codigo: str = None):
     await realizar_sorteo_handle(ctx, codigo)
 
@@ -214,7 +216,7 @@ async def realizar_sorteo(ctx, codigo: str = None):
     name="nuevo-comunicado",
     aliases=["nuevo_comunicado"]
 )
-@comando_roles_permitidos("admin")
+@comando_roles_permitidos(canales.ROL_ADMIN)
 async def nuevo_comunicado(ctx, *, mensaje: str = None):
     """
     Envía un comunicado al canal 📰-tablon‐anuncios
@@ -230,28 +232,28 @@ async def nuevo_comunicado(ctx, *, mensaje: str = None):
 
 @bot.command(name="agendar-partida",
     aliases=["agendar partida", "agendar_partida"])
-@comando_roles_permitidos("socio", "second-chance-socio", "miembro", "second-chance-miembro")
+@comando_roles_permitidos(*canales.ROLES_JUGADORES)
 async def agendar_partida(ctx, fecha=None, hora=None, jugador1: discord.Member = None, _vs=None, jugador2: discord.Member = None):
     """Agenda una partida entre dos jugadores - !agendar-partida"""
     await agendar_partida_handle(ctx, fecha, hora, jugador1, _vs, jugador2)
 
 @bot.command(name="modificar-agenda",
     aliases=["modificar agenda", "modificar_agenda"])
-@comando_roles_permitidos("socio", "second-chance-socio", "miembro", "second-chance-miembro")
+@comando_roles_permitidos(*canales.ROLES_JUGADORES)
 async def agendar_partida(ctx):
     """Permite modificar una partida agendada entre dos jugadores - !modificar-agenda"""
     await modificar_partida_agendada_handle(ctx)
 
 @bot.command(name="eventos-hoy",
     aliases=["eventos hoy", "eventos_hoy"])
-@comando_roles_permitidos("socio", "second-chance-socio", "miembro", "second-chance-miembro")
+@comando_roles_permitidos(*canales.ROLES_JUGADORES)
 async def eventos_hoy(ctx):
     """Muestra los eventos programados para hoy - !eventos-hoy"""
     await eventos_hoy_handle(ctx)
 
 @bot.command(name="nueva-peticion",
     aliases=["nueva peticion", "nueva_peticion"])
-@comando_roles_permitidos("socio", "second-chance-socio", "miembro", "second-chance-miembro")
+@comando_roles_permitidos(*canales.ROLES_JUGADORES)
 async def nueva_peticion(ctx, *, descripcion: str = None):
     """Crea una nueva petición - !nueva-peticion"""
     await nueva_peticion_handle(ctx, descripcion)
@@ -259,7 +261,7 @@ async def nueva_peticion(ctx, *, descripcion: str = None):
 
 @bot.command(name="ver-inscritos",
     aliases=["ver inscritos", "ver_inscritos"])
-@comando_roles_permitidos("socio", "second-chance-socio", "miembro", "second-chance-miembro")
+@comando_roles_permitidos(*canales.ROLES_JUGADORES)
 async def ver_inscritos(ctx, codigo=None):
     """Muestra los inscritos en un torneo - !ver-inscritos"""
     await ver_inscritos_handler(ctx, codigo)
@@ -267,55 +269,55 @@ async def ver_inscritos(ctx, codigo=None):
 
 @bot.command(name="iniciar-battle",
     aliases=["iniciar battle", "iniciar_battle"])
-@comando_roles_permitidos("admin")
+@comando_roles_permitidos(canales.ROL_ADMIN)
 async def iniciar_battle(ctx, codigo_torneo: str = None, jugador1: discord.Member = None, jugador2: discord.Member = None):
     """Apunta un enfrentamiento en un Battle Royale (máximo 2 por pareja) - !iniciar-battle <código> @j1 @j2"""
     await iniciar_battle_handle(ctx, codigo_torneo, jugador1, jugador2)
 
 @bot.command(name="reportar-resultado-battle",
     aliases=["reportar resultado battle", "reportar_resultado_battle"])
-@comando_roles_permitidos("socio", "second-chance-socio", "miembro", "second-chance-miembro")
+@comando_roles_permitidos(*canales.ROLES_JUGADORES)
 async def reportar_resultado_battle(ctx, codigo_torneo: str = None, jugador1: discord.Member = None, resultado: str = None, jugador2: discord.Member = None):
     """Reporta el resultado de un enfrentamiento pendiente de un Battle Royale - !reportar-resultado-battle"""
     await reportar_resultado_battle_handle(ctx, codigo_torneo, jugador1, resultado, jugador2)
 
 @bot.command(name="partidos-pendientes",
     aliases=["partidos pendientes", "partidos_pendientes"])
-@comando_roles_permitidos("socio", "second-chance-socio", "miembro", "second-chance-miembro")
+@comando_roles_permitidos(*canales.ROLES_JUGADORES)
 async def partidos_pendientes(ctx, codigo_torneo: str = None):
     """Muestra las partidas sin resultado de la ronda actual de un torneo suizo - !partidos-pendientes <código_torneo>"""
     await swiss_partidos_pendientes_handle(ctx, codigo_torneo)
 
 @bot.command(name="inscribirse-sorteo",
     aliases=["inscribirse sorteo", "inscribirse_sorteo"])
-@comando_roles_permitidos("socio", "second-chance-socio", "miembro", "second-chance-miembro")
+@comando_roles_permitidos(*canales.ROLES_JUGADORES)
 async def inscribirse_sorteo(ctx, codigo: str = None):
     await inscribirse_sorteo_handle(ctx, codigo)
 
 @bot.command(name="subir-deck",
     aliases=["subir deck", "subir_deck"])
-@comando_roles_permitidos("socio", "second-chance-socio", "miembro", "second-chance-miembro")
+@comando_roles_permitidos(*canales.ROLES_JUGADORES)
 async def subir_deck(ctx, codigo: str = None):
     """Comando para subir la lista que jugaras en un torneo - !subir-deck"""
     await submitted_deck_handle(ctx, codigo)
 
 @bot.command(name="editar-deck",
     aliases=["editar deck", "editar_deck"])
-@comando_roles_permitidos("socio", "second-chance-socio", "miembro", "second-chance-miembro")
+@comando_roles_permitidos(*canales.ROLES_JUGADORES)
 async def editar_deck(ctx, codigo: str = None):
     """Permite editar la lista que has subido para jugar un torneo - !editar-deck"""
     await editar_deck_handle(ctx, codigo)
 
 @bot.command(name="cartas-mas-jugadas", 
     aliases=["cartas mas jugadas","cartas_mas_jugadas"])
-@comando_roles_permitidos("socio", "second-chance-socio", "miembro", "second-chance-miembro")
+@comando_roles_permitidos(*canales.ROLES_JUGADORES)
 async def cartas_mas_jugadas(ctx):
     """Inicia el wizard de estadísticas - !stats"""
     await cartas_mas_jugadas_handle(ctx)
 
 @bot.command(name="best-decks", 
     aliases=["best decks", "best_decks"])
-@comando_roles_permitidos("socio", "second-chance-socio", "miembro", "second-chance-miembro")
+@comando_roles_permitidos(*canales.ROLES_JUGADORES)
 async def best_decks(ctx, codigo_torneo: str = None):
     """analiza los mejores decks de un torneo"""
     await best_decks_handle(ctx, codigo_torneo)
@@ -327,7 +329,7 @@ async def best_decks(ctx, codigo_torneo: str = None):
 
 @bot.command(name="actualizar-clasificacion-battle",
     aliases=["actualizar clasificacion battle", "actualizar_clasificacion_battle"])
-@comando_roles_permitidos("admin")
+@comando_roles_permitidos(canales.ROL_ADMIN)
 async def actualizar_clasificacion_battle(ctx, codigo_torneo: str = None):
     """Vuelve a publicar la clasificación de un battle en #🍺-el‐ranking‐de‐la‐barra - !actualizar-clasificacion-battle <código>"""
     await actualizar_clasificacion_battle_handle(ctx, codigo_torneo)
@@ -335,7 +337,7 @@ async def actualizar_clasificacion_battle(ctx, codigo_torneo: str = None):
 
 @bot.command(name="nuevo-battle",
     aliases=["nuevo battle", "nuevo_battle"])
-@comando_roles_permitidos("admin")
+@comando_roles_permitidos(canales.ROL_ADMIN)
 async def nuevo_battle(ctx, *, nombre: str = None):
     """Crea un Battle Royale (sin Challonge) - !nuevo-battle [nombre]"""
     await nuevo_battle_handle(ctx, nombre)
@@ -343,7 +345,7 @@ async def nuevo_battle(ctx, *, nombre: str = None):
 
 @bot.command(name="finalizar-battle",
     aliases=["finalizar battle", "finalizar_battle"])
-@comando_roles_permitidos("admin")
+@comando_roles_permitidos(canales.ROL_ADMIN)
 async def finalizar_battle(ctx, codigo_torneo: str = None):
     """Cierra un Battle Royale y publica la clasificación final - !finalizar-battle <código>"""
     await finalizar_battle_handle(ctx, codigo_torneo)
@@ -351,7 +353,7 @@ async def finalizar_battle(ctx, codigo_torneo: str = None):
 
 @bot.command(name="modificar-resultado-battle",
     aliases=["modificar resultado battle", "modificar_resultado_battle"])
-@comando_roles_permitidos("admin")
+@comando_roles_permitidos(canales.ROL_ADMIN)
 async def modificar_resultado_battle(ctx, codigo_torneo: str = None):
     """Corrige el resultado de un enfrentamiento de un Battle Royale - !modificar-resultado-battle <código>"""
     await modificar_resultado_battle_handle(ctx, codigo_torneo)
@@ -359,7 +361,7 @@ async def modificar_resultado_battle(ctx, codigo_torneo: str = None):
 
 @bot.command(name="reportar-torneo",
     aliases=["reportar torneo", "reportar_torneo"])
-@comando_roles_permitidos("admin")
+@comando_roles_permitidos(canales.ROL_ADMIN)
 async def tournament_report(ctx):
         await tournament_report_handle(ctx)
 
@@ -377,12 +379,12 @@ async def nuevo_swiss(ctx):
     await swiss_nuevo_asistente_handle(ctx)
 
 @bot.command(name="inscribir-swiss", aliases=["inscribir swiss", "inscribir_swiss", "inscribirse", "inscribir"])
-@comando_roles_permitidos("socio", "second-chance-socio", "miembro", "second-chance-miembro")
+@comando_roles_permitidos(*canales.ROLES_JUGADORES)
 async def inscribir_swiss(ctx):
     await swiss_inscribir_asistente_handle(ctx)
 
 @bot.command(name="desinscribir-swiss", aliases=["desinscribir swiss", "desinscribir_swiss", "desinscribirse", "desinscribir"])
-@comando_roles_permitidos("socio", "second-chance-socio", "miembro", "second-chance-miembro")
+@comando_roles_permitidos(*canales.ROLES_JUGADORES)
 async def desinscribir_swiss(ctx):
     await swiss_desinscribir_asistente_handle(ctx)
 
@@ -397,7 +399,7 @@ async def reiniciar_swiss(ctx):
     await swiss_reiniciar_asistente_handle(ctx)
 
 @bot.command(name="reportar-swiss", aliases=["reportar resultado", "reportar_resultado", "reportar-resultado"])
-@comando_roles_permitidos("socio", "second-chance-socio", "miembro", "second-chance-miembro")
+@comando_roles_permitidos(*canales.ROLES_JUGADORES)
 async def reportar_swiss(ctx):
     await swiss_reportar_asistente_handle(ctx)
 
@@ -408,7 +410,7 @@ async def modificar_resultado_swiss(ctx):
     await swiss_modificar_resultado_asistente_handle(ctx)
 
 @bot.command(name="clasificacion-swiss")
-@comando_roles_permitidos("socio", "second-chance-socio", "miembro", "second-chance-miembro")
+@comando_roles_permitidos(*canales.ROLES_JUGADORES)
 async def clasificacion_swiss(ctx):
     await swiss_clasificacion_asistente_handle(ctx)
 
@@ -444,7 +446,7 @@ async def mis_comandos(ctx):
 @bot.event
 async def on_ready():
     # Se repite en cada reconexión a Discord: aquí no se arranca nada (eso va en setup_hook)
-    print(f"✅ Bot conectado como {bot.user}")
+    logger.info(f"✅ Bot conectado como {bot.user}")
 
 
 async def _arranque_unico():
@@ -457,9 +459,9 @@ async def _arranque_unico():
     from utils.torneos_api import refrescar_cache_al_arrancar
     cache = await cache_web.cargar()
     if cache:
-        print(f"✅ Caché de torneos cargada: {len(cache.get('torneos', []))} torneos")
+        logger.info(f"✅ Caché de torneos cargada: {len(cache.get('torneos', []))} torneos")
     else:
-        print("⚠️ No hay caché de torneos: se generará en cuanto el bot esté listo.")
+        logger.warning("⚠️ No hay caché de torneos: se generará en cuanto el bot esté listo.")
     bot._tarea_cache_web = asyncio.create_task(refrescar_cache_al_arrancar(bot))   # referencia: que no la recoja el GC
 
 bot.setup_hook = _arranque_unico
@@ -556,10 +558,10 @@ if __name__ == "__main__":
     if not DISCORD_TOKEN:
         try:
             from config_token import DISCORD_TOKEN
-            print("🔹 Usando token local desde token.py")
+            logger.info("🔹 Usando token local desde config_token.py")
         except ImportError:
             raise ValueError("❌ No se encontró el token del bot. Configura la variable DISCORD_TOKEN o crea token.py.")
 
-    bot.run(DISCORD_TOKEN)
+    bot.run(DISCORD_TOKEN, log_handler=None)
 
 

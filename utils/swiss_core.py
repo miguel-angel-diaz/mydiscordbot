@@ -1,3 +1,4 @@
+import logging
 import discord
 import asyncio
 import functools
@@ -8,6 +9,7 @@ from typing import List, Dict, Optional, Set, Tuple
 from collections import defaultdict
 import config
 
+from utils import canales
 from utils.torneos_estado import (
     actualizar_torneo_estado,
     eliminar_torneo_estado,
@@ -21,6 +23,8 @@ from utils.torneos_estado import (
 )
 from utils.validacion_web import EntradaInvalida, resultado as validar_resultado
 from utils.commons import cabecera_emparejamientos, es_mensaje_emparejamientos
+
+log = logging.getLogger(__name__)
 
 # ============================================================
 # LOCK POR TORNEO
@@ -175,7 +179,7 @@ async def desinscribir_jugador(bot, codigo: str, usuario_id: int, guild: discord
             await deck["mensaje"].delete()
             return True, f"Desinscripción completada. Se ha eliminado tu deck `{deck.get('nombre_deck', '')}`."
         except discord.HTTPException as e:
-            print(f"⚠️ No se pudo eliminar el deck {codigo}_{usuario_id}: {e}")
+            log.warning(f"⚠️ No se pudo eliminar el deck {codigo}_{usuario_id}: {e}")
             return True, "Desinscripción completada, pero no se pudo eliminar tu deck. Avisa a un admin."
 
     return True, "Desinscripción completada."
@@ -482,7 +486,7 @@ async def _siguiente_ronda_automatica(bot, codigo: str, guild: discord.Guild = N
     if ronda_actual >= rondas_totales:
         await actualizar_torneo_estado(bot, codigo, {"estado": "finalizado"})
         if guild:
-            canal_anuncios = discord.utils.get(guild.text_channels, name="📰-cartelera‐torneos")
+            canal_anuncios = canales.get_canal(guild, canales.CARTELERA_TORNEOS)
             if canal_anuncios:
                 await canal_anuncios.send(f"🏁 El torneo `{codigo}` ha finalizado automáticamente (se completaron las {rondas_totales} rondas necesarias).")
             await publicar_clasificacion_swiss(bot, guild, codigo)
@@ -493,7 +497,7 @@ async def _siguiente_ronda_automatica(bot, codigo: str, guild: discord.Guild = N
     if not ok:
         await actualizar_torneo_estado(bot, codigo, {"estado": "finalizado"})
         if guild:
-            canal_anuncios = discord.utils.get(guild.text_channels, name="📰-cartelera‐torneos")
+            canal_anuncios = canales.get_canal(guild, canales.CARTELERA_TORNEOS)
             if canal_anuncios:
                 await canal_anuncios.send(f"🏁 El torneo `{codigo}` ha finalizado automáticamente (no se pudo generar más rondas).")
             await publicar_clasificacion_swiss(bot, guild, codigo)
@@ -503,7 +507,7 @@ async def _siguiente_ronda_automatica(bot, codigo: str, guild: discord.Guild = N
     # ELIMINAR MENSAJE DE CITAS DE LA RONDA ANTERIOR
     # ============================================================
     if guild:
-        canal_citas = discord.utils.get(guild.text_channels, name="🍸-citas‐a‐ciegas")
+        canal_citas = canales.get_canal(guild, canales.CITAS)
         if canal_citas:
             async for msg in canal_citas.history(limit=100):
                 if msg.author == bot.user and es_mensaje_emparejamientos(msg.content, codigo):
@@ -514,7 +518,7 @@ async def _siguiente_ronda_automatica(bot, codigo: str, guild: discord.Guild = N
     # PUBLICAR NUEVOS EMPAREJAMIENTOS EN EL CANAL DE CITAS
     # ============================================================
     if guild:
-        canal_citas = discord.utils.get(guild.text_channels, name="🍸-citas‐a‐ciegas")
+        canal_citas = canales.get_canal(guild, canales.CITAS)
         if canal_citas:
             rondas_data = await leer_rondas(bot, codigo)
             if rondas_data:
@@ -627,7 +631,7 @@ async def eliminar_ronda_swiss(bot, codigo: str, ronda_num: int, guild: discord.
         await calcular_clasificacion(bot, codigo)
 
     if guild:
-        canal_citas = discord.utils.get(guild.text_channels, name="🍸-citas‐a‐ciegas")
+        canal_citas = canales.get_canal(guild, canales.CITAS)
         if canal_citas:
             async for msg in canal_citas.history(limit=200):
                 if msg.author == bot.user and es_mensaje_emparejamientos(msg.content, codigo, ronda_num):
@@ -642,7 +646,7 @@ async def eliminar_ronda_swiss(bot, codigo: str, ronda_num: int, guild: discord.
 # ============================================================
 
 async def publicar_clasificacion_swiss(bot, guild, codigo: str):
-    canal_ranking = discord.utils.get(guild.text_channels, name="🍺-el‐ranking‐de‐la‐barra")
+    canal_ranking = canales.get_canal(guild, canales.RANKING)
     if not canal_ranking:
         return
 
@@ -662,7 +666,7 @@ async def publicar_clasificacion_swiss(bot, guild, codigo: str):
         try:
             member = guild.get_member(int(p["id"]))
             nombre = member.display_name if member else f"<@{p['id']}>"
-        except:
+        except (ValueError, TypeError, KeyError):
             nombre = f"<@{p['id']}>"
         nombre_truncado = nombre[:22] if len(nombre) > 22 else nombre
 

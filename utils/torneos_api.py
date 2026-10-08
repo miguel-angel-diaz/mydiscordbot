@@ -1,14 +1,15 @@
+import logging
 import aiohttp
 import discord
 import os
 import re
 import secrets
 import time
-import traceback
 from datetime import datetime, timezone
 from aiohttp import web
 from aiohttp.abc import AbstractAccessLogger
 
+from utils import canales
 from utils import validacion_web as v
 
 import feedparser
@@ -39,8 +40,10 @@ from utils import challonge
 from utils import cache_web
 from utils import decks
 
+log = logging.getLogger(__name__)
 
-CANAL_ADMIN_NOMBRE = "solicitudes-admision"
+
+CANAL_ADMIN_NOMBRE = canales.SOLICITUDES_ADMISION
 
 EMAIL_REGEX = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
@@ -68,7 +71,7 @@ CORS_ORIGENES_PERMITIDOS = {
 
 def _error_interno(contexto: str, status: int = 500):
     """Registra el traceback completo en los logs y responde un mensaje genérico (sin detalles internos)."""
-    print(f"❌ Error en API ({contexto}):\n{traceback.format_exc()}")
+    log.exception(f"❌ Error en API ({contexto})")   # se llama desde un except: con traceback
     mensaje = "Servicio no disponible" if status == 503 else "Error interno"
     return web.json_response({"error": mensaje}, status=status)
 
@@ -199,7 +202,7 @@ async def regenerar_cache(guild):
     try:
         torneos = await challonge.torneos_finalizados()
     except challonge.ErrorChallonge as e:
-        print(f"❌ Error regenerando caché (se mantiene la anterior): {e}")
+        log.warning(f"⚠️ Challonge no responde; se mantiene la caché anterior: {e}")
         return leer_cache() or {"actualizado": None, "torneos": []}
 
     resultado, fallidos = [], []
@@ -214,20 +217,20 @@ async def regenerar_cache(guild):
                 "matches": challonge.partidos_simplificados(matches_raw),
             })
         except Exception as e:
-            print(f"Error procesando torneo {torneo['codigo']}: {e}")
+            log.warning(f"⚠️ No se pudo procesar el torneo {torneo['codigo']} (se conserva el anterior): {e}")
             fallidos.append(torneo["codigo"])
             if torneo["codigo"] in anterior:
                 resultado.append(anterior[torneo["codigo"]])
 
     # Si no se ha refrescado ninguno, no se escribe: la fecha diría que está al día y no se reintentaría
     if torneos and len(fallidos) == len(torneos):
-        print("❌ No se pudo procesar ningún torneo: se mantiene la caché anterior.")
+        log.error("❌ No se pudo procesar ningún torneo: se mantiene la caché anterior.")
         return leer_cache() or {"actualizado": None, "torneos": []}
 
     payload = {"actualizado": datetime.now(timezone.utc).isoformat(), "torneos": resultado}
     await cache_web.guardar(payload)
     aviso = f" ({len(fallidos)} con error, se conserva su versión anterior)" if fallidos else ""
-    print(f"✅ Caché regenerado con {len(resultado)} torneo(s){aviso}.")
+    log.info(f"✅ Caché regenerado con {len(resultado)} torneo(s){aviso}.")
     return payload
 
 
@@ -246,13 +249,13 @@ async def refrescar_cache_al_arrancar(bot):
         return
     guild = bot.get_guild(config.GUILD_ID_ADMISION)
     if not guild:
-        print("⚠️ No se encontró el servidor: no se regenera la caché de la web al arrancar.")
+        log.warning("⚠️ No se encontró el servidor: no se regenera la caché de la web al arrancar.")
         return
-    print("🔄 Caché de la web ausente o antigua: regenerando en segundo plano...")
+    log.info("🔄 Caché de la web ausente o antigua: regenerando en segundo plano...")
     try:
         await regenerar_cache(guild)
     except Exception:
-        print(f"❌ Error regenerando la caché al arrancar:\n{traceback.format_exc()}")
+        log.exception("❌ Error regenerando la caché al arrancar")
 
 
 # ============================================================
@@ -315,7 +318,7 @@ async def api_torneos(request):
                     "clasificacion": clasificacion_formateada
                 })
             except Exception:
-                print(f"Error al procesar Swiss {t['codigo']}:\n{traceback.format_exc()}")
+                log.exception(f"Error al procesar Swiss {t['codigo']}")
 
     # La web solo usa los datos del torneo y su clasificación: los partidos y participantes no se envían
     torneos_challonge = [{k: v for k, v in t.items() if k not in ("matches", "participants")} for t in torneos_challonge]
@@ -342,7 +345,7 @@ async def api_solicitar_acceso(request):
     if not guild:
         return web.json_response({"error": "Servicio no disponible"}, status=503)
 
-    canal = discord.utils.get(guild.text_channels, name=CANAL_ADMIN_NOMBRE)
+    canal = canales.get_canal(guild, CANAL_ADMIN_NOMBRE)
     if not canal:
         return web.json_response({"error": "Servicio no disponible"}, status=503)
 
@@ -822,7 +825,7 @@ async def api_estado_torneos(request):
             })
 
     except Exception as e:
-        print(f"❌ [api_estado_torneos] Error: {e}")
+        log.exception(f"❌ Error en api_estado_torneos: {e}")
         return _error_interno("api_estado_torneos", status=500)
 
     response = web.json_response({"torneos": torneos_respuesta})
@@ -855,7 +858,7 @@ async def api_inscribirse(request):
     if not ok:
         return web.json_response({"error": mensaje}, status=400)
 
-    canal_anuncios = discord.utils.get(guild.text_channels, name="📰-cartelera‐torneos")
+    canal_anuncios = canales.get_canal(guild, canales.CARTELERA_TORNEOS)
     if canal_anuncios:
         await canal_anuncios.send(f"📥 {miembro.mention} se ha inscrito en el torneo `{codigo_torneo}` (vía web).")
 
@@ -932,7 +935,7 @@ async def api_todas_partidas(request):
     if not guild:
         return web.json_response({"error": "Servicio no disponible"}, status=503)
 
-    canal = discord.utils.get(guild.text_channels, name="partidos-agendados")
+    canal = canales.get_canal(guild, canales.AGENDA)
     if not canal:
         return web.json_response({"partidas": []})
 
@@ -1003,7 +1006,7 @@ async def api_desinscribirse(request):
     if not ok:
         return web.json_response({"error": mensaje}, status=400)
 
-    canal_anuncios = discord.utils.get(guild.text_channels, name="📰-cartelera‐torneos")
+    canal_anuncios = canales.get_canal(guild, canales.CARTELERA_TORNEOS)
     if canal_anuncios:
         await canal_anuncios.send(f"📤 {miembro.mention} se ha desinscrito del torneo `{codigo_torneo}` (vía web).")
 
@@ -1034,7 +1037,7 @@ async def api_mis_torneos_pendientes(request):
         torneos_estado = estado.get("torneos", [])
 
         # 2. Obtener todos los mensajes del canal #partidos-agendados (una vez para todos los torneos)
-        canal_agendados = discord.utils.get(guild.text_channels, name="partidos-agendados")
+        canal_agendados = canales.get_canal(guild, canales.AGENDA)
         mensajes_agendados = []
         if canal_agendados:
             async for msg in canal_agendados.history(limit=500):
@@ -1142,7 +1145,7 @@ async def api_mis_torneos_pendientes(request):
         return response
 
     except Exception as e:
-        print(f"❌ Error en api_mis_torneos_pendientes: {e}")
+        log.exception(f"❌ Error en api_mis_torneos_pendientes: {e}")
         return _error_interno("api_mis_torneos_pendientes", status=500)
     
 async def api_reportar_resultado(request):
@@ -1195,7 +1198,7 @@ async def api_reportar_resultado(request):
                 nombre1 = await nombre_miembro(guild, jugador1_id, f"Usuario {jugador1_id}")
                 nombre2 = await nombre_miembro(guild, jugador2_id, f"Usuario {jugador2_id}")
 
-                canal_citas = discord.utils.get(guild.text_channels, name="🍸-citas‐a‐ciegas")
+                canal_citas = canales.get_canal(guild, canales.CITAS)
                 if canal_citas and emp is not None:
                     async for msg in canal_citas.history(limit=200):
                         if msg.author == _bot_instance.user and es_mensaje_emparejamientos(msg.content, codigo_torneo, ronda_num):
@@ -1214,11 +1217,11 @@ async def api_reportar_resultado(request):
                                 await msg.edit(content="\n".join(nuevas_lines))
                             break
 
-                canal_resultados = discord.utils.get(guild.text_channels, name="🍺-quién‐se‐lleva‐la‐ronda")
+                canal_resultados = canales.get_canal(guild, canales.RESULTADOS)
                 if canal_resultados:
                     try:
                         s1, s2 = map(int, resultado.split("-"))
-                    except:
+                    except (ValueError, AttributeError):
                         s1 = s2 = 0
                     if s1 > s2:
                         ganador = nombre1
@@ -1234,7 +1237,7 @@ async def api_reportar_resultado(request):
 
 
     except Exception as e:
-        print(f"⚠️ Error al actualizar canales: {e}")
+        log.warning(f"⚠️ Error al actualizar canales: {e}")
 
     response = web.json_response({"ok": True, "mensaje": mensaje})
     return response
@@ -1316,7 +1319,7 @@ async def api_mis_enfrentamientos(request):
         return response
 
     except Exception as e:
-        print(f"❌ Error en api_mis_enfrentamientos: {e}")
+        log.exception(f"❌ Error en api_mis_enfrentamientos: {e}")
         return _error_interno("api_mis_enfrentamientos", status=500)
 
 async def _rondas_challonge_web(guild, participantes: list, partidos: list) -> list:
@@ -1453,7 +1456,7 @@ async def api_torneo_enfrentamientos(request):
         try:
             participants_data, matches_data = await challonge.participantes_y_partidos(torneo_codigo)
         except challonge.ErrorChallonge as e:
-            print(f"⚠️ torneo-enfrentamientos {torneo_codigo}: {e}")
+            log.warning(f"⚠️ torneo-enfrentamientos {torneo_codigo}: {e}")
             return web.json_response({"error": "No se pudieron obtener los enfrentamientos"}, status=503)
 
         participantes = challonge.participantes_simplificados(participants_data)
@@ -1464,7 +1467,7 @@ async def api_torneo_enfrentamientos(request):
         return web.json_response({"rondas": await _rondas_challonge_web(guild, participantes, partidos)})
 
     except Exception as e:
-        print(f"❌ Error en api_torneo_enfrentamientos: {e}")
+        log.exception(f"❌ Error en api_torneo_enfrentamientos: {e}")
         return _error_interno("api_torneo_enfrentamientos", status=500)
 
 async def _ha_jugado_contra(torneo_codigo: str, jugador_id: str, rival_id: str) -> bool:
@@ -1576,7 +1579,7 @@ async def api_clasificacion_torneo(request):
                 })
             return web.json_response({"clasificacion": clasificacion_formateada})
     except Exception as e:
-        print(f"❌ Error al obtener clasificación Swiss: {e}")
+        log.exception(f"❌ Error al obtener clasificación Swiss: {e}")
         return _error_interno("api_clasificacion_torneo", status=500)
 
     return web.json_response({"error": "Torneo no encontrado"}, status=404)
@@ -1641,7 +1644,7 @@ async def api_agendar_partida(request):
     if not jugador2:
         return web.json_response({"error": "Jugador 2 no encontrado en el servidor"}, status=404)
 
-    canal = discord.utils.get(guild.text_channels, name="partidos-agendados")
+    canal = canales.get_canal(guild, canales.AGENDA)
     if not canal:
         return web.json_response({"error": "Canal #partidos-agendados no encontrado"}, status=404)
 
@@ -1708,7 +1711,7 @@ async def api_modificar_partida(request):
     if not jugador2:
         return web.json_response({"error": "Jugador 2 no encontrado"}, status=404)
 
-    canal = discord.utils.get(guild.text_channels, name="partidos-agendados")
+    canal = canales.get_canal(guild, canales.AGENDA)
     if not canal:
         return web.json_response({"error": "Canal #partidos-agendados no encontrado"}, status=404)
 
@@ -1760,7 +1763,7 @@ async def api_modificar_partida(request):
                 f"🔄 Partida modificada: {fecha_actual} {hora_actual} → {nueva_fecha_str} {nueva_hora_str}\n"
                 f"🆚 {jugador1.display_name} vs {jugador2.display_name}"
             )
-        except:
+        except discord.HTTPException:
             pass
 
     return web.json_response({"ok": True, "mensaje": "Partida modificada correctamente"})
@@ -1802,7 +1805,7 @@ async def api_eliminar_partida(request):
     if not jugador2:
         return web.json_response({"error": "Jugador 2 no encontrado"}, status=404)
 
-    canal = discord.utils.get(guild.text_channels, name="partidos-agendados")
+    canal = canales.get_canal(guild, canales.AGENDA)
     if not canal:
         return web.json_response({"error": "Canal #partidos-agendados no encontrado"}, status=404)
 
@@ -1836,7 +1839,7 @@ async def api_eliminar_partida(request):
             await jugador.send(
                 f"🗑️ La partida del {fecha} a las {hora} entre {jugador1.display_name} y {jugador2.display_name} ha sido eliminada."
             )
-        except:
+        except discord.HTTPException:
             pass
 
     class FakeCtx:

@@ -1,4 +1,5 @@
 # utils/commons.py
+import logging
 import asyncio
 import aiohttp
 import config
@@ -18,8 +19,12 @@ from difflib import get_close_matches
 # ============================================================
 # IMPORTACIONES DESDE torneos_estado (evitar duplicación)
 # ============================================================
+from utils import dm
+from utils import canales
 from utils.torneos_estado import leer_estado
 from utils import challonge
+
+log = logging.getLogger(__name__)
 
 # ============================================================
 # FUNCIONES DE UTILIDAD GENERAL
@@ -31,7 +36,7 @@ async def borrar_mensaje_seguro(ctx):
     except (discord.Forbidden, discord.NotFound):
         pass
     except Exception as e:
-        print(f"[ERROR al borrar mensaje]: {e}")
+        log.exception(f"Error al borrar mensaje: {e}")
 
 async def validar_canal_correcto(ctx, canal_valido: str, comando: str):
     """
@@ -217,7 +222,7 @@ async def obtener_torneo_usuario(ctx, mensaje_inicial: str = None, complete=Fals
             
             torneos_swiss.append((codigo, nombre, "swiss"))
     except Exception as e:
-        print(f"⚠️ Error al leer torneos Swiss en obtener_torneo_usuario: {e}")
+        log.warning(f"⚠️ Error al leer torneos Swiss en obtener_torneo_usuario: {e}")
 
     # --- UNIR AMBAS LISTAS ---
     torneos = torneos_challonge + torneos_swiss  # cada elemento: (codigo, nombre, tipo)
@@ -258,11 +263,8 @@ async def obtener_torneo_usuario(ctx, mensaje_inicial: str = None, complete=Fals
                           (" o escribe **todos**." if complete and total > 1 else ".") +
                           " Tienes 90 segundos.")
 
-    def dm_check(m):
-        return m.author == ctx.author and isinstance(m.channel, discord.DMChannel)
-
     try:
-        respuesta = await ctx.bot.wait_for("message", check=dm_check, timeout=90)
+        respuesta = await dm.esperar_respuesta(ctx.bot, ctx.author, timeout=90)
         contenido = respuesta.content.strip().lower()
 
         # ✅ Solo aceptar "todos" si complete=True
@@ -416,8 +418,8 @@ async def cartas_mas_jugadas(ctx, codigo_torneo: str = None, channel: str = None
     (informe de !reportar-torneo) y devuelve los datos del primer torneo; si no, todo va por DM.
     """
     await borrar_mensaje_seguro(ctx)
-    canal_destino = discord.utils.get(ctx.guild.text_channels, name=channel) if channel else None
-    canal = discord.utils.get(ctx.guild.text_channels, name="submitted-decks")
+    canal_destino = canales.get_canal(ctx.guild, channel) if channel else None
+    canal = canales.get_canal(ctx.guild, canales.DECKS)
     if not canal:
         await ctx.send("❌ No encontré el canal `submitted-decks` en este servidor.")
         return None
@@ -492,7 +494,7 @@ async def best_decks_handle(ctx, codigo_torneo: str = None, channel: str = None)
     """
     await borrar_mensaje_seguro(ctx)
     author = ctx.author
-    canal_destino = discord.utils.get(ctx.guild.text_channels, name=channel) if channel else None
+    canal_destino = canales.get_canal(ctx.guild, channel) if channel else None
 
     if not codigo_torneo:
         codigo_torneo = await obtener_torneo_usuario(
@@ -510,7 +512,7 @@ async def best_decks_handle(ctx, codigo_torneo: str = None, channel: str = None)
     try:
         ids = await _ids_clasificacion(ctx.bot, ctx.guild, codigo_torneo)
     except Exception as e:
-        print(f"⚠️ No se pudo obtener la clasificación de {codigo_torneo}: {e}")
+        log.warning(f"⚠️ No se pudo obtener la clasificación de {codigo_torneo}: {e}")
         ids = []
     if not ids:
         await author.send(f"❌ No encontré clasificación para `{codigo_torneo}`.")
@@ -678,25 +680,24 @@ async def llamar_a_openrouter(prompt: str):
     async with aiohttp.ClientSession() as session:
         async with session.post(url, headers=headers, json=payload) as resp:
             if resp.status != 200:
-                print("ERROR OPENROUTER:", resp.status)
-                print(await resp.text())
+                log.error(f"❌ OpenRouter respondió {resp.status}: {(await resp.text())[:500]}")
                 return None
             data = await resp.json()
             try:
                 return data["choices"][0]["message"]["content"].strip()
-            except:
-                print("Respuesta inesperada:", data)
+            except (KeyError, IndexError, TypeError, AttributeError):
+                log.error(f"❌ Respuesta inesperada de OpenRouter: {str(data)[:500]}")
                 return None
 
 async def publicar_en_discord(ctx, texto):
-    canal = discord.utils.get(ctx.guild.text_channels, name="🧠📈analisis-torneos")
+    canal = canales.get_canal(ctx.guild, canales.ANALISIS_TORNEOS)
     destino = canal or ctx
     bloques = dividir_texto_inteligente(texto, 1000)
     for bloque in bloques:
         await destino.send(bloque)
 
 async def guardar_memoria_ia(guild, tipo, contenido):
-    canal = discord.utils.get(guild.text_channels, name="ia-context")
+    canal = canales.get_canal(guild, canales.IA_CONTEXTO)
     if not canal:
         return
     texto = f"[{tipo}]\n{contenido}\n" + "-"*50
@@ -705,7 +706,7 @@ async def guardar_memoria_ia(guild, tipo, contenido):
         await canal.send(bloque)
 
 async def cargar_memoria_ia(guild, limite=10):
-    canal = discord.utils.get(guild.text_channels, name="ia-context")
+    canal = canales.get_canal(guild, canales.IA_CONTEXTO)
     if not canal:
         return []
     recuerdos = []
@@ -895,7 +896,7 @@ async def comprobar_edicion_deck(codigo_torneo: str, author: discord.Member, bot
 
     inicio = _inicio_torneo(fecha_inicio_str)
     if inicio is None:
-        print(f"⚠️ Fecha de inicio no válida en {codigo_torneo}: {fecha_inicio_str!r}")
+        log.warning(f"⚠️ Fecha de inicio no válida en {codigo_torneo}: {fecha_inicio_str!r}")
         return EDICION_ABIERTO, "⚠️ No se pudo verificar la fecha de inicio. Edición permitida con precaución."
 
     segundos_restantes = inicio.timestamp() - time.time()
@@ -968,7 +969,7 @@ async def obtener_estado_torneos_usuario(guild, member: discord.Member):
                 fecha_inicio = datetime.strptime(fecha_str, "%d/%m/%Y").date()
                 if fecha_inicio < hoy:
                     continue  # Si la fecha ya pasó, no se muestra
-            except:
+            except ValueError:
                 # Si no se puede parsear, asumimos que es hoy (no filtrar)
                 pass
 

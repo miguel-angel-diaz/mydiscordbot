@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import re
 import traceback
 from datetime import date, datetime, time, timedelta
@@ -7,6 +8,7 @@ from typing import Optional
 import discord
 from discord.ext import commands, tasks
 
+from utils import canales
 from utils import decks
 from utils.commons import resolver_miembro
 from utils.torneos_estado import leer_estado, actualizar_torneo_estado, obtener_torneo_estado
@@ -16,7 +18,7 @@ try:
     TZ = ZoneInfo("Europe/Madrid")
 except Exception:
     TZ = None
-    print("[TAREAS] ⚠️ No se pudo cargar la zona horaria Europe/Madrid; se usará UTC/hora local.")
+    logging.getLogger(__name__).warning("⚠️ No se pudo cargar la zona horaria Europe/Madrid; se usará UTC/hora local.")
 
 # -------------------------------------------------------------
 # CONFIGURACIÓN
@@ -24,11 +26,11 @@ except Exception:
 GUILD_ID_ADMISION = 1381551388907016252
 HORA_TAREAS_DIARIAS = time(hour=10, minute=15, tzinfo=TZ)
 
-CANAL_PREGUNTAS = "preguntale-a-el-barbas"
-CANAL_PARTIDOS = "partidos-agendados"
-CANAL_TORNEOS_ACTIVOS = "torneos-activos"
-CANAL_CARTELERA_PARTIDAS = "🎭-cartelera‐proximas-partidas"  # ojo: el guion de "cartelera‐" es U+2010
-CANAL_DECKS = "submitted-decks"
+CANAL_PREGUNTAS = canales.COMANDOS
+CANAL_PARTIDOS = canales.AGENDA
+CANAL_TORNEOS_ACTIVOS = canales.TORNEOS_ACTIVOS
+CANAL_CARTELERA_PARTIDAS = canales.CARTELERA_PARTIDAS  # ojo: el guion de "cartelera‐" es U+2010
+CANAL_DECKS = canales.DECKS
 
 TITULO_EMBED_SEMANAL = "📅 Partidas programadas esta semana"
 MAX_CAMPOS_EMBED = 25          # límite de Discord
@@ -55,7 +57,8 @@ def hoy() -> date:
 
 
 def log(msg: str):
-    print(f"[TAREAS {now().strftime('%Y-%m-%d %H:%M:%S')}] {msg}")
+    """Registro de las tareas diarias (la hora la pone el formato de logging de main.py)."""
+    logging.getLogger(__name__).info(f"[TAREAS] {msg}")
 
 
 def _parsear_fecha(texto: str) -> Optional[date]:
@@ -66,7 +69,7 @@ def _parsear_fecha(texto: str) -> Optional[date]:
 
 
 def _canal(guild: discord.Guild, nombre: str) -> Optional[discord.TextChannel]:
-    return discord.utils.get(guild.text_channels, name=nombre)
+    return canales.get_canal(guild, nombre)
 
 
 async def _borrar(mensaje: discord.Message) -> bool:
