@@ -81,7 +81,7 @@ if not CHALLONGE_USERNAME or not CHALLONGE_API_KEY:
 if not OPENROUTER_API_KEY:
     log.warning("⚠️ Sin OPENROUTER_API_KEY: el análisis con IA de !reportar-torneo no estará disponible.")
 
-SESSION_EXPIRATION_SECONDS = 7 * 24 * 3600  
+SESSION_EXPIRATION_SECONDS = 24 * 3600        # sesión de la web: un token robado deja de valer en un día
 ROLES_TODOS = {*canales.ROLES_JUGADORES, canales.ROL_ADMIN}
 CANALES_EXCLUIDOS = {canales.COMANDOS, canales.RANKING}
 ROLES_SOCIOS = {canales.ROL_SOCIO, canales.ROL_SOCIO_2C, canales.ROL_ADMIN}

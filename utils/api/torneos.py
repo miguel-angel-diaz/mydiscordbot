@@ -164,7 +164,7 @@ async def api_torneos(request):
     return web.json_response({"torneos": todos_los_torneos})
 
 
-@requiere_sesion(servidor=True)
+@requiere_sesion(miembro=True)
 async def api_clasificacion_torneo(request, sesion):
     torneo_codigo = v.codigo_torneo(request.query.get("codigo"))
 
@@ -385,7 +385,9 @@ async def _rondas_challonge_para_web(guild, torneo_codigo: str, torneo: dict):
     Challonge (solo para torneos nuestros) y se guardan. Devuelve la respuesta web.
     """
     torneo_cache = _torneo_en_cache(torneo_codigo)
-    if torneo_cache and torneo_cache.get("matches") and torneo_cache.get("participants"):
+    # Si ya se consultó (las claves existen aunque estén vacías) se usa: antes una lista vacía hacía consultar
+    # Challonge en cada visita
+    if torneo_cache and "matches" in torneo_cache and "participants" in torneo_cache:
         rondas = await _rondas_challonge_web(guild, torneo_cache["participants"], torneo_cache["matches"])
         return web.json_response({"rondas": rondas})
 

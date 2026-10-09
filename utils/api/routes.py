@@ -10,10 +10,11 @@ from utils.api import comun
 
 # Orígenes que pueden llamar a la API desde el navegador. Se puede sobrescribir en Railway con
 # CORS_ORIGENES="https://theklubmtg.es,https://www.theklubmtg.es" (separados por comas).
-# "null" es el origen que envía el navegador al abrir la web como archivo local (file://).
+# "null" (web abierta como fichero local, pero también iframes sandbox de cualquier sitio) ya no se admite por defecto;
+# para probar la web en local, añadirlo a esa variable.
 CORS_ORIGENES_PERMITIDOS = {
     o.strip() for o in os.environ.get(
-        "CORS_ORIGENES", "https://theklubmtg.es,https://www.theklubmtg.es,null"
+        "CORS_ORIGENES", "https://theklubmtg.es,https://www.theklubmtg.es"
     ).split(",") if o.strip()
 }
 
@@ -81,6 +82,7 @@ RUTAS_POST = {
     '/api/solicitar-acceso': auth.api_solicitar_acceso,
     '/auth/solicitar-codigo': auth.auth_solicitar_codigo,
     '/auth/verificar-codigo': auth.auth_verificar_codigo,
+    '/auth/logout': auth.auth_cerrar_sesion,
     # Con sesión
     '/api/inscribirse': torneos.api_inscribirse,
     '/api/desinscribirse': torneos.api_desinscribirse,

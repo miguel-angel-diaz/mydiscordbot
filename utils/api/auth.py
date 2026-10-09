@@ -25,12 +25,28 @@ SECRET_KEY = config.JWT_SECRET
 SESSION_EXPIRATION_SECONDS = config.SESSION_EXPIRATION_SECONDS
 
 
+# Cierre de sesión: discord_id -> momento del último logout. Se rechazan los tokens de ese usuario emitidos antes
+# (cerrar sesión cierra todas sus sesiones). En memoria: tras reiniciar el bot se olvida, pero los tokens caducan
+# en SESSION_EXPIRATION_SECONDS, así que el riesgo queda acotado a ese tiempo.
+sesiones_cerradas = {}
+
+
 def crear_token(discord_id: str) -> str:
+    ahora = time.time()
     payload = {
         'discord_id': discord_id,
-        'exp': time.time() + SESSION_EXPIRATION_SECONDS
+        'iat': ahora,
+        'exp': ahora + SESSION_EXPIRATION_SECONDS
     }
     return jwt.encode(payload, SECRET_KEY, algorithm='HS256')
+
+
+def cerrar_sesiones(discord_id: str):
+    """Invalida todos los tokens de ese usuario emitidos hasta ahora."""
+    ahora = time.time()
+    for uid in [u for u, t in sesiones_cerradas.items() if t < ahora - SESSION_EXPIRATION_SECONDS]:
+        del sesiones_cerradas[uid]          # ya no queda ningún token tan antiguo sin caducar
+    sesiones_cerradas[str(discord_id)] = ahora
 
 
 def obtener_token(request) -> str | None:
@@ -48,9 +64,13 @@ def verificar_token(token: str) -> dict | None:
     if not token:
         return None
     try:
-        return jwt.decode(token, SECRET_KEY, algorithms=['HS256'])
+        payload = jwt.decode(token, SECRET_KEY, algorithms=['HS256'])
     except jwt.InvalidTokenError:
         return None
+    # Los tokens anteriores a esta versión no llevan iat (0): un cierre de sesión también los invalida
+    if payload.get('iat', 0) < sesiones_cerradas.get(str(payload.get('discord_id')), 0):
+        return None
+    return payload
 
 
 # ============================================================
@@ -105,13 +125,23 @@ def requiere_sesion(handler=None, *, servidor: bool = False, miembro: bool = Fal
 # ============================================================
 # CÓDIGOS PENDIENTES PARA AUTENTICACIÓN POR DM
 # ============================================================
-codigos_pendientes = {}        # nombre_key -> {codigo, discord_id, username, expira, enviado_en, intentos}
-bloqueos_login = {}            # discord_id -> timestamp hasta el que no puede pedir ni verificar códigos
+# Nadie puede perjudicar a otro desde fuera:
+#   - Los intentos fallidos cuentan por IP: la IP que falla CODIGO_MAX_INTENTOS veces queda bloqueada un tiempo, pero
+#     la cuenta no (antes cualquiera bloqueaba 15 minutos a otro fallando a propósito con su nombre). Con 3 intentos
+#     cada 15 minutos por IP, adivinar un código de 8 caracteres es inviable.
+#   - Pedir un código nuevo no anula los anteriores (hasta CODIGOS_ACTIVOS_MAX por usuario): antes se podía dejar a
+#     alguien sin poder entrar pidiendo códigos a su nombre.
+#   - La respuesta es la misma exista o no el usuario.
+codigos_pendientes = {}        # discord_id -> [{codigo, username, expira, enviado_en}] (los más nuevos al final)
+fallos_por_ip = {}             # ip -> {"fallos": n, "hasta": timestamp del bloqueo (0 si no está bloqueada)}
 CODIGO_EXPIRA_SEGUNDOS = 300
 CODIGO_REENVIO_MINIMO = 60
 CODIGO_LONGITUD = 8
-CODIGO_MAX_INTENTOS = 3        # como el PIN de una tarjeta
-CODIGO_BLOQUEO_SEGUNDOS = 900  # 15 minutos tras agotar los intentos
+CODIGO_MAX_INTENTOS = 3        # fallos por IP antes del bloqueo
+CODIGO_BLOQUEO_SEGUNDOS = 900  # 15 minutos
+CODIGOS_ACTIVOS_MAX = 3
+MENSAJE_CODIGO_ENVIADO = ("Si ese usuario es miembro del servidor, le hemos enviado un código por Discord. "
+                          "Revisa tus mensajes directos.")
 
 # Sin caracteres ambiguos (0/O, 1/l/I) ni los que Discord usa para formato (* _ ~ ` | \ >)
 _CODIGO_MAYUS = "ABCDEFGHJKLMNPQRSTUVWXYZ"
@@ -131,17 +161,24 @@ def generar_codigo_acceso() -> str:
 
 def _purgar_codigos_y_bloqueos():
     ahora = time.time()
-    for clave in [k for k, p in codigos_pendientes.items() if p["expira"] < ahora]:
-        del codigos_pendientes[clave]
-    for uid in [k for k, hasta in bloqueos_login.items() if hasta < ahora]:
-        del bloqueos_login[uid]
+    for uid in list(codigos_pendientes):
+        codigos_pendientes[uid] = [c for c in codigos_pendientes[uid] if c["expira"] > ahora]
+        if not codigos_pendientes[uid]:
+            del codigos_pendientes[uid]
+    for ip in [ip for ip, f in fallos_por_ip.items() if f["hasta"] and f["hasta"] < ahora]:
+        del fallos_por_ip[ip]
 
 
-def _minutos_bloqueo_restantes(discord_id: str) -> int:
-    hasta = bloqueos_login.get(discord_id)
-    if not hasta:
+def _minutos_bloqueo_ip(ip: str) -> int:
+    hasta = fallos_por_ip.get(ip, {}).get("hasta", 0)
+    if not hasta or hasta < time.time():
         return 0
     return max(1, int((hasta - time.time() + 59) // 60))
+
+
+def _respuesta_bloqueo(minutos: int):
+    return web.json_response(
+        {"error": f"Demasiados intentos fallidos desde tu conexión. Inténtalo de nuevo en {minutos} min."}, status=429)
 
 
 # ============================================================
@@ -161,75 +198,55 @@ async def auth_solicitar_codigo(request):
         return comun.no_disponible()
 
     _purgar_codigos_y_bloqueos()
+    minutos = _minutos_bloqueo_ip(v.ip_cliente(request))
+    if minutos:
+        return _respuesta_bloqueo(minutos)
 
-    nombre_key = nombre.lower()
-    pendiente_actual = codigos_pendientes.get(nombre_key)
-    if pendiente_actual:
-        segundos_desde_envio = time.time() - pendiente_actual.get("enviado_en", 0)
-        if segundos_desde_envio < CODIGO_REENVIO_MINIMO:
-            espera = int(CODIGO_REENVIO_MINIMO - segundos_desde_envio)
-            return web.json_response(
-                {"error": f"Espera {espera}s antes de pedir un nuevo código"},
-                status=429
-            )
-
-    # Exacto: con coincidencias parciales "a" mandaba el código al primer miembro que tuviera esa letra
+    # Exacto: con coincidencias parciales "a" mandaba el código al primer miembro que tuviera esa letra.
+    # Si no existe se responde lo mismo que si se hubiera enviado: así no se puede saber quién es miembro.
     miembro = buscar_usuario_en_servidor(guild, nombre, exacto=True)
     if not isinstance(miembro, discord.Member):
-        return web.json_response(
-            {"error": "No hemos podido verificarte. Comprueba tu usuario."},
-            status=404
-        )
+        return web.json_response({"ok": True, "mensaje": MENSAJE_CODIGO_ENVIADO})
 
     discord_id = str(miembro.id)
-    minutos = _minutos_bloqueo_restantes(discord_id)
-    if minutos:
-        return web.json_response(
-            {"error": f"Acceso bloqueado por demasiados intentos fallidos. Inténtalo de nuevo en {minutos} min."},
-            status=429
-        )
-
-    # Un único código activo por usuario (aunque lo pida con otra variante del nombre)
-    for clave in [k for k, p in codigos_pendientes.items() if p["discord_id"] == discord_id]:
-        del codigos_pendientes[clave]
+    activos = codigos_pendientes.get(discord_id, [])
+    if activos:
+        segundos_desde_envio = time.time() - activos[-1]["enviado_en"]
+        if segundos_desde_envio < CODIGO_REENVIO_MINIMO:
+            espera = int(CODIGO_REENVIO_MINIMO - segundos_desde_envio)
+            return web.json_response({"error": f"Espera {espera}s antes de pedir un nuevo código"}, status=429)
 
     codigo = generar_codigo_acceso()
-    codigos_pendientes[nombre_key] = {
-        "codigo": codigo,
-        "discord_id": discord_id,
-        "username": miembro.display_name,
-        "expira": time.time() + CODIGO_EXPIRA_SEGUNDOS,
-        "enviado_en": time.time(),
-        "intentos": 0,
-    }
-
     try:
         await miembro.send(
             f"🔐 Tu código de acceso para **The Klub** es: `{codigo}`\n"
-            f"Distingue mayúsculas y minúsculas. Caduca en 5 minutos y tienes {CODIGO_MAX_INTENTOS} intentos.\n"
-            f"Si no has solicitado esto, ignora este mensaje."
+            f"Distingue mayúsculas y minúsculas y caduca en 5 minutos.\n"
+            f"Si no has solicitado esto, ignora este mensaje: nadie puede entrar sin el código."
         )
-    except Exception:
-        del codigos_pendientes[nombre_key]
+    except discord.HTTPException:
         return web.json_response(
             {"error": "No hemos podido enviarte el código. Revisa que tienes los DMs abiertos para miembros del servidor."},
             status=400
         )
 
-    return web.json_response({"ok": True, "mensaje": "Código enviado por Discord"})
+    ahora = time.time()
+    activos.append({"codigo": codigo, "username": miembro.display_name,
+                    "expira": ahora + CODIGO_EXPIRA_SEGUNDOS, "enviado_en": ahora})
+    codigos_pendientes[discord_id] = activos[-CODIGOS_ACTIVOS_MAX:]
+    return web.json_response({"ok": True, "mensaje": MENSAJE_CODIGO_ENVIADO})
 
 
-async def _avisar_bloqueo_login(discord_id: str):
-    """Avisa por DM al usuario de que alguien ha agotado los intentos con su código."""
+async def _avisar_intentos_fallidos(discord_id: str):
+    """Avisa por DM al usuario de que alguien ha fallado varias veces su código (su cuenta no se bloquea)."""
     guild = comun.servidor()
     miembro = guild.get_member(int(discord_id)) if guild else None
     if not miembro:
         return
     try:
         await miembro.send(
-            f"⚠️ Se ha introducido mal tu código de acceso a **The Klub** {CODIGO_MAX_INTENTOS} veces. "
-            f"Por seguridad, el acceso queda bloqueado {CODIGO_BLOQUEO_SEGUNDOS // 60} minutos.\n"
-            f"Si no has sido tú, no compartas nunca tus códigos."
+            f"⚠️ Alguien ha introducido mal {CODIGO_MAX_INTENTOS} veces un código de acceso a **The Klub** con tu "
+            f"usuario y su conexión ha quedado bloqueada {CODIGO_BLOQUEO_SEGUNDOS // 60} minutos. Tu cuenta sigue "
+            f"funcionando con normalidad.\nSi no has sido tú, no compartas nunca tus códigos."
         )
     except discord.HTTPException:
         pass
@@ -238,58 +255,63 @@ async def _avisar_bloqueo_login(discord_id: str):
 async def auth_verificar_codigo(request):
     body = await v.leer_json(request)
 
-    nombre = str(body.get("nombre", "")).strip().lower()[:v.MAX_NOMBRE]
+    nombre = str(body.get("nombre", "")).strip()[:v.MAX_NOMBRE]
     codigo_introducido = str(body.get("codigo", "")).strip()[:v.MAX_CODIGO_ACCESO]
-
-    pendiente = codigos_pendientes.get(nombre)
-    if pendiente and time.time() > pendiente["expira"]:
-        del codigos_pendientes[nombre]
-        return web.json_response({"error": "El código ha caducado, solicita uno nuevo"}, status=400)
+    ip = v.ip_cliente(request)
 
     _purgar_codigos_y_bloqueos()
-    if not pendiente:
-        return web.json_response({"error": "No hay ningún código pendiente para ese usuario"}, status=400)
+    minutos = _minutos_bloqueo_ip(ip)
+    if minutos:
+        return _respuesta_bloqueo(minutos)
 
-    discord_id = pendiente["discord_id"]
-    if _minutos_bloqueo_restantes(discord_id):
-        del codigos_pendientes[nombre]
-        return web.json_response({"error": "Acceso bloqueado por demasiados intentos fallidos."}, status=429)
+    guild = comun.servidor()
+    if not guild:
+        return comun.no_disponible()
 
-    if not secrets.compare_digest(codigo_introducido.encode(), pendiente["codigo"].encode()):
-        pendiente["intentos"] = pendiente.get("intentos", 0) + 1
-        restantes = CODIGO_MAX_INTENTOS - pendiente["intentos"]
+    miembro = buscar_usuario_en_servidor(guild, nombre, exacto=True) if nombre else None
+    discord_id = str(miembro.id) if isinstance(miembro, discord.Member) else None
+    activos = codigos_pendientes.get(discord_id, []) if discord_id else []
+    acierto = next((c for c in activos
+                    if secrets.compare_digest(codigo_introducido.encode(), c["codigo"].encode())), None)
+
+    if not acierto:
+        fallo = fallos_por_ip.setdefault(ip, {"fallos": 0, "hasta": 0})
+        fallo["fallos"] += 1
+        restantes = CODIGO_MAX_INTENTOS - fallo["fallos"]
         if restantes > 0:
             return web.json_response(
-                {"error": f"Código incorrecto. Te quedan {restantes} intento(s).", "intentos_restantes": restantes},
+                {"error": f"Código incorrecto o caducado. Te quedan {restantes} intento(s).",
+                 "intentos_restantes": restantes},
                 status=400
             )
-
-        # Intentos agotados: se invalida el código y se bloquea al usuario un tiempo
-        del codigos_pendientes[nombre]
-        bloqueos_login[discord_id] = time.time() + CODIGO_BLOQUEO_SEGUNDOS
-        await _avisar_bloqueo_login(discord_id)
+        fallo["hasta"] = time.time() + CODIGO_BLOQUEO_SEGUNDOS
+        if discord_id and activos:
+            await _avisar_intentos_fallidos(discord_id)
         return web.json_response(
-            {
-                "error": f"Has agotado los {CODIGO_MAX_INTENTOS} intentos. "
-                         f"Acceso bloqueado {CODIGO_BLOQUEO_SEGUNDOS // 60} minutos.",
-                "intentos_restantes": 0,
-            },
+            {"error": f"Has agotado los {CODIGO_MAX_INTENTOS} intentos. Inténtalo de nuevo en "
+                      f"{CODIGO_BLOQUEO_SEGUNDOS // 60} minutos.", "intentos_restantes": 0},
             status=429
         )
 
+    # Código correcto: se gastan todos los del usuario y se olvidan los fallos de esa IP
+    codigos_pendientes.pop(discord_id, None)
+    fallos_por_ip.pop(ip, None)
     token = crear_token(discord_id)
-    del codigos_pendientes[nombre]
-
-    guild = comun.servidor()
-    username = pendiente.get("username", "Usuario")
-    if guild:
-        username = await nombre_miembro(guild, discord_id, username)
+    username = await nombre_miembro(guild, discord_id, acierto.get("username", "Usuario"))
 
     return web.json_response({
         "ok": True,
         "session": token,
         "username": username,
     })
+
+
+async def auth_cerrar_sesion(request):
+    """POST /auth/logout: invalida en el servidor todas las sesiones del usuario. Siempre responde ok."""
+    payload = verificar_token(obtener_token(request))
+    if payload:
+        cerrar_sesiones(payload["discord_id"])
+    return web.json_response({"ok": True})
 
 
 async def auth_verificar_sesion(request):

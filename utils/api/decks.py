@@ -45,7 +45,7 @@ async def _deck_del_formulario(body: dict, codigo_torneo: str):
     return nombre_deck, formato, archetype, decklist, sideboard
 
 
-@requiere_sesion(servidor=True)
+@requiere_sesion(miembro=True)
 async def api_mis_decks(request, sesion):
     lista = await obtener_decks_por_usuario(sesion.guild, sesion.discord_id, include_message=False)
     return web.json_response({
@@ -95,7 +95,7 @@ async def _ha_jugado_contra(torneo: dict, jugador_id: str, rival_id: str) -> boo
     )
 
 
-@requiere_sesion(servidor=True)
+@requiere_sesion(miembro=True)
 async def api_deck_rival(request, sesion):
     torneo_codigo = v.codigo_torneo(request.query.get("torneo"))
     rival_id = v.discord_id(request.query.get("rival"), "Rival")

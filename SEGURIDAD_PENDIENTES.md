@@ -40,35 +40,35 @@ Un dato de la API **nunca** debe entrar en `innerHTML` sin escapar, tampoco dent
 
 ## Fase 2 · Cabeceras y hosting de la web (defensa en profundidad)
 
-- [ ] **18.** [WEB] Mover el `<script>` inline de `index.html:38-42` (`history.scrollRestoration`) a `assets/js/scroll-restoration.js`, cargado sin `defer` en el `<head>`. Es requisito para la CSP, que no debe usar `'unsafe-inline'` en `script-src`.
-- [ ] **19.** [WEB] `.htaccess` en la raíz:
+- [x] **18.** [WEB] (Hecho: assets/js/scroll-restoration.js, cargado sin defer en el <head>; ya no queda ningún script inline ejecutable) Mover el `<script>` inline de `index.html:38-42` (`history.scrollRestoration`) a `assets/js/scroll-restoration.js`, cargado sin `defer` en el `<head>`. Es requisito para la CSP, que no debe usar `'unsafe-inline'` en `script-src`.
+- [x] **19.** [WEB] (La web está en Cloudflare Pages, que no lee .htaccess: las mismas cabeceras y la misma CSP van en `_headers` (commit 90601dd) y el .htaccess se quitó. Antes: .htaccess en la raíz con https, HSTS, nosniff, X-Frame-Options, Referrer-Policy, Permissions-Policy, COOP, CSP con script-src 'self' y connect-src solo a la API, y 403 a .git, ocultos y copias. Probada en Chrome headless con la API simulada: portada y zona de socios sin ninguna violación y un XSS inyectado a propósito, bloqueado. Se aplica en modo normal, no Report-Only, porque ya está probada) `.htaccess` en la raíz:
   - redirección a https y HSTS;
   - `X-Content-Type-Options`, `X-Frame-Options` / `frame-ancestors`, `Referrer-Policy` y `Permissions-Policy`;
   - bloquear `.git` y los ficheros ocultos (salvo `.well-known`);
   - **CSP** con `script-src 'self'` y `connect-src` limitado a la API de Railway.
 
   Primero en modo `Content-Security-Policy-Report-Only` y, cuando no salgan avisos en la consola, en modo normal. La propuesta completa está en el informe del revisor de hosting.
-- [ ] **20.** [OPS] Desplegar solo `index.html`, `assets/` y `.well-known/`, nunca la carpeta `.git`. Comprobar en vivo con `curl -I https://theklubmtg.es` que salen las cabeceras y que `https://theklubmtg.es/.git/HEAD` da 403 o 404.
-- [ ] **21.** [WEB] (Opcional) Pasar a clases CSS los `style="..."` de `index.html:743-781` y de las plantillas de `member.js` (17), para quitar `'unsafe-inline'` de `style-src`.
-- [ ] **22.** [WEB] (Opcional) Alojar en local las fuentes de Google Fonts y Fontshare (como ya se hace con keyrune), para quitar dos orígenes externos de la CSP.
+- [ ] **20.** [OPS] (Cloudflare Pages despliega solo al hacer push a main de la web. Comprobar con `curl -sI https://theklubmtg.es | grep -i -E "content-security|strict-transport|x-frame"` que salen las cabeceras; Pages no publica .git) Desplegar solo `index.html`, `assets/` y `.well-known/`, nunca la carpeta `.git`. Comprobar en vivo con `curl -I https://theklubmtg.es` que salen las cabeceras y que `https://theklubmtg.es/.git/HEAD` da 403 o 404.
+- [x] **21.** [WEB] (Hecho: los 25 style="..." (7 en index.html, 18 en member.js) pasan a clases de utilidad al final de styles.css; la CSP ya no lleva 'unsafe-inline'. Comprobado en Chrome: los 21 elementos afectados tienen exactamente los mismos estilos calculados que antes y el panel de torneo se abre y se cierra igual) (Opcional) Pasar a clases CSS los `style="..."` de `index.html:743-781` y de las plantillas de `member.js` (17), para quitar `'unsafe-inline'` de `style-src`.
+- [x] **22.** [WEB] (Hecho: Inter y Space Grotesk, variables y en woff2, en assets/fonts con assets/css/fonts.css; quitados los enlaces y el @import de Google Fonts y el de Fontshare, que no se usaba en ningún sitio. La CSP queda con style-src y font-src 'self') (Opcional) Alojar en local las fuentes de Google Fonts y Fontshare (como ya se hace con keyrune), para quitar dos orígenes externos de la CSP.
 
 ## Fase 3 · Sesiones y API del bot
 
-- [ ] **23.** [BOT] Cierre de sesión real (la tarea 6c del refactor): un endpoint `POST /auth/logout` que revoque el token, con un contador de versión de sesión por usuario guardado en el estado o una lista de `jti` revocados. Ahora un token robado sigue valiendo 7 días aunque la víctima cierre sesión.
-- [ ] **24.** [BOT] Bajar la caducidad del JWT (`SESSION_EXPIRATION_SECONDS`, ahora 7 días), por ejemplo a 24 horas. **Decisión del usuario:** un valor más corto obliga a iniciar sesión más a menudo.
-- [ ] **25.** [WEB] Al cerrar sesión: llamar a `/auth/logout` (depende de la 23), vaciar los contenedores de la zona de socios y limpiar `window.klubDiscordId`. → `assets/js/auth.js:235-244`.
-- [ ] **26.** [BOT] Que la API devuelva las descripciones del podcast y de Medium como texto plano (sin HTML ni etiquetas cortadas) y solo enlaces e imágenes `https`. Así se protege también cualquier otro cliente. → `utils/api/contenido.py`.
-- [ ] **27.** [BOT] Rechazar `<` y `>` en los textos de los decks (nombre, decklist, sideboard), que nunca los necesitan. Es defensa en profundidad frente a la tarea 10. → `utils/decks.py`.
-- [ ] **28.** [BOT] Los endpoints con `servidor=True` no comprueban que el usuario siga en el servidor: `todas-partidas`, `mis-decks`, `clasificacion-torneo` y `deck-rival`. Pasarlos a `miembro=True`. → `utils/api/*.py`.
-- [ ] **29.** [BOT] Login por código:
+- [x] **23.** [BOT] (Hecho: POST /auth/logout y `iat` en el token; cerrar sesión invalida todos los tokens anteriores de ese usuario (también los antiguos sin iat). En memoria, por decisión del usuario: tras reiniciar se olvida, acotado por la caducidad de 24 h. Probado: el token cerrado da 401, otros usuarios y el nuevo login siguen valiendo) Cierre de sesión real (la tarea 6c del refactor): un endpoint `POST /auth/logout` que revoque el token, con un contador de versión de sesión por usuario guardado en el estado o una lista de `jti` revocados. Ahora un token robado sigue valiendo 7 días aunque la víctima cierre sesión.
+- [x] **24.** [BOT] (Hecho: 24 horas, por decisión del usuario) Bajar la caducidad del JWT (`SESSION_EXPIRATION_SECONDS`, ahora 7 días), por ejemplo a 24 horas. **Decisión del usuario:** un valor más corto obliga a iniciar sesión más a menudo.
+- [x] **25.** [WEB] (Hecho: cerrarSesion() llama a /auth/logout (keepalive) y limpia klubDiscordId; al salir se vacían la agenda, el banner, las pendientes, mis torneos, mis decks y el deck del rival. Probado en Chrome con la CSP estricta) Al cerrar sesión: llamar a `/auth/logout` (depende de la 23), vaciar los contenedores de la zona de socios y limpiar `window.klubDiscordId`. → `assets/js/auth.js:235-244`.
+- [x] **26.** [BOT] (Hecho: título, descripción y fecha en texto plano (sin etiquetas, entidades decodificadas) y enlace e imagen solo si son https; un RSS con <img onerror> y javascript: sale limpio) Que la API devuelva las descripciones del podcast y de Medium como texto plano (sin HTML ni etiquetas cortadas) y solo enlaces e imágenes `https`. Así se protege también cualquier otro cliente. → `utils/api/contenido.py`.
+- [x] **27.** [BOT] (Hecho: _texto() de utils/decks.py rechaza < y > en nombre, decklist y sideboard, para Discord y la web) Rechazar `<` y `>` en los textos de los decks (nombre, decklist, sideboard), que nunca los necesitan. Es defensa en profundidad frente a la tarea 10. → `utils/decks.py`.
+- [x] **28.** [BOT] (Hecho: mis-decks, deck-rival, todas-partidas y clasificacion-torneo con miembro=True. mis-torneos sigue solo con sesión (es el propio historial, sale de la caché)) Los endpoints con `servidor=True` no comprueban que el usuario siga en el servidor: `todas-partidas`, `mis-decks`, `clasificacion-torneo` y `deck-rival`. Pasarlos a `miembro=True`. → `utils/api/*.py`.
+- [x] **29.** [BOT] (Hecho: los fallos cuentan por IP (3 fallos bloquean la IP 15 min, no la cuenta, y la víctima recibe un aviso), un código nuevo no anula los anteriores (hasta 3 activos) y la respuesta es la misma exista o no el usuario. Probado con atacante y víctima desde IPs distintas: 11/11) Login por código:
   - Ahora cualquiera puede pedir códigos a nombre de otro y fallarlos para dejarle bloqueado 15 minutos, o pedir uno nuevo para anularle el suyo.
   - La respuesta 404 revela si un usuario existe.
   - Propuesta: que el bloqueo y los intentos cuenten por usuario e IP, y responder lo mismo exista o no el usuario.
 
   → `utils/api/auth.py:150-290`.
-- [ ] **30.** [BOT] Quitar el origen `null` de los CORS por defecto (solo servía para abrir la web como fichero local). → `utils/api/routes.py:12-18`.
-- [ ] **31.** [BOT] Caché (unos minutos) y timeout corto para los RSS (`contenido.py`). Además, que `torneo-enfrentamientos` no vuelva a consultar Challonge en cada visita cuando un torneo de la caché no tiene partidos. → `utils/api/torneos.py:386-409`.
-- [ ] **32.** [BOT] `mis-decks`: enviar `jugador_id` como texto, porque JS redondea los números de 18 o 19 cifras. La web no lo usa, pero así queda bien para el futuro. → `utils/decks.py:180`.
+- [x] **30.** [BOT] (Hecho: `null` fuera de los orígenes por defecto (se puede añadir con CORS_ORIGENES para pruebas locales)) Quitar el origen `null` de los CORS por defecto (solo servía para abrir la web como fichero local). → `utils/api/routes.py:12-18`.
+- [x] **31.** [BOT] (Hecho: los RSS con caché de 10 min y timeout de 10 s; torneo-enfrentamientos usa la caché aunque esté vacía (antes consultaba Challonge en cada visita)) Caché (unos minutos) y timeout corto para los RSS (`contenido.py`). Además, que `torneo-enfrentamientos` no vuelva a consultar Challonge en cada visita cuando un torneo de la caché no tiene partidos. → `utils/api/torneos.py:386-409`.
+- [x] **32.** [BOT] (Hecho: jugador_id como texto) `mis-decks`: enviar `jugador_id` como texto, porque JS redondea los números de 18 o 19 cifras. La web no lo usa, pero así queda bien para el futuro. → `utils/decks.py:180`.
 
 ## Fase 4 · Correcciones y limpieza de la web
 

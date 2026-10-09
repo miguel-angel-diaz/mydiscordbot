@@ -77,7 +77,7 @@ async def _partida_de_la_agenda(sesion, jugador1_id: int, jugador2_id: int, fech
 # ============================================================
 # AGENDA
 # ============================================================
-@requiere_sesion(servidor=True)
+@requiere_sesion(miembro=True)
 async def api_todas_partidas(request, sesion):
     guild = sesion.guild
     canal = canales.get_canal(guild, canales.AGENDA)

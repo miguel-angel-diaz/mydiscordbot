@@ -48,9 +48,14 @@ class DeckInvalido(EntradaInvalida):
 
 def _texto(valor, campo: str, max_len: int, **kwargs) -> str:
     try:
-        return texto(valor, campo, max_len, **kwargs)
+        limpio = texto(valor, campo, max_len, **kwargs)
     except EntradaInvalida as e:
         raise DeckInvalido(e.mensaje)
+    # Ningún nombre de carta lleva < ni >: rechazarlos corta de raíz el HTML en los decks, que ven otros socios en la
+    # web (defensa en profundidad: la web ya escapa todo lo que pinta)
+    if "<" in limpio or ">" in limpio:
+        raise DeckInvalido(f"El campo {campo} no puede contener los caracteres < ni >")
+    return limpio
 
 
 def nombre_deck(valor) -> str:
@@ -177,7 +182,8 @@ def leer_embed(embed) -> Optional[Dict]:
         "codigo_torneo": torneo,
         "torneo": torneo,
         "discord_id": jugador_id,
-        "jugador_id": int(jugador_id) if jugador_id and jugador_id.isdigit() else None,
+        # Como texto: es un ID de Discord de 18-19 cifras y JavaScript redondea los números de más de 15-16
+        "jugador_id": jugador_id if jugador_id and jugador_id.isdigit() else None,
         "jugador": por_nombre.get("jugador", "Desconocido"),
         "nombre_deck": _PATRON_TITULO.sub("", titulo).strip() or titulo,
         "formato": m_formato.group(1).strip() if m_formato else "Premodern",
