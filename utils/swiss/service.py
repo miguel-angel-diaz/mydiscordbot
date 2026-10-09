@@ -195,9 +195,15 @@ async def iniciar_torneo(bot, codigo: str, quitar_ids=()) -> Tuple[bool, str]:
     if quitar_ids:
         cambios["inscritos_ids"] = restantes
     await actualizar_torneo_estado(bot, codigo, cambios)
-    ok, msg = await generar_ronda(bot, codigo)
+    try:
+        ok, msg = await generar_ronda(bot, codigo)
+    except Exception:
+        # P. ej. Discord falla al guardar: sin esto quedaba "en desarrollo", sin ronda 1 y con los inscritos recortados
+        log.exception(f"❌ Error generando la ronda 1 de {codigo}: se deshace el inicio")
+        ok, msg = False, "No se pudo generar la ronda 1 (error al guardar en Discord). El torneo sigue abierto; inténtalo de nuevo."
     if not ok:
-        await actualizar_torneo_estado(bot, codigo, {"estado": "abierto", "inscritos_ids": inscritos_ahora})
+        await actualizar_torneo_estado(bot, codigo, {"estado": "abierto", "inscritos_ids": inscritos_ahora, "ronda_actual": 0})
+        await _guardar_lista_rondas(bot, codigo, [])      # por si la ronda 1 llegó a guardarse a medias
     return ok, msg
 
 
@@ -233,6 +239,8 @@ async def finalizar_torneo(bot, codigo: str, guild: discord.Guild = None) -> Tup
     if not await obtener_torneo(bot, codigo):     # borrado mientras se confirmaba: no se crea un registro fantasma
         return False, f"El torneo `{codigo}` ya no existe. No se ha cambiado nada."
     await actualizar_torneo_estado(bot, codigo, {"estado": "finalizado"})
+    if guild:   # ya no queda nada por jugar: fuera sus citas (pendientes o la línea suelta de un BYE)
+        await presentacion.borrar_emparejamientos(bot, guild, codigo, todos=True)
     await publicar_clasificacion_swiss(bot, guild, codigo)
     return True, f"Torneo `{codigo}` marcado como finalizado."
 
@@ -325,7 +333,7 @@ async def _siguiente_ronda_automatica(bot, codigo: str, guild: discord.Guild = N
         return
 
     rondas_totales = engine.rondas_necesarias(len(torneo.get("inscritos_ids", [])))
-    if torneo.get("ronda_actual", 0) >= rondas_totales:
+    if engine.numero_ultima_ronda(torneo, await _leer_lista_rondas(bot, codigo)) >= rondas_totales:
         motivo = f"se completaron las {rondas_totales} rondas necesarias"
         ok = False
     else:
@@ -335,6 +343,8 @@ async def _siguiente_ronda_automatica(bot, codigo: str, guild: discord.Guild = N
     if not ok:
         await actualizar_torneo_estado(bot, codigo, {"estado": "finalizado"})
         if guild:
+            # Del mensaje de citas de la última ronda solo quedaba la cabecera y, si lo hubo, la línea del BYE
+            await presentacion.borrar_emparejamientos(bot, guild, codigo, todos=True)
             await presentacion.anunciar_fin_automatico(guild, codigo, motivo)
         await publicar_clasificacion_swiss(bot, guild, codigo)
         return
@@ -485,11 +495,17 @@ async def retirar_por_abandono(bot, codigo: str, usuario_id, guild: discord.Guil
         return True, "Retirado. No tenía partidas pendientes en la ronda actual.", None
 
     rival = emp["j2"] if emp.get("j1") == uid else emp.get("j1")
+    ronda_num = rondas[-1].get("numero", 0)          # antes de reportar: si se completa, la actual pasa a ser otra
     # Si el rival también se ha retirado, la partida queda en empate
     resultado = "1-1" if rival in retirados else "2-0"
     ok, msg, _, _ = await reportar_resultado(bot, codigo, rival, resultado, uid, guild)
     if not ok:
         return True, f"Retirado, pero no se pudo cerrar su partida pendiente: {msg}", None
+    if guild:
+        try:   # su línea fuera del mensaje de citas de SU ronda (como al reportar un resultado normal)
+            await presentacion.quitar_partida_de_citas(bot, guild, codigo, ronda_num, uid, rival)
+        except discord.HTTPException as e:
+            log.warning(f"⚠️ No se pudo quitar la partida de {uid} del mensaje de citas de {codigo}: {e}")
     if resultado == "2-0":
         return True, f"Retirado. Su partida pendiente se da como victoria 2-0 para <@{rival}>.", rival
     return True, "Retirado. Su partida pendiente queda en empate (el rival también se retiró).", None

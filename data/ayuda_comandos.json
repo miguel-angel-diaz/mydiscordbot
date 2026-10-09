@@ -232,11 +232,11 @@
   },
   "reportar-torneo": {
     "seccion": "ADMIN - INFORMES Y WEB (consulta de resultados)",
-    "descripcion": "Genera un informe completo del torneo con análisis IA",
+    "descripcion": "Publica el informe de un torneo: cartas más jugadas y mejores decks",
     "tutorial": [
       "Escribe `!reportar-torneo` en `#preguntale-a-el-barbas`.",
       "Elige el torneo (debe estar completado).",
-      "El bot analiza las cartas más jugadas, los mejores decks y genera un informe con IA que se publica en `#🧠📈analisis-torneos`."
+      "El bot publica en `#🧠📈analisis-torneos` las cartas más jugadas y los decks del top 4 y del último clasificado."
     ],
     "permisos_discord": [
       "manage_messages",

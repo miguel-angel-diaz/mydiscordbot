@@ -27,7 +27,6 @@ RESULTADOS = "🍺-quién‐se‐lleva‐la‐ronda"
 RANKING = "🍺-el‐ranking‐de‐la‐barra"
 DECKS = "submitted-decks"
 ANALISIS_TORNEOS = "🧠📈analisis-torneos"
-IA_CONTEXTO = "ia-context"
 
 # Agenda de partidas
 AGENDA = "partidos-agendados"
@@ -50,6 +49,9 @@ BLACKLIST = "blacklist"
 VESTIBULO = "🪞-vestíbulo‐"
 REGISTRO_VOZ = "registro-canales-voz"
 OYENTES = "oyentes-en-canales"
+
+# Log de comandos ejecutados y errores (cogs/eventos.py -> events.log_comando_handle); solo por ID
+LOG_COMANDOS_ID = 1413079518440198206
 
 # Anuncios: por ID y, si no, por nombre (con el guion especial U+2010 o con guion normal)
 ANUNCIOS_ID = 1387389356464934993

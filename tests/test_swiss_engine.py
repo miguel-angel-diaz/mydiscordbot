@@ -115,6 +115,16 @@ class NuevaRonda(unittest.TestCase):
     def test_errores(self):
         self.assertEqual(engine.error_nueva_ronda(torneo("ab", estado="finalizado"), []), "El torneo ya ha finalizado.")
         self.assertIn("!iniciar-swiss", engine.error_nueva_ronda(torneo("ab", estado="abierto"), []))
+
+    def test_numero_de_ronda_si_falla_una_de_las_dos_escrituras(self):
+        r1 = {"numero": 1, "completa": True, "emparejamientos": [{"j1": "a", "j2": "b", "resultado": "2-0"}]}
+        r2 = {"numero": 2, "completa": True, "emparejamientos": [{"j1": "a", "j2": "b", "resultado": "1-1"}]}
+        # generar_ronda guardó la ronda 2 pero no llegó a actualizar ronda_actual (sigue en 1)
+        self.assertEqual(engine.nueva_ronda("t1", torneo("abcd", 1), [r1, r2])["numero"], 3)
+        # eliminar_ronda bajó ronda_actual a 1 pero no llegó a borrar la ronda 2
+        self.assertEqual(engine.numero_ultima_ronda(torneo("abcd", 1), [r1, r2]), 2)
+        # caso normal
+        self.assertEqual(engine.nueva_ronda("t1", torneo("abcd", 2), [r1, r2])["numero"], 3)
         self.assertEqual(engine.error_nueva_ronda(torneo("ab", retirados=["b"]), []), "Se necesitan al menos 2 jugadores.")
         pendiente = [ronda(1, ("a", "b", None), ("c", "d", "2-0"), completa=False)]
         self.assertIn("1 partida(s) sin resultado", engine.error_nueva_ronda(torneo("abcd", 1), pendiente))

@@ -8,6 +8,7 @@ from typing import Optional
 import discord
 from discord.ext import commands, tasks
 
+import config
 from utils import canales
 from utils import decks
 from utils.commons import resolver_miembro
@@ -23,7 +24,7 @@ except Exception:
 # -------------------------------------------------------------
 # CONFIGURACIÓN
 # -------------------------------------------------------------
-GUILD_ID_ADMISION = 1381551388907016252
+GUILD_ID_ADMISION = config.GUILD_ID_ADMISION      # el de la variable de entorno, como el resto del bot
 HORA_TAREAS_DIARIAS = time(hour=10, minute=15, tzinfo=TZ)
 
 CANAL_PREGUNTAS = canales.COMANDOS

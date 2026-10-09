@@ -438,12 +438,21 @@ async def reportar_resultado_battle_handle(ctx, codigo_battle: str = None, jugad
         # Sin jugadores: se elige entre los enfrentamientos pendientes (los propios, o todos si es admin)
         enfs = await leer_enfrentamientos(ctx.bot, codigo)
         lista = pendientes(enfs) if es_admin else pendientes(enfs, ctx.author.id)
+        if jugador1 is not None:
+            # Solo se dio un jugador: sus enfrentamientos pendientes (antes se ignoraba y salía la lista entera)
+            j1 = await _miembro_valido(ctx, jugador1, "el jugador")
+            if not j1:
+                return
+            lista = [e for e in lista if str(j1.id) in (e["j1"], e["j2"])]
         if not lista:
             await ctx.author.send(f"📭 No tienes enfrentamientos pendientes en `{codigo}`." if not es_admin
                                   else f"📭 No hay enfrentamientos pendientes en `{codigo}`.")
             return
-        i = await _elegir_de_lista(ctx, f"**Enfrentamientos pendientes de `{codigo}`:**",
-                                   [_describir(ctx.guild, e) for e in lista])
+        if len(lista) == 1 and jugador1 is not None:
+            i = 0                                          # un solo pendiente con ese jugador: no hace falta elegir
+        else:
+            i = await _elegir_de_lista(ctx, f"**Enfrentamientos pendientes de `{codigo}`:**",
+                                       [_describir(ctx.guild, e) for e in lista])
         if i is None:
             return
         id1, id2 = lista[i]["j1"], lista[i]["j2"]

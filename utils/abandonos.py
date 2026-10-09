@@ -1,4 +1,3 @@
-import logging
 """
 Qué hacer con los torneos cuando un jugador abandona el servidor.
 
@@ -10,6 +9,8 @@ Qué hacer con los torneos cuando un jugador abandona el servidor.
 - Torneos de otro tipo (Challonge): no se tocan, se avisa para revisión manual.
 """
 import asyncio
+import logging
+from types import SimpleNamespace
 from typing import List
 
 import discord
@@ -19,12 +20,10 @@ from utils.torneos_estado import leer_estado
 from utils.swiss.service import retirar_por_abandono  # reportar_resultado ya publica la clasificación
 from utils.jugadores import actualizar_proximas_partidas
 from utils import battle
-from utils.commons import es_mensaje_emparejamientos
 
 log = logging.getLogger(__name__)
 
 CANAL_RESULTADOS = canales.RESULTADOS
-CANAL_CITAS = canales.CITAS
 CANAL_AGENDA = canales.AGENDA
 
 SOLO_USUARIOS = discord.AllowedMentions(everyone=False, roles=False, users=True)
@@ -87,25 +86,7 @@ async def _anunciar_retirada(bot, guild, codigo: str, uid: str, msg: str, rival)
             f"🚪 <@{uid}> ha abandonado el servidor y se retira del torneo `{codigo}`.\n{msg}",
             allowed_mentions=SOLO_USUARIOS,
         )
-
-    # Quitar su línea del mensaje de emparejamientos de la ronda, si sigue publicado
-    if rival:
-        canal_citas = canales.get_canal(guild, CANAL_CITAS)
-        if canal_citas:
-            async for m in canal_citas.history(limit=100):
-                if m.author != bot.user or not es_mensaje_emparejamientos(m.content, codigo):
-                    continue
-                lineas = m.content.splitlines()
-                restantes = [l for l in lineas[1:] if not (f"<@{uid}>" in l and f"<@{rival}>" in l)]
-                if len(restantes) != len(lineas) - 1:
-                    try:
-                        if restantes:
-                            await m.edit(content="\n".join([lineas[0], *restantes]))
-                        else:
-                            await m.delete()
-                    except discord.HTTPException:
-                        pass
-                break
+    # Su línea del mensaje de citas la quita retirar_por_abandono, que conoce el número de su ronda
 
 
 async def _borrar_partidas_agendadas(bot, guild, uid: str) -> int:
@@ -122,9 +103,6 @@ async def _borrar_partidas_agendadas(bot, guild, uid: str) -> int:
             except discord.HTTPException:
                 pass
     if borradas:
-        class _Ctx:  # actualizar_proximas_partidas solo usa ctx.guild y ctx.bot
-            pass
-        ctx = _Ctx()
-        ctx.guild, ctx.bot = guild, bot
-        await actualizar_proximas_partidas(ctx)
+        # actualizar_proximas_partidas solo usa ctx.guild y ctx.bot
+        await actualizar_proximas_partidas(SimpleNamespace(guild=guild, bot=bot))
     return borradas

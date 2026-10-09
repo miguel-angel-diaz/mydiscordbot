@@ -1,7 +1,6 @@
 # utils/commons.py
 import logging
 import asyncio
-import aiohttp
 import config
 import discord
 from collections import Counter
@@ -605,129 +604,6 @@ async def obtener_deck_en_canal(guild: discord.Guild, codigo_deck: str):
     """
     from utils import decks
     return await decks.buscar(guild, codigo_deck)
-
-# ============================================================
-# IA Y ANÁLISIS
-# ============================================================
-
-async def analizar_torneo_con_ia(ctx, cartas_data, decks_data):
-    if not config.OPENROUTER_API_KEY:
-        await ctx.send("⚠️ El análisis con IA no está configurado (falta OPENROUTER_API_KEY). "
-                       "Las cartas y los mejores decks ya se han publicado.")
-        return
-    memoria = await cargar_memoria_ia(ctx.guild, limite=10)
-    analisis = await generar_analisis_ia(cartas_data, decks_data, memoria)
-    if not analisis or analisis.strip() == "":
-        await ctx.send("⚠️ La IA no devolvió contenido.")
-        return
-    await publicar_en_discord(ctx, analisis)
-    await guardar_memoria_ia(ctx.guild, "ANALYSIS", analisis)
-
-async def generar_analisis_ia(cartas_data, decks_data, memoria):
-    memoria_texto = "\n".join(memoria) if memoria else "Sin memoria previa."
-    top_cartas = ", ".join(
-        [f"{carta} ({cant})" for carta, cant in cartas_data['top_cartas'][:10]]
-    )
-    ranking = ", ".join(
-        [f"Pos {r['pos']}: {r['archetype']}" for r in decks_data['ranking']]
-    )
-    prompt = f"""
-Eres un analista experto de torneos de Magic.
-
-Analiza el torneo en tono narrativo pero centrado en:
-- Metajuego
-- Interacción entre decks
-- Cartas clave
-- Tendencias reales
-
-MEMORIA:
-{memoria_texto}
-
-TORNEO ACTUAL:
-
-Cartas más jugadas:
-{top_cartas}
-
-Ranking:
-{ranking}
-
-Escribe un análisis completo con varios párrafos y conclusión clara.
-"""
-    return await llamar_a_openrouter(prompt)
-
-async def llamar_a_openrouter(prompt: str):
-    if not config.OPENROUTER_API_KEY:
-        log.warning("⚠️ Análisis con IA pedido sin OPENROUTER_API_KEY configurada.")
-        return None
-    url = "https://openrouter.ai/api/v1/chat/completions"
-    headers = {
-        "Authorization": f"Bearer {config.OPENROUTER_API_KEY}",
-        "Content-Type": "application/json"
-    }
-    payload = {
-        "model": "openrouter/free",
-        "messages": [
-            {"role": "system", "content": "Eres analista de torneos competitivo."},
-            {"role": "user", "content": prompt}
-        ],
-        "temperature": 0.8,
-        "max_tokens": 1500
-    }
-    async with aiohttp.ClientSession() as session:
-        async with session.post(url, headers=headers, json=payload) as resp:
-            if resp.status != 200:
-                log.error(f"❌ OpenRouter respondió {resp.status}: {(await resp.text())[:500]}")
-                return None
-            data = await resp.json()
-            try:
-                return data["choices"][0]["message"]["content"].strip()
-            except (KeyError, IndexError, TypeError, AttributeError):
-                log.error(f"❌ Respuesta inesperada de OpenRouter: {str(data)[:500]}")
-                return None
-
-async def publicar_en_discord(ctx, texto):
-    canal = canales.get_canal(ctx.guild, canales.ANALISIS_TORNEOS)
-    destino = canal or ctx
-    bloques = dividir_texto_inteligente(texto, 1000)
-    for bloque in bloques:
-        await destino.send(bloque)
-
-async def guardar_memoria_ia(guild, tipo, contenido):
-    canal = canales.get_canal(guild, canales.IA_CONTEXTO)
-    if not canal:
-        return
-    texto = f"[{tipo}]\n{contenido}\n" + "-"*50
-    bloques = dividir_texto_inteligente(texto, 1000)
-    for bloque in bloques:
-        await canal.send(bloque)
-
-async def cargar_memoria_ia(guild, limite=10):
-    canal = canales.get_canal(guild, canales.IA_CONTEXTO)
-    if not canal:
-        return []
-    recuerdos = []
-    async for msg in canal.history(limit=limite):
-        recuerdos.append(msg.content)
-    recuerdos.reverse()
-    return recuerdos
-
-def dividir_texto_inteligente(texto, limite=1000):
-    """
-    Divide el texto buscando el punto más cercano antes del límite.
-    Si no hay punto, corta por espacio.
-    """
-    bloques = []
-    while len(texto) > limite:
-        corte = texto.rfind(".", 0, limite)
-        if corte == -1:
-            corte = texto.rfind(" ", 0, limite)
-        if corte == -1:
-            corte = limite
-        bloques.append(texto[:corte + 1].strip())
-        texto = texto[corte + 1:].strip()
-    if texto:
-        bloques.append(texto)
-    return bloques
 
 # ============================================================
 # CLASIFICACIÓN (Challonge legacy)

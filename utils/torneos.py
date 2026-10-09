@@ -4,8 +4,8 @@ from utils.commons import (
     obtener_torneo_usuario,
     cartas_mas_jugadas,
     best_decks_handle,
-    analizar_torneo_con_ia
 )
+from utils import canales
 from utils.admin import moderador_permisos_handle
 
 
@@ -27,13 +27,11 @@ async def tournament_report_handle(ctx, codigo_torneo: str = None):
         return
 
     # 🔹 Obtener datos
-    cartas_data = await cartas_mas_jugadas(ctx, codigo_torneo, '🧠📈analisis-torneos')
-    decks_data = await best_decks_handle(ctx, codigo_torneo, '🧠📈analisis-torneos')
+    cartas_data = await cartas_mas_jugadas(ctx, codigo_torneo, canales.ANALISIS_TORNEOS)
+    decks_data = await best_decks_handle(ctx, codigo_torneo, canales.ANALISIS_TORNEOS)
 
     if not cartas_data or not decks_data:
         return await ctx.send("❌ No se pudo generar el informe del torneo.")
-
-    # 🔹 Analizar con IA
-    await analizar_torneo_con_ia(ctx, cartas_data, decks_data)
+    await ctx.author.send(f"✅ Informe de `{codigo_torneo}` publicado en #{canales.ANALISIS_TORNEOS}.")
 
 

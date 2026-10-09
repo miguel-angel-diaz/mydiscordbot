@@ -3,9 +3,8 @@
 Configuración del bot: credenciales (variables de entorno o config_token.py en local) y constantes.
 Los datos (ayuda de los comandos, arquetipos y blacklist) están en data/*.json.
 
-Obligatorias: DISCORD_TOKEN y GUILD_ID_ADMISION. Opcionales: OPENROUTER_API_KEY (solo el análisis con IA de
-!reportar-torneo) y CHALLONGE_USERNAME / CHALLONGE_API_KEY (solo la consulta del histórico): si faltan, el bot
-arranca igual y esas funciones avisan de que no están configuradas.
+Obligatorias: DISCORD_TOKEN y GUILD_ID_ADMISION. Opcionales: CHALLONGE_USERNAME / CHALLONGE_API_KEY (solo la
+consulta del histórico): si faltan, el bot arranca igual y esa función avisa de que no está configurada.
 """
 import json
 import logging
@@ -57,7 +56,6 @@ def _valor(nombre: str):
 CHALLONGE_USERNAME = _valor("CHALLONGE_USERNAME")
 CHALLONGE_API_KEY = _valor("CHALLONGE_API_KEY")
 DISCORD_TOKEN = _valor("DISCORD_TOKEN")
-OPENROUTER_API_KEY = _valor("OPENROUTER_API_KEY")
 GUILD_ID_ADMISION = _valor("GUILD_ID_ADMISION")
 CACHE_PATH = os.environ.get("CACHE_PATH") or "cache/torneos.json"
 JWT_SECRET = get_jwt_secret()
@@ -78,8 +76,6 @@ GUILD_ID_ADMISION = int(GUILD_ID_ADMISION)   # debe ser un entero, no un string
 # 🔹 Opcionales: se avisa, pero el bot arranca
 if not CHALLONGE_USERNAME or not CHALLONGE_API_KEY:
     log.warning("⚠️ Sin credenciales de Challonge: la consulta de torneos antiguos no estará disponible.")
-if not OPENROUTER_API_KEY:
-    log.warning("⚠️ Sin OPENROUTER_API_KEY: el análisis con IA de !reportar-torneo no estará disponible.")
 
 SESSION_EXPIRATION_SECONDS = 24 * 3600        # sesión de la web: un token robado deja de valer en un día
 ROLES_TODOS = {*canales.ROLES_JUGADORES, canales.ROL_ADMIN}

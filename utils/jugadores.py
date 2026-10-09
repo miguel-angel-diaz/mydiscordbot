@@ -14,6 +14,7 @@ from utils.torneos_estado import generar_codigo_unico, leer_estado, obtener_torn
 
 from utils.admin import moderador_permisos_handle
 from utils import decks
+from utils.validacion_web import EntradaInvalida, fecha as validar_fecha, hora as validar_hora
 from utils import servicios
 from utils import ayuda
 
@@ -116,6 +117,20 @@ async def agendar_partida_handle(ctx, fecha=None, hora=None, jugador1=None, _vs=
             await ctx.author.send("❌ Ocurrió un error inesperado al intentar agendar la partida.")
             raise e
 
+    # Mismas reglas que la web (antes, con los argumentos en una línea, no se validaba nada): fecha real, no pasada
+    # ni a más de un año, hora HH:MM y dos miembros distintos del servidor (un ID de alguien que ya no está daba error)
+    try:
+        fecha, hora = validar_fecha(fecha), validar_hora(hora)
+    except EntradaInvalida as e:
+        await ctx.author.send(f"❌ {e.mensaje}. Vuelve a intentarlo con `!agendar-partida`.")
+        return
+    if not isinstance(jugador1, discord.Member) or not isinstance(jugador2, discord.Member):
+        await ctx.author.send("❌ Los dos jugadores tienen que ser miembros del servidor.")
+        return
+    if jugador1.id == jugador2.id:
+        await ctx.author.send("❌ Los dos jugadores tienen que ser distintos.")
+        return
+
     # Envío a canal de agenda
     canal_destino = canales.get_canal(ctx.guild, canales.AGENDA)
     if not canal_destino:
@@ -138,7 +153,7 @@ async def agendar_partida_handle(ctx, fecha=None, hora=None, jugador1=None, _vs=
     for jugador in (jugador1, jugador2):
         try:
             await jugador.send(mensaje_privado)
-        except discord.Forbidden:
+        except discord.HTTPException:
             await ctx.author.send(f"⚠️ No se pudo enviar mensaje privado a {jugador.mention}.")
 
     # Publicar partidas agendadas esta semana

@@ -163,9 +163,18 @@ def error_nueva_ronda(torneo: dict, rondas: List[dict]) -> Optional[str]:
         if pendientes:
             return f"La ronda {rondas[-1].get('numero')} tiene {pendientes} partida(s) sin resultado."
     total = rondas_necesarias(len(torneo.get("inscritos_ids", [])))
-    if torneo.get("ronda_actual", 0) >= total:
+    if numero_ultima_ronda(torneo, rondas) >= total:
         return f"Ya se han jugado las {total} rondas del torneo. Usa `!finalizar-swiss`."
     return None
+
+
+def numero_ultima_ronda(torneo: dict, rondas: List[dict]) -> int:
+    """
+    Número de la última ronda: el mayor entre ronda_actual y la última ronda guardada. Son dos escrituras distintas
+    (generar y eliminar ronda); si falla la segunda, fiarse solo de ronda_actual repetía o saltaba el número.
+    """
+    guardada = rondas[-1].get("numero", len(rondas)) if rondas else 0
+    return max(torneo.get("ronda_actual", 0), guardada)
 
 
 def nueva_ronda(codigo: str, torneo: dict, rondas: List[dict], azar: random.Random = random) -> dict:
@@ -188,7 +197,7 @@ def nueva_ronda(codigo: str, torneo: dict, rondas: List[dict], azar: random.Rand
     emparejamientos = [{"j1": a, "j2": b, "resultado": None} for a, b in parejas]
     if bye:
         emparejamientos.append({"j1": bye, "j2": None, "resultado": "BYE"})
-    return {"numero": torneo.get("ronda_actual", 0) + 1, "emparejamientos": emparejamientos, "completa": False}
+    return {"numero": numero_ultima_ronda(torneo, rondas) + 1, "emparejamientos": emparejamientos, "completa": False}
 
 # ============================================================
 # RESULTADOS

@@ -189,6 +189,21 @@ async def reconocer_comando_handle(bot: commands.Bot, message: discord.Message):
     comando = mapa_alias_con_espacios(bot)[alias]
     resto = texto[len(texto) - len(resto):] if resto else ""     # los argumentos con sus mayúsculas originales
 
+    ctx = await bot.get_context(message)
+    ctx.command, ctx.invoked_with = comando, comando.qualified_name
+    ctx.view = StringView(resto)
+
+    # Permisos ANTES de preguntar: antes se ofrecía "¿Querías usar !eliminar-mensajes?" a cualquiera. Sin permiso,
+    # lo mismo que al escribir el comando entero: el error va a on_command_error, que avisa y lo registra
+    try:
+        puede = await comando.can_run(ctx)     # si lo deniega el cog_check devuelve False (ya avisó por DM), no lanza
+    except commands.CommandError as error:
+        bot.dispatch("command_error", ctx, error)
+        return True
+    if not puede:
+        bot.dispatch("command_error", ctx, commands.CheckFailure(f"Sin permiso para {comando.qualified_name}"))
+        return True
+
     try:
         canal_dm = await message.author.create_dm()
         embed = discord.Embed(
@@ -208,14 +223,19 @@ async def reconocer_comando_handle(bot: commands.Bot, message: discord.Message):
         respuesta = await bot.wait_for("message", timeout=30.0, check=check)
 
         if dm.es_si(respuesta.content):
-            ctx = await bot.get_context(message)
-            ctx.command, ctx.invoked_with = comando, comando.qualified_name
-            ctx.view = StringView(resto)
             await bot.invoke(ctx)          # con comprobaciones; los errores llegan a on_command_error
         else:
             await canal_dm.send("❌ Comando cancelado.")
     except asyncio.TimeoutError:
         await canal_dm.send("⏰ Tiempo agotado. Comando cancelado automáticamente.")
+    except discord.Forbidden:
+        # DMs cerrados: antes el comando se descartaba sin decir nada
+        try:
+            await message.channel.send(
+                f"{message.author.mention} no puedo escribirte por mensaje directo. Activa los DMs de miembros del "
+                f"servidor o usa el comando completo: `{PREFIJO}{comando.qualified_name}`.", delete_after=20)
+        except discord.HTTPException:
+            pass
     except Exception as e:
         log.exception(f"Error en wizard: {e}")
 
@@ -362,7 +382,7 @@ async def castigar_usuario(member: discord.Member):
             log.warning(f"No pude asignar el rol 'Out' a {member}: {e}")
 
 async def log_comando_handle(bot, usuario, comando, tipo, error=None, fecha=None):
-    canal_log = bot.get_channel(1413079518440198206)
+    canal_log = bot.get_channel(canales.LOG_COMANDOS_ID)
     if not canal_log:
         return
 
