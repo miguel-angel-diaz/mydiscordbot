@@ -152,6 +152,9 @@ def error_nueva_ronda(torneo: dict, rondas: List[dict]) -> Optional[str]:
     """Motivo por el que no se puede generar otra ronda (None si se puede)."""
     if torneo.get("estado") == "finalizado":
         return "El torneo ya ha finalizado."
+    if torneo.get("estado", "abierto") == "abierto":
+        # La ronda 1 la genera !iniciar-swiss, que antes cierra inscripciones y revisa los decks
+        return "El torneo aún no ha empezado: inícialo con `!iniciar-swiss`."
     if len(participantes_activos(torneo)) < 2:
         return "Se necesitan al menos 2 jugadores."
     # No se genera una ronda nueva dejando partidas sin resultado en la anterior

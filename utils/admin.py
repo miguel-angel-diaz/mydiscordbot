@@ -35,11 +35,11 @@ async def _obtener_objetivo_sancion(ctx, miembro, accion: str):
             await ctx.send("❌ No puedo enviarte mensajes privados. Activa los mensajes en tu configuración de privacidad.")
             return None
         texto = re.sub(r"^<@!?(\d+)>$", r"\1", respuesta.content.strip())
-        miembro = buscar_usuario_en_servidor(ctx.guild, texto)
+        miembro = buscar_usuario_en_servidor(ctx.guild, texto, exacto=True)   # una sanción nunca por parecido
 
     motivo = None
     if not isinstance(miembro, discord.Member):
-        motivo = "No encontré a ese usuario en el servidor."
+        motivo = "No encontré a ese usuario en el servidor. Escribe su nombre o apodo exacto, su ID o su mención."
     elif miembro.bot:
         motivo = "No se puede sancionar a un bot."
     elif miembro == author:
@@ -395,13 +395,19 @@ async def sorteo_torneo_handle(ctx, codigo_torneo: str, premio: str = "Premio de
             await ctx.send("❌ No puedo enviarte mensajes privados. Activa los DMs para continuar.")
             return
 
-    # Participantes: inscritos del torneo en el estado del bot (ya no se consulta Challonge)
+    # Participantes desde el estado del bot (ya no se consulta Challonge): los inscritos de un suizo o, en un
+    # Battle Royale (sin inscripción), quienes tienen algún enfrentamiento
     from utils.torneos_estado import obtener_torneo_estado
     torneo = await obtener_torneo_estado(ctx.bot, codigo_torneo)
     if not torneo:
-        await ctx.author.send(f"❌ El torneo `{codigo_torneo}` no existe.")
+        await ctx.author.send(f"❌ El torneo `{codigo_torneo}` no existe (solo se puede sortear en suizos y battles).")
         return
-    candidatos = [m for m in (ctx.guild.get_member(int(uid)) for uid in torneo.get("inscritos_ids", [])) if m]
+    if torneo.get("tipo") == "battle":
+        from utils.battle import participantes   # import local: evita el ciclo battle → swiss_handle → jugadores → admin
+        ids = await participantes(ctx.bot, codigo_torneo)
+    else:
+        ids = torneo.get("inscritos_ids", [])
+    candidatos = [m for m in (ctx.guild.get_member(int(uid)) for uid in ids) if m]
 
     if not candidatos:
         await ctx.author.send("⚠️ No hay participantes válidos (inscritos que sigan en el servidor) para el sorteo.")

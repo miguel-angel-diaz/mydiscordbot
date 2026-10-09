@@ -18,10 +18,11 @@ from utils.commons import (
     resolver_miembro,
     tiene_rol_permitido,
 )
-from utils.swiss.service import calcular_clasificacion as calcular_clasificacion_swiss
-from utils.torneos_estado import leer_estado, leer_rondas, leer_clasificacion
+from utils.swiss.service import clasificacion_actual
+from utils.torneos_estado import leer_estado, leer_rondas
 from utils.api import comun
 from utils.api.auth import requiere_sesion
+from utils.api.partidas import esta_agendada, mensajes_agenda
 
 log = logging.getLogger(__name__)
 
@@ -144,9 +145,7 @@ async def api_torneos(request):
             try:
                 # Endpoint público: se usa la clasificación ya guardada (no cambia salvo correcciones,
                 # que la recalculan y guardan). Solo se calcula si aún no existe.
-                guardada = await leer_clasificacion(bot, t["codigo"])
-                clasificacion = (guardada or {}).get("clasificacion") or \
-                    await calcular_clasificacion_swiss(bot, t["codigo"])
+                clasificacion = await clasificacion_actual(bot, t["codigo"])
                 torneos_swiss_finalizados.append({
                     "codigo": t["codigo"],
                     "nombre": t.get("nombre", t["codigo"]),
@@ -177,7 +176,7 @@ async def api_clasificacion_torneo(request, sesion):
     # 2) Torneos suizos (estado interno)
     torneo = await comun.torneo_del_estado(torneo_codigo)
     if torneo and torneo.get("tipo") == "swiss":
-        clasificacion = await calcular_clasificacion_swiss(comun.obtener_bot(), torneo_codigo)
+        clasificacion = await clasificacion_actual(comun.obtener_bot(), torneo_codigo)
         return web.json_response(
             {"clasificacion": await _clasificacion_swiss_web(sesion.guild, clasificacion or [], consultar_api=True)})
 
@@ -296,14 +295,14 @@ async def api_estado_torneos(request, sesion):
     return web.json_response({"torneos": torneos_respuesta})
 
 
-@requiere_sesion(miembro=True)
+@requiere_sesion(jugador=True)
 async def api_inscribirse(request, sesion):
     codigo_torneo = v.codigo_torneo(sesion.body.get("codigo_torneo"))
     return comun.respuesta_servicio(await servicios.inscribir(
         comun.obtener_bot(), sesion.guild, sesion.miembro, codigo_torneo, via_web=True))
 
 
-@requiere_sesion(miembro=True)
+@requiere_sesion(jugador=True)
 async def api_desinscribirse(request, sesion):
     codigo_torneo = v.codigo_torneo(sesion.body.get("codigo_torneo"))
     return comun.respuesta_servicio(await servicios.desinscribir(
@@ -362,6 +361,7 @@ async def _rondas_challonge_web(guild, participantes: list, partidos: list) -> l
 async def _rondas_swiss_web(guild, torneo_codigo: str) -> list:
     """Rondas de un torneo suizo para la web (nombres desde la caché de miembros)."""
     rondas_data = await leer_rondas(comun.obtener_bot(), torneo_codigo)
+    agenda = await mensajes_agenda(guild)
     resultado = []
     for ronda in (rondas_data or {}).get("rondas", []):
         partidos = []
@@ -372,7 +372,8 @@ async def _rondas_swiss_web(guild, torneo_codigo: str) -> list:
                 partido.update({"jugador2": None, "jugador2_id": None, "resultado": "BYE"})
             else:
                 partido.update({"jugador2": await nombre_miembro(guild, j2, f"Usuario {j2}"), "jugador2_id": j2,
-                                "resultado": emp.get("resultado") or None})
+                                "resultado": emp.get("resultado") or None,
+                                "agendada": esta_agendada(agenda, torneo_codigo, j1, j2)})
             partidos.append(partido)
         resultado.append({"ronda": ronda.get("numero"), "completa": ronda.get("completa", False), "partidos": partidos})
     return resultado

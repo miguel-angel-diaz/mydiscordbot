@@ -78,7 +78,8 @@ class Eventos(CogConRoles):
 
         if isinstance(error, commands.CommandNotFound):
             tipo = "no_encontrado"
-        elif isinstance(error, (commands.MissingRequiredArgument, commands.BadArgument)):
+        elif isinstance(error, commands.UserInputError):
+            # Faltan o fallan argumentos, comillas sin cerrar, argumentos de más...: error de quien escribe, no del bot
             tipo = "argumento_faltante"
             await _avisar_usuario(ctx, f"⚠️ Faltan datos o no son válidos ({error}).\nUso: {uso}")
         elif isinstance(error, commands.NoPrivateMessage):

@@ -111,11 +111,13 @@ async def nombre_miembro(guild, user_id, por_defecto: str = None) -> str:
     return por_defecto if por_defecto is not None else f"Usuario {user_id}"
 
 
-def buscar_usuario_en_servidor(guild, nombre_busqueda):
+def buscar_usuario_en_servidor(guild, nombre_busqueda, exacto: bool = False):
     """
     - Si recibe un ID numérico (llega como string del chat) → lo usa directamente.
-    - Si recibe un nombre → busca en los miembros del servidor.
-    - Si no encuentra nada → None.
+    - Si recibe un nombre → busca en los miembros del servidor: primero el nombre o apodo exacto (sin distinguir
+      mayúsculas); si no hay y `exacto` es False, una coincidencia parcial, pero solo si hay UNA (antes se quedaba con
+      la primera: "ana" podía ser "Mariana"). Las sanciones y el login usan `exacto=True`.
+    - Si no encuentra nada (o es ambiguo) → None.
     """
     texto = str(nombre_busqueda).strip()
 
@@ -139,11 +141,10 @@ def buscar_usuario_en_servidor(guild, nombre_busqueda):
     for m in guild.members:
         if m.display_name.lower() == t or m.name.lower() == t:
             return m
-    for m in guild.members:
-        if t in m.display_name.lower() or t in m.name.lower():
-            return m
-
-    return None
+    if exacto:
+        return None
+    parciales = [m for m in guild.members if t in m.display_name.lower() or t in m.name.lower()]
+    return parciales[0] if len(parciales) == 1 else None
 # ============================================================
 # TORNEOS (Challonge legacy) - obtener torneo usuario
 # ============================================================
@@ -162,9 +163,11 @@ async def obtener_torneo_usuario(ctx, mensaje_inicial: str = None, complete=Fals
             await ctx.send("❌ No puedo enviarte mensajes privados. Activa los DMs para continuar.")
             return None
 
-    # 2️⃣ Determinar si filtramos solo torneos inscritos
+    # 2️⃣ ¿Solo los torneos donde juega quien pregunta? No en los comandos de admin (!eliminar-decks,
+    #    !reportar-torneo...: un admin gestiona torneos en los que no juega) ni en los de consulta general
     comando_actual = getattr(ctx.command, "name", "").lower()
-    solo_inscritos = comando_actual not in ("ver-inscritos", "iniciar-torneo", "partidos-pendientes")
+    es_comando_admin = getattr(ctx.cog, "qualified_name", "") == "Admin"
+    solo_inscritos = not es_comando_admin and comando_actual not in ("ver-inscritos", "partidos-pendientes")
 
     # --- TORNEOS HISTÓRICOS DE CHALLONGE (solo consulta de resultados) ---
     # Ya no se llama a Challonge en cada comando: los torneos terminados de Challonge se leen del caché
@@ -485,6 +488,14 @@ async def best_decks_handle(ctx, codigo_torneo: str = None, channel: str = None)
             return None
     if isinstance(codigo_torneo, list):
         await author.send("❌ Elige un torneo concreto para ver sus mejores decks.")
+        return None
+
+    # Los decks son privados mientras se juega: solo se enseñan los de torneos propios ya finalizados
+    # (los antiguos de Challonge no están en el estado y siempre están terminados)
+    from utils.torneos_estado import obtener_torneo_estado
+    torneo = await obtener_torneo_estado(ctx.bot, codigo_torneo)
+    if torneo and torneo.get("estado") != "finalizado":
+        await author.send(f"❌ El torneo `{codigo_torneo}` aún no ha terminado: sus decks no se pueden ver todavía.")
         return None
 
     try:
@@ -826,15 +837,22 @@ def es_mensaje_emparejamientos(texto: str, codigo: str, ronda: int = None) -> bo
 # VALIDACIÓN DE TORNEO PARA EDICIÓN DE DECK
 # ============================================================
 
+try:
+    from zoneinfo import ZoneInfo
+    TZ_MADRID = ZoneInfo("Europe/Madrid")
+except Exception:          # sin datos de zona (falta tzdata): mejor UTC que no arrancar
+    TZ_MADRID = timezone.utc
+
+
+def ahora_madrid() -> datetime:
+    """Hora de Madrid. Railway corre en UTC: datetime.now() daba "hoy" mal entre las 00:00 y las 01:00/02:00."""
+    return datetime.now(TZ_MADRID)
+
+
 def _inicio_torneo(fecha_str: str):
     """Medianoche (hora de Madrid) del día de inicio, o None si la fecha no es válida."""
     try:
-        from zoneinfo import ZoneInfo
-        tz = ZoneInfo("Europe/Madrid")
-    except Exception:
-        tz = timezone.utc
-    try:
-        return datetime.strptime(fecha_str.strip(), "%d/%m/%Y").replace(tzinfo=tz)
+        return datetime.strptime(fecha_str.strip(), "%d/%m/%Y").replace(tzinfo=TZ_MADRID)
     except (ValueError, AttributeError):
         return None
 

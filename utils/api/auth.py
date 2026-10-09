@@ -13,6 +13,7 @@ from aiohttp import web
 
 import config
 from utils import canales
+from utils import permisos
 from utils import validacion_web as v
 from utils.commons import buscar_usuario_en_servidor, nombre_miembro
 from utils.api import comun
@@ -32,19 +33,15 @@ def crear_token(discord_id: str) -> str:
     return jwt.encode(payload, SECRET_KEY, algorithm='HS256')
 
 
-def obtener_token(request, body: dict | None = None) -> str | None:
+def obtener_token(request) -> str | None:
     """
-    Token de sesión de la petición. Prioridad: cabecera `Authorization: Bearer <token>`,
-    luego `session` en el cuerpo JSON y por último `?session=` (compatibilidad con la web actual).
+    Token de sesión, solo desde la cabecera `Authorization: Bearer <token>`. Ya no se acepta en `?session=` ni en el
+    cuerpo (la web lo envía en la cabecera desde su commit 293af4e): en la URL acababa en historiales y logs.
     """
     auth = request.headers.get("Authorization", "")
     if auth.lower().startswith("bearer "):
-        token = auth[7:].strip()
-        if token:
-            return token
-    if body and body.get("session"):
-        return body.get("session")
-    return request.query.get("session")
+        return auth[7:].strip() or None
+    return None
 
 
 def verificar_token(token: str) -> dict | None:
@@ -67,28 +64,39 @@ class Sesion:
     miembro: discord.Member | None = None
 
 
-def requiere_sesion(handler=None, *, servidor: bool = False, miembro: bool = False):
+_MENSAJES_DENEGACION = {
+    permisos.SANCIONADO: "No puedes hacer esto mientras tengas una sanción activa.",
+    permisos.SIN_ROL: "Necesitas un rol de jugador del club para hacer esto.",
+}
+
+
+def requiere_sesion(handler=None, *, servidor: bool = False, miembro: bool = False, jugador: bool = False):
     """
     Endpoint con sesión: lee el cuerpo JSON (en los POST) y el token, y responde 401 si no es válido.
-    Con `servidor=True` exige el servidor de Discord (503 si no está) y con `miembro=True` además que el usuario
-    siga en él (403). El handler recibe `(request, sesion)`.
+    Con `servidor=True` exige el servidor de Discord (503 si no está); con `miembro=True` además que el usuario
+    siga en él (403), y con `jugador=True` que pueda usar los comandos de jugador (rol de jugador y sin sanción
+    Out/Strike, la misma regla que el cog_check de Discord; 403). El handler recibe `(request, sesion)`.
     """
     def decorador(handler):
         @functools.wraps(handler)
         async def envoltura(request):
             body = await v.leer_json(request) if request.method == "POST" else {}
-            payload = verificar_token(obtener_token(request, body))
+            payload = verificar_token(obtener_token(request))
             if not payload:
                 return web.json_response({"error": "Sesión no válida"}, status=401)
             sesion = Sesion(str(payload["discord_id"]), body)
-            if servidor or miembro:
+            if servidor or miembro or jugador:
                 sesion.guild = comun.servidor()
                 if not sesion.guild:
                     return comun.no_disponible()
-            if miembro:
+            if miembro or jugador:
                 sesion.miembro = sesion.guild.get_member(int(sesion.discord_id))
                 if not sesion.miembro:
                     return web.json_response({"error": "No se pudo verificar tu membresía"}, status=403)
+            if jugador:
+                motivo = permisos.motivo_denegacion(sesion.miembro, canales.ROLES_JUGADORES)
+                if motivo:
+                    return web.json_response({"error": _MENSAJES_DENEGACION[motivo]}, status=403)
             return await handler(request, sesion)
         return envoltura
     return decorador(handler) if handler else decorador
@@ -165,8 +173,9 @@ async def auth_solicitar_codigo(request):
                 status=429
             )
 
-    miembro = buscar_usuario_en_servidor(guild, nombre)
-    if not miembro:
+    # Exacto: con coincidencias parciales "a" mandaba el código al primer miembro que tuviera esa letra
+    miembro = buscar_usuario_en_servidor(guild, nombre, exacto=True)
+    if not isinstance(miembro, discord.Member):
         return web.json_response(
             {"error": "No hemos podido verificarte. Comprueba tu usuario."},
             status=404
@@ -319,13 +328,15 @@ async def api_solicitar_acceso(request):
     if not canal:
         return comun.no_disponible()
 
+    # El comentario va en la descripción (hasta 4096 caracteres): escapar el markdown puede doblar su longitud y en
+    # un campo (máximo 1024) Discord rechazaba el embed y la solicitud se perdía con un 500
     embed = discord.Embed(
         title="📩 Nueva solicitud de admisión",
+        description=f"**Comentario**\n{comentario}",
         color=0xff8800
     )
     embed.add_field(name="Discord", value=discord_nick, inline=True)
     embed.add_field(name="Email", value=email, inline=True)
-    embed.add_field(name="Comentario", value=comentario, inline=False)
     embed.timestamp = datetime.now(timezone.utc)
 
     await canal.send(embed=embed)

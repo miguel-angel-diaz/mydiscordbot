@@ -7,7 +7,9 @@ import re
 
 from utils import dm
 from utils import canales
-from utils.torneos_estado import generar_codigo_unico, obtener_torneo_estado
+from typing import Optional
+
+from utils.torneos_estado import generar_codigo_unico, leer_estado, obtener_torneo_estado
 
 
 from utils.admin import moderador_permisos_handle
@@ -16,6 +18,7 @@ from utils import servicios
 from utils import ayuda
 
 from utils.commons import (
+    ahora_madrid,
     borrar_mensaje_seguro,
     validar_canal_correcto,
     buscar_usuario_en_servidor,
@@ -39,6 +42,30 @@ from utils.commons import (
 
 
 log = logging.getLogger(__name__)
+
+# Los mensajes de #partidos-agendados acaban con el torneo de la partida: así la web sabe qué partida de qué torneo
+# está agendada (antes buscaba el código en un mensaje que nunca lo llevaba y siempre decía "no agendada").
+# Va al final porque los demás lectores de la agenda solo miran fecha, hora y jugadores.
+PATRON_ETIQUETA_TORNEO = re.compile(r" \| Torneo `([^`]+)`$")
+
+
+def etiqueta_torneo(codigo: Optional[str]) -> str:
+    return f" | Torneo `{codigo}`" if codigo else ""
+
+
+def torneo_de_agenda(contenido: str) -> Optional[str]:
+    match = PATRON_ETIQUETA_TORNEO.search(contenido)
+    return match.group(1) if match else None
+
+
+async def torneo_en_comun(bot, jugador1_id, jugador2_id) -> Optional[str]:
+    """El torneo suizo en juego en el que están inscritos los dos jugadores (None si no hay uno solo)."""
+    pareja = {str(jugador1_id), str(jugador2_id)}
+    estado = await leer_estado(bot)
+    comunes = [t["codigo"] for t in estado.get("torneos", [])
+               if t.get("tipo") == "swiss" and t.get("estado") == "en desarrollo"
+               and pareja <= set(t.get("inscritos_ids", []))]
+    return comunes[0] if len(comunes) == 1 else None
 
 
 async def agendar_partida_handle(ctx, fecha=None, hora=None, jugador1=None, _vs=None, jugador2=None):
@@ -95,9 +122,10 @@ async def agendar_partida_handle(ctx, fecha=None, hora=None, jugador1=None, _vs=
         await ctx.author.send("❌ No se encontró el canal `#partidos-agendados`.")
         return
 
+    torneo = await torneo_en_comun(ctx.bot, jugador1.id, jugador2.id)
     mensaje_agendado = (
         f"📅 [EVENTO] {fecha} {hora} | {jugador1.mention} vs {jugador2.mention} | "
-        f"Agendado por {ctx.author.mention}"
+        f"Agendado por {ctx.author.mention}{etiqueta_torneo(torneo)}"
     )
 
     await canal_destino.send(mensaje_agendado)
@@ -217,7 +245,8 @@ async def modificar_partida_agendada_handle(ctx):
             await ctx.author.send("⏰ Tiempo agotado. No se actualizó esa opción.")
 
     # Si no se eliminó, actualizamos mensaje
-    nuevo_mensaje = f"📅 [EVENTO] {fecha} {hora} | {jugador1} vs {jugador2} | Agendado por {ctx.author.mention}"
+    nuevo_mensaje = (f"📅 [EVENTO] {fecha} {hora} | {jugador1} vs {jugador2} | Agendado por {ctx.author.mention}"
+                     f"{etiqueta_torneo(torneo_de_agenda(mensaje.content))}")
     await mensaje.edit(content=nuevo_mensaje)
     await ctx.author.send("✅ Tu partida ha sido modificada correctamente.")
     await actualizar_proximas_partidas(ctx)
@@ -228,7 +257,7 @@ async def actualizar_proximas_partidas(ctx):
     if not canal_destino or not canal_proximas:
         return
 
-    hoy = datetime.now().date()
+    hoy = ahora_madrid().date()
     inicio_semana = hoy - timedelta(days=hoy.weekday())
     fin_semana = inicio_semana + timedelta(days=6)
 
@@ -283,7 +312,7 @@ async def eventos_hoy_handle(ctx):
         await ctx.author.send("❌ No se encontró el canal `#partidos-agendados`.")
         return
 
-    hoy = datetime.now().date()
+    hoy = ahora_madrid().date()
     eventos_hoy = []
 
     patron = re.compile(
@@ -356,7 +385,7 @@ async def nueva_peticion_handle(ctx, descripcion):
 
     # Generar código y crear embed
     codigo = generar_codigo_unico()
-    fecha = datetime.now().strftime("%d/%m/%Y %H:%M")
+    fecha = ahora_madrid().strftime("%d/%m/%Y %H:%M")
 
     embed = discord.Embed(
         title="📬 Nueva petición recibida",
@@ -785,6 +814,7 @@ async def _editar_deck_dm(ctx, author, codigo_torneo: str, formato_torneo: str):
     decklist = deck_actual["decklist"]
     sideboard = deck_actual["sideboard"]
     formato = formato_torneo           # en edición se usa el formato del torneo
+    original = (nombre_deck, archetype, decklist, sideboard)
 
     while True:
         await _mostrar_deck_actual(author, codigo_torneo, codigo_deck, formato, nombre_deck, archetype, decklist, sideboard)
@@ -796,11 +826,15 @@ async def _editar_deck_dm(ctx, author, codigo_torneo: str, formato_torneo: str):
         try:
             respuesta = await dm.esperar_respuesta(ctx.bot, author, timeout=300.0)
         except asyncio.TimeoutError:
-            await author.send("⏰ No respondiste a tiempo. Se mantiene tu deck sin cambios.")
-            break
+            # Sin confirmar no se guarda: antes se guardaba igual y se gastaba la única edición
+            await author.send("⏰ No respondiste a tiempo. No se ha guardado nada y conservas tu edición.")
+            return None
 
         opcion = respuesta.content.strip().lower()
         if opcion in ["ok", "sí", "si", "confirmar"]:
+            if (nombre_deck, archetype, decklist, sideboard) == original:
+                await author.send("ℹ️ No has cambiado nada: tu deck sigue igual y conservas tu única edición.")
+                return None
             break
         if opcion == "1":
             nombre_deck = await _editar_campo(ctx, author, "Escribe el nuevo **nombre del deck**:", decks.nombre_deck,
@@ -875,7 +909,9 @@ async def _asistente_subir_deck(ctx, author: discord.Member, codigo_torneo: str)
     torneo y que no se haya subido otro mientras se respondía.
     """
     datos = await deck_dm_flow(ctx, author, codigo_torneo, modo="subir")
-    if not datos or len(datos) != 6:
+    if datos is None:          # cancelado o sin respuesta: el asistente ya avisó al usuario
+        return
+    if len(datos) != 6:
         log.error(f"❌ deck_dm_flow devolvió datos inesperados: {datos}")
         return
 
@@ -1003,7 +1039,9 @@ async def editar_deck_handle(ctx, codigo_torneo: str = None):
 
     # 🔹 Continuar flujo normal de edición
     datos = await deck_dm_flow(ctx, author, codigo_torneo, modo="editar")
-    if not datos or len(datos) != 6:
+    if datos is None:          # cancelado, sin cambios o sin respuesta: el asistente ya avisó al usuario
+        return
+    if len(datos) != 6:
         log.error(f"❌ deck_dm_flow devolvió datos inesperados: {datos}")
         await author.send("❌ Edición cancelada.")
         return

@@ -315,8 +315,8 @@
     "tutorial": [
       "Escribe `!editar-deck` en `#preguntale-a-el-barbas`.",
       "Elige el torneo. Si ya subiste deck, podrás modificar sus campos.",
-      "Si el torneo ya comenzó, solo tienes **1 edición disponible** (post-inicio).",
-      "Si el torneo no ha comenzado, puedes editar todas las veces que quieras."
+      "Tienes **1 sola edición** por torneo, antes o después del inicio: piénsalo bien antes de confirmar.",
+      "Si no cambias nada o no respondes a tiempo, la edición no se gasta."
     ],
     "permisos_discord": [
       "manage_messages",
@@ -505,10 +505,10 @@
   },
   "sorteo-torneo": {
     "seccion": "ADMIN - SORTEOS",
-    "descripcion": "Sortea un premio entre los inscritos de un torneo",
+    "descripcion": "Sortea un premio entre los participantes de un torneo suizo o battle",
     "tutorial": [
       "Escribe `!sorteo-torneo <código> <premio>`.",
-      "El bot elige un ganador al azar entre los inscritos del torneo y lo anuncia."
+      "El bot elige un ganador al azar entre los participantes (inscritos del suizo o jugadores del battle) y os avisa por DM a ti y al ganador."
     ],
     "permisos_discord": [
       "manage_messages",
@@ -520,7 +520,7 @@
     "descripcion": "Te apunta a un sorteo activo",
     "tutorial": [
       "Escribe `!inscribirse-sorteo <código>` en `#preguntale-a-el-barbas`.",
-      "Solo puedes apuntarte una vez a cada sorteo; el bot te confirma tu número por DM."
+      "Solo puedes apuntarte una vez a cada sorteo; el bot te confirma la inscripción por DM."
     ],
     "permisos_discord": [
       "manage_messages",

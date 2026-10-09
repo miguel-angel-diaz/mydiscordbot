@@ -46,27 +46,40 @@ async def comprobar_roles(ctx, roles) -> bool:
     if ctx.guild is None:
         return await _denegar_comando(ctx, f"❌ El comando `{comando}` solo se puede usar en el servidor.")
 
-    autor = ctx.author
-    roles_autor = {normalize_string(r.name) for r in getattr(autor, "roles", [])}
+    motivo = motivo_denegacion(ctx.author, roles)
+    if motivo == SANCIONADO:
+        return await _denegar_comando(ctx, f"🚫 No puedes usar `{comando}` mientras tengas una sanción activa.")
+    if motivo == SIN_ROL:
+        return await _denegar_comando(
+            ctx,
+            f"❌ Necesitas uno de estos roles para usar `{comando}`: {', '.join(sorted(roles))}."
+        )
+    return True
 
+
+SANCIONADO = "sancionado"
+SIN_ROL = "sin_rol"
+
+
+def motivo_denegacion(miembro: discord.Member, roles) -> Optional[str]:
+    """
+    None si `miembro` puede actuar con esos roles; si no, SANCIONADO o SIN_ROL. Es la regla de los comandos y
+    también la de la web (utils/api): el dueño y los admins siempre pueden; Out/Strike bloquea aunque se tenga
+    un rol permitido.
+    """
+    roles_miembro = {normalize_string(r.name) for r in getattr(miembro, "roles", [])}
     es_admin = (
-        autor == ctx.guild.owner
-        or ROL_ADMIN in roles_autor
-        or autor.guild_permissions.administrator
+        miembro == miembro.guild.owner
+        or ROL_ADMIN in roles_miembro
+        or miembro.guild_permissions.administrator
     )
     if es_admin:
-        return True
-
-    if roles_autor & ROLES_SANCIONADOS:
-        return await _denegar_comando(ctx, f"🚫 No puedes usar `{comando}` mientras tengas una sanción activa.")
-
-    if roles_autor & {normalize_string(r) for r in roles}:
-        return True
-
-    return await _denegar_comando(
-        ctx,
-        f"❌ Necesitas uno de estos roles para usar `{comando}`: {', '.join(sorted(roles))}."
-    )
+        return None
+    if roles_miembro & ROLES_SANCIONADOS:
+        return SANCIONADO
+    if roles_miembro & {normalize_string(r) for r in roles}:
+        return None
+    return SIN_ROL
 
 
 class CogConRoles(commands.Cog):

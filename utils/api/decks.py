@@ -11,6 +11,15 @@ from utils.api import comun
 from utils.api.auth import requiere_sesion
 
 
+def partida_cerrada(torneo: dict, ronda: dict, emp: dict) -> bool:
+    """
+    Si ya se puede enseñar el deck del rival de esta partida: tiene resultado y su ronda está completa (o el torneo
+    ha finalizado). Con solo "resultado reportado" bastaba que uno de los dos reportase (aunque fuera falso) para
+    ver el deck del otro antes de jugar.
+    """
+    return emp.get("resultado") is not None and (ronda.get("completa") or torneo.get("estado") == "finalizado")
+
+
 def deck_web(deck: dict) -> dict:
     """Datos del deck que se envían a la web (también los usa partidas.py para el deck del rival)."""
     return {
@@ -50,7 +59,7 @@ async def api_arquetipos(request):
     return web.json_response({"arquetipos": obtener_lista_arquetipos(formato)})
 
 
-@requiere_sesion(miembro=True)
+@requiere_sesion(jugador=True)
 async def api_subir_deck(request, sesion):
     codigo_torneo = v.codigo_torneo(sesion.body.get("codigo_torneo"))
     datos = await _deck_del_formulario(sesion.body, codigo_torneo)
@@ -66,7 +75,7 @@ async def api_subir_deck(request, sesion):
     return comun.respuesta_servicio(resultado)
 
 
-@requiere_sesion(miembro=True)
+@requiere_sesion(jugador=True)
 async def api_editar_deck(request, sesion):
     codigo_torneo = v.codigo_torneo(sesion.body.get("codigo_torneo"))
     datos = await _deck_del_formulario(sesion.body, codigo_torneo)
@@ -74,19 +83,16 @@ async def api_editar_deck(request, sesion):
         comun.obtener_bot(), sesion.guild, sesion.miembro, codigo_torneo, *datos, via_web=True))
 
 
-async def _ha_jugado_contra(torneo_codigo: str, jugador_id: str, rival_id: str) -> bool:
-    """True si ambos jugadores se han enfrentado en alguna ronda y el resultado ya está reportado."""
+async def _ha_jugado_contra(torneo: dict, jugador_id: str, rival_id: str) -> bool:
+    """True si ambos jugadores se han enfrentado en una partida ya cerrada (ver partida_cerrada)."""
     if jugador_id == rival_id:
         return False
-    rondas_data = await leer_rondas(comun.obtener_bot(), torneo_codigo) or {}
+    rondas_data = await leer_rondas(comun.obtener_bot(), torneo["codigo"]) or {}
     pareja = {jugador_id, rival_id}
-    for ronda in rondas_data.get("rondas", []):
-        for emp in ronda.get("emparejamientos", []):
-            if emp.get("resultado") is None:
-                continue
-            if {str(emp.get("j1")), str(emp.get("j2"))} == pareja:
-                return True
-    return False
+    return any(
+        {str(emp.get("j1")), str(emp.get("j2"))} == pareja and partida_cerrada(torneo, ronda, emp)
+        for ronda in rondas_data.get("rondas", []) for emp in ronda.get("emparejamientos", [])
+    )
 
 
 @requiere_sesion(servidor=True)
@@ -101,6 +107,6 @@ async def api_deck_rival(request, sesion):
     # Solo se ve el deck de un rival contra el que ya se ha jugado (resultado reportado).
     # Si no, se responde igual que "sin deck" para no revelar nada.
     deck = None
-    if await _ha_jugado_contra(torneo_codigo, sesion.discord_id, str(rival_id)):
+    if await _ha_jugado_contra(torneo, sesion.discord_id, str(rival_id)):
         deck = await obtener_deck_en_canal(sesion.guild, f"{torneo_codigo}_{rival_id}")
     return web.json_response({"deck": deck_web(deck) if deck else None})

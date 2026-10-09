@@ -90,6 +90,16 @@ def _activos(enfrentamientos: List[dict]) -> List[dict]:
     return [e for e in enfrentamientos if not e.get("anulado")]
 
 
+async def participantes(bot, codigo: str) -> List[str]:
+    """IDs de quienes tienen algún enfrentamiento no anulado (el battle no tiene inscripción), en orden de aparición."""
+    ids = []
+    for e in _activos(await leer_enfrentamientos(bot, codigo)):
+        for pid in (e.get("j1"), e.get("j2")):
+            if pid and str(pid) not in ids:
+                ids.append(str(pid))
+    return ids
+
+
 def _es_pareja(e: dict, a: str, b: str) -> bool:
     return {e.get("j1"), e.get("j2")} == {a, b}
 

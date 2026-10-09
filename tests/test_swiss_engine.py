@@ -114,6 +114,7 @@ class Inscripcion(unittest.TestCase):
 class NuevaRonda(unittest.TestCase):
     def test_errores(self):
         self.assertEqual(engine.error_nueva_ronda(torneo("ab", estado="finalizado"), []), "El torneo ya ha finalizado.")
+        self.assertIn("!iniciar-swiss", engine.error_nueva_ronda(torneo("ab", estado="abierto"), []))
         self.assertEqual(engine.error_nueva_ronda(torneo("ab", retirados=["b"]), []), "Se necesitan al menos 2 jugadores.")
         pendiente = [ronda(1, ("a", "b", None), ("c", "d", "2-0"), completa=False)]
         self.assertIn("1 partida(s) sin resultado", engine.error_nueva_ronda(torneo("abcd", 1), pendiente))

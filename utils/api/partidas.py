@@ -12,16 +12,17 @@ from utils import canales
 from utils import validacion_web as v
 from utils import servicios
 from utils.commons import nombre_miembro, obtener_deck_en_canal, resolver_miembro
-from utils.jugadores import actualizar_proximas_partidas
+from utils.jugadores import actualizar_proximas_partidas, etiqueta_torneo, torneo_de_agenda
 from utils.torneos_estado import leer_estado, leer_rondas
 from utils.api import comun
 from utils.api.auth import requiere_sesion
-from utils.api.decks import deck_web
+from utils.api.decks import deck_web, partida_cerrada
 
 log = logging.getLogger(__name__)
 
 # Formato de los mensajes de #partidos-agendados (lo escriben !agendar-partida y la web)
-PATRON_AGENDA = re.compile(r"📅 \[EVENTO\] (\d{2}/\d{2}/\d{4}) (\d{2}:\d{2}) \| (.+?) vs (.+?) \| Agendado por (.+)")
+PATRON_AGENDA = re.compile(r"📅 \[EVENTO\] (\d{2}/\d{2}/\d{4}) (\d{2}:\d{2}) \| (.+?) vs (.+?) \| "
+                           r"Agendado por (.+?)(?: \| Torneo `[^`]+`)?$")
 
 
 def _menciona(texto: str, uid) -> bool:
@@ -141,7 +142,7 @@ async def _son_rivales(codigo_torneo: str, j1: str, j2: str) -> bool:
     )
 
 
-@requiere_sesion(servidor=True)
+@requiere_sesion(jugador=True)
 async def api_agendar_partida(request, sesion):
     body = sesion.body
     discord_id = int(sesion.discord_id)
@@ -171,7 +172,8 @@ async def api_agendar_partida(request, sesion):
         return web.json_response({"error": "Canal #partidos-agendados no encontrado"}, status=404)
 
     autor = jugador1 if jugador1.id == discord_id else jugador2
-    mensaje = f"📅 [EVENTO] {fecha} {hora} | {jugador1.mention} vs {jugador2.mention} | Agendado por {autor.mention} (vía web)"
+    mensaje = (f"📅 [EVENTO] {fecha} {hora} | {jugador1.mention} vs {jugador2.mention} | "
+               f"Agendado por {autor.mention} (vía web){etiqueta_torneo(codigo_torneo)}")
     # Solo se notifica a los dos jugadores; nunca @everyone, @here ni roles
     await canal.send(mensaje, allowed_mentions=discord.AllowedMentions(everyone=False, roles=False,
                                                                      users=[jugador1, jugador2]))
@@ -186,7 +188,7 @@ async def api_agendar_partida(request, sesion):
     return web.json_response({"ok": True, "mensaje": "Partida agendada correctamente"})
 
 
-@requiere_sesion(miembro=True)
+@requiere_sesion(jugador=True)
 async def api_modificar_partida(request, sesion):
     body = sesion.body
     jugador1_id = v.discord_id(body.get("jugador1_id"), "Jugador 1")
@@ -206,12 +208,12 @@ async def api_modificar_partida(request, sesion):
     nueva_fecha_str = nueva_fecha or fecha_actual
     nueva_hora_str = nueva_hora or hora_actual
 
-    agendado_match = re.search(r"Agendado por (.+)$", mensaje.content)
-    agendado_por = agendado_match.group(1) if agendado_match else "un usuario"
+    agendado_match = PATRON_AGENDA.search(mensaje.content)
+    agendado_por = agendado_match.group(5) if agendado_match else "un usuario"
 
     await mensaje.edit(content=(
         f"📅 [EVENTO] {nueva_fecha_str} {nueva_hora_str} | {jugador1.mention} vs {jugador2.mention} | "
-        f"Agendado por {agendado_por}"
+        f"Agendado por {agendado_por}{etiqueta_torneo(torneo_de_agenda(mensaje.content))}"
     ))
     await _refrescar_proximas(sesion.guild)
 
@@ -227,7 +229,7 @@ async def api_modificar_partida(request, sesion):
     return web.json_response({"ok": True, "mensaje": "Partida modificada correctamente"})
 
 
-@requiere_sesion(miembro=True)
+@requiere_sesion(jugador=True)
 async def api_eliminar_partida(request, sesion):
     body = sesion.body
     jugador1_id = v.discord_id(body.get("jugador1_id"), "Jugador 1")
@@ -255,14 +257,17 @@ async def api_eliminar_partida(request, sesion):
 # ============================================================
 # EMPAREJAMIENTOS Y RESULTADOS
 # ============================================================
-def _esta_agendada(mensajes_agenda: list, codigo: str, j1, j2) -> bool:
-    """Algún mensaje de la agenda con el código del torneo y ambos jugadores."""
-    return any(
-        codigo in msg
-        and (_menciona(msg, j1) or str(j1) in msg)
-        and (_menciona(msg, j2) or str(j2) in msg)
-        for msg in mensajes_agenda
-    )
+async def mensajes_agenda(guild) -> list:
+    """Textos de #partidos-agendados (se leen una vez por petición)."""
+    canal = canales.get_canal(guild, canales.AGENDA)
+    if not canal:
+        return []
+    return [msg.content async for msg in canal.history(limit=500)]
+
+
+def esta_agendada(mensajes: list, codigo: str, j1, j2) -> bool:
+    """Algún mensaje de la agenda de ese torneo (etiqueta al final) entre esos dos jugadores."""
+    return any(torneo_de_agenda(msg) == codigo and _menciona(msg, j1) and _menciona(msg, j2) for msg in mensajes)
 
 
 @requiere_sesion(miembro=True)
@@ -271,12 +276,7 @@ async def api_mis_torneos_pendientes(request, sesion):
     bot = comun.obtener_bot()
     estado = await leer_estado(bot)
 
-    # Mensajes de #partidos-agendados (una vez para todos los torneos)
-    canal_agendados = canales.get_canal(guild, canales.AGENDA)
-    mensajes_agendados = []
-    if canal_agendados:
-        async for msg in canal_agendados.history(limit=500):
-            mensajes_agendados.append(msg.content)
+    mensajes_agendados = await mensajes_agenda(guild)     # una vez para todos los torneos
 
     resultado = []
     for t in estado.get("torneos", []):
@@ -310,7 +310,7 @@ async def api_mis_torneos_pendientes(request, sesion):
                 "jugador2": await nombre_miembro(guild, j2, f"Usuario {j2}"),
                 "jugador2_id": j2,
                 "resultado": None,
-                "agendada": _esta_agendada(mensajes_agendados, codigo, j1, j2),
+                "agendada": esta_agendada(mensajes_agendados, codigo, j1, j2),
             })
 
         # Solo torneos con partidas pendientes
@@ -325,7 +325,7 @@ async def api_mis_torneos_pendientes(request, sesion):
     return web.json_response({"torneos": resultado})
 
 
-@requiere_sesion(miembro=True)
+@requiere_sesion(jugador=True)
 async def api_reportar_resultado(request, sesion):
     body = sesion.body
     codigo_torneo = v.codigo_torneo(body.get("codigo_torneo"))
@@ -360,7 +360,7 @@ async def api_mis_enfrentamientos(request, sesion):
 
             rival_id = j2 if discord_id == j1 else j1
             deck_rival = None
-            if resultado is not None and rival_id is not None:
+            if rival_id is not None and partida_cerrada(torneo, ronda, emp):
                 deck = await obtener_deck_en_canal(guild, f"{torneo_codigo}_{rival_id}")
                 deck_rival = deck_web(deck) if deck else None
 

@@ -20,6 +20,7 @@ from utils.torneos_estado import (
     leer_rondas,
     guardar_rondas,
     guardar_clasificacion,
+    leer_clasificacion,
     leer_estado,
     slugify_challonge,
     generar_codigo_unico
@@ -105,14 +106,32 @@ async def obtener_rondas(bot, codigo: str) -> List[dict]:
     return await _leer_lista_rondas(bot, codigo)
 
 
+@_con_lock_torneo
 async def calcular_clasificacion(bot, codigo: str) -> List[Dict]:
-    """Recalcula la clasificación desde las rondas y la guarda."""
+    """
+    Recalcula la clasificación desde las rondas y la guarda. Con el lock del torneo: fuera de él podía leer las
+    rondas antes de un reporte y guardar después, machacando la clasificación nueva con una desfasada.
+    """
     torneo = await obtener_torneo(bot, codigo)
     if not torneo or not torneo.get("inscritos_ids"):
         return []
     clasificacion = engine.clasificacion(codigo, await _leer_lista_rondas(bot, codigo), torneo["inscritos_ids"])
     await guardar_clasificacion(bot, codigo, {"codigo": codigo, "clasificacion": clasificacion})
     return clasificacion
+
+
+async def clasificacion_actual(bot, codigo: str) -> List[Dict]:
+    """
+    Solo lectura (para la web): la clasificación guardada, que se rehace con cada reporte; si aún no existe, se
+    calcula sin guardarla. Una visita a la web no escribe en Discord.
+    """
+    guardada = await leer_clasificacion(bot, codigo)
+    if guardada and guardada.get("clasificacion"):
+        return guardada["clasificacion"]
+    torneo = await obtener_torneo(bot, codigo)
+    if not torneo or not torneo.get("inscritos_ids"):
+        return []
+    return engine.clasificacion(codigo, await _leer_lista_rondas(bot, codigo), torneo["inscritos_ids"])
 
 
 async def publicar_clasificacion_swiss(bot, guild, codigo: str):
@@ -183,21 +202,39 @@ async def iniciar_torneo(bot, codigo: str, quitar_ids=()) -> Tuple[bool, str]:
 
 
 @_con_lock_torneo
-async def reiniciar_torneo(bot, codigo: str, guild: discord.Guild = None):
-    """Borra rondas y clasificación (mantiene los inscritos), lo deja abierto y quita sus mensajes de Discord."""
-    await actualizar_torneo_estado(bot, codigo, {"ronda_actual": 0, "estado": "abierto"})
+async def reiniciar_torneo(bot, codigo: str, guild: discord.Guild = None) -> Tuple[bool, str]:
+    """
+    Borra rondas y clasificación, lo deja abierto y quita sus mensajes de Discord. Mantiene a los inscritos salvo a
+    los retirados (salieron del servidor con el torneo en juego): con el torneo abierto se les habría desinscrito, así
+    que se les desinscribe y se borra su deck. Si no, ocupaban plaza, contaban para el número de rondas y no se les
+    volvía a emparejar nunca.
+    """
+    torneo = await obtener_torneo(bot, codigo)
+    if not torneo:     # p. ej. otro admin lo borró mientras se confirmaba: no se crea un registro fantasma
+        return False, f"El torneo `{codigo}` ya no existe. No se ha cambiado nada."
+    retirados = [uid for uid in torneo.get("retirados", []) if uid in torneo.get("inscritos_ids", [])]
+    inscritos = [uid for uid in torneo.get("inscritos_ids", []) if uid not in set(retirados)]
+    await actualizar_torneo_estado(bot, codigo, {"ronda_actual": 0, "estado": "abierto",
+                                                 "inscritos_ids": inscritos, "retirados": []})
     await _guardar_lista_rondas(bot, codigo, [])
     await guardar_clasificacion(bot, codigo, {"codigo": codigo, "clasificacion": []})
     if guild:
         await presentacion.borrar_emparejamientos(bot, guild, codigo, todos=True)
         await presentacion.borrar_clasificacion(bot, guild, codigo)
+    for uid in retirados:
+        await _borrar_deck(bot, guild, codigo, uid)
+    aviso = f" Se han desinscrito {len(retirados)} jugador(es) que ya no están en el servidor." if retirados else ""
+    return True, f"Torneo `{codigo}` reiniciado y en estado **abierto**.{aviso}"
 
 
 @_con_lock_torneo
-async def finalizar_torneo(bot, codigo: str, guild: discord.Guild = None):
+async def finalizar_torneo(bot, codigo: str, guild: discord.Guild = None) -> Tuple[bool, str]:
     """Marca el torneo como finalizado y publica la clasificación final."""
+    if not await obtener_torneo(bot, codigo):     # borrado mientras se confirmaba: no se crea un registro fantasma
+        return False, f"El torneo `{codigo}` ya no existe. No se ha cambiado nada."
     await actualizar_torneo_estado(bot, codigo, {"estado": "finalizado"})
     await publicar_clasificacion_swiss(bot, guild, codigo)
+    return True, f"Torneo `{codigo}` marcado como finalizado."
 
 # ============================================================
 # INSCRIPCIONES
@@ -233,23 +270,32 @@ async def desinscribir_jugador(bot, codigo: str, usuario_id: int, guild: discord
     inscritos.remove(str(usuario_id))
     await actualizar_torneo_estado(bot, codigo, {"inscritos_ids": inscritos})
 
-    # 🔹 Eliminar su deck de #submitted-decks (coincidencia EXACTA del código: no toca decks de otros)
-    from utils.commons import obtener_deck_en_canal  # import local: evita ciclos al cargar
-    if guild is None:
-        guild = bot.get_guild(config.GUILD_ID_ADMISION)
-    if not guild:
-        return True, "Desinscripción completada, pero no se pudo eliminar el deck (servidor no encontrado)."
-
-    deck = await obtener_deck_en_canal(guild, f"{codigo}_{usuario_id}")
-    if deck and deck.get("mensaje"):
-        try:
-            await deck["mensaje"].delete()
-            return True, f"Desinscripción completada. Se ha eliminado tu deck `{deck.get('nombre_deck', '')}`."
-        except discord.HTTPException as e:
-            log.warning(f"⚠️ No se pudo eliminar el deck {codigo}_{usuario_id}: {e}")
-            return True, "Desinscripción completada, pero no se pudo eliminar tu deck. Avisa a un admin."
-
+    borrado = await _borrar_deck(bot, guild, codigo, usuario_id)
+    if borrado is None:
+        return True, "Desinscripción completada, pero no se pudo eliminar tu deck. Avisa a un admin."
+    if borrado:
+        return True, f"Desinscripción completada. Se ha eliminado tu deck `{borrado}`."
     return True, "Desinscripción completada."
+
+
+async def _borrar_deck(bot, guild, codigo: str, usuario_id) -> Optional[str]:
+    """
+    Borra el deck del jugador en #submitted-decks (código EXACTO: no toca decks de otros). Devuelve el nombre del
+    deck borrado, "" si no tenía y None si no se pudo borrar.
+    """
+    from utils.commons import obtener_deck_en_canal  # import local: evita ciclos al cargar
+    guild = guild or bot.get_guild(config.GUILD_ID_ADMISION)
+    if not guild:
+        return None
+    deck = await obtener_deck_en_canal(guild, f"{codigo}_{usuario_id}")
+    if not deck or not deck.get("mensaje"):
+        return ""
+    try:
+        await deck["mensaje"].delete()
+    except discord.HTTPException as e:
+        log.warning(f"⚠️ No se pudo eliminar el deck {codigo}_{usuario_id}: {e}")
+        return None
+    return deck.get("nombre_deck", "") or "sin nombre"
 
 # ============================================================
 # RONDAS
@@ -355,8 +401,14 @@ async def reportar_resultado(bot, codigo: str, jugador1_id: int, resultado: str,
     except EntradaInvalida as e:
         return False, e.mensaje, None, -1
 
-    if not await obtener_torneo(bot, codigo):
+    torneo = await obtener_torneo(bot, codigo)
+    if not torneo:
         return False, "El torneo no existe.", None, -1
+    if torneo.get("estado") != "en desarrollo":
+        # Finalizado (p. ej. a mano con partidas pendientes): un reporte cambiaría la clasificación final y volvería
+        # a anunciar el fin. Las correcciones van por !modificar-resultado-swiss, que sí admite torneos finalizados.
+        return False, ("El torneo no está en juego (ha finalizado o aún no ha empezado): no se pueden reportar "
+                       "resultados. Para corregir uno, habla con un admin."), None, -1
     rondas = await _leer_lista_rondas(bot, codigo)
     if not rondas:
         return False, "El torneo no tiene rondas generadas.", None, -1

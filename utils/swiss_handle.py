@@ -10,7 +10,7 @@ from utils import canales
 from utils.torneos_estado import leer_clasificacion
 from utils import decks
 from utils import servicios
-from utils.commons import (borrar_mensaje_seguro, buscar_usuario_en_servidor, validar_canal_correcto,
+from utils.commons import (ahora_madrid, borrar_mensaje_seguro, buscar_usuario_en_servidor, validar_canal_correcto,
                            obtener_torneo_usuario, enviar_en_trozos, nombre_miembro,
                            codigo_etiquetado)
 from utils.jugadores import submitted_deck_handle
@@ -83,7 +83,7 @@ async def swiss_nuevo_asistente_handle(ctx):
             datetime.strptime(fecha_str, "%d/%m/%Y")
         except ValueError:
             await ctx.author.send("❌ Formato inválido. Usaré hoy.")
-            fecha_str = datetime.now().strftime("%d/%m/%Y")
+            fecha_str = ahora_madrid().strftime("%d/%m/%Y")
 
         codigo = await crear_torneo(ctx.bot, nombre, formato, max_jugadores, nivel, fecha_str)
 
@@ -115,6 +115,7 @@ async def swiss_nuevo_asistente_handle(ctx):
     except asyncio.TimeoutError:
         await ctx.author.send("⏰ Tiempo agotado.")
     except Exception as e:
+        log.exception("❌ Error en swiss_nuevo_asistente_handle")      # traceback en el log de Railway, no solo el DM
         await ctx.author.send(f"❌ Error: {e}")
 
 # ============================================================
@@ -211,6 +212,7 @@ async def swiss_inscribir_asistente_handle(ctx):
     except asyncio.TimeoutError:
         await ctx.author.send("⏰ Tiempo agotado.")
     except Exception as e:
+        log.exception("❌ Error en swiss_inscribir_asistente_handle")      # traceback en el log de Railway, no solo el DM
         await ctx.author.send(f"❌ Error: {e}")
 
 # ============================================================
@@ -262,6 +264,7 @@ async def swiss_desinscribir_asistente_handle(ctx):
     except asyncio.TimeoutError:
         await ctx.author.send("⏰ Tiempo agotado.")
     except Exception as e:
+        log.exception("❌ Error en swiss_desinscribir_asistente_handle")      # traceback en el log de Railway, no solo el DM
         await ctx.author.send(f"❌ Error: {e}")
 
 # ============================================================
@@ -544,6 +547,7 @@ async def swiss_clasificacion_asistente_handle(ctx):
     except asyncio.TimeoutError:
         await ctx.author.send("⏰ Tiempo agotado.")
     except Exception as e:
+        log.exception("❌ Error en swiss_clasificacion_asistente_handle")      # traceback en el log de Railway, no solo el DM
         await ctx.author.send(f"❌ Error: {e}")
 
 # ============================================================
@@ -754,6 +758,7 @@ async def swiss_eliminar_asistente_handle(ctx):
     except asyncio.TimeoutError:
         await ctx.author.send("⏰ Tiempo agotado.")
     except Exception as e:
+        log.exception("❌ Error en swiss_eliminar_asistente_handle")      # traceback en el log de Railway, no solo el DM
         await ctx.author.send(f"❌ Error: {e}")
 
 
@@ -799,13 +804,16 @@ async def swiss_reiniciar_asistente_handle(ctx):
             await ctx.author.send("❌ Cancelado.")
             return
 
-        await reiniciar_torneo(ctx.bot, torneo["codigo"], ctx.guild)
-
-        await ctx.author.send(f"✅ Torneo `{torneo['codigo']}` reiniciado y en estado **abierto**. Puedes iniciarlo con `!iniciar-swiss`.")
+        ok, msg = await reiniciar_torneo(ctx.bot, torneo["codigo"], ctx.guild)
+        if not ok:
+            await ctx.author.send(f"❌ {msg}")
+            return
+        await ctx.author.send(f"✅ {msg} Puedes iniciarlo con `!iniciar-swiss`.")
 
     except asyncio.TimeoutError:
         await ctx.author.send("⏰ Tiempo agotado.")
     except Exception as e:
+        log.exception("❌ Error en swiss_reiniciar_asistente_handle")      # traceback en el log de Railway, no solo el DM
         await ctx.author.send(f"❌ Error: {e}")
 
 # ============================================================
@@ -907,6 +915,7 @@ async def swiss_eliminar_ronda_asistente_handle(ctx):
     except asyncio.TimeoutError:
         await ctx.author.send("⏰ Tiempo agotado.")
     except Exception as e:
+        log.exception("❌ Error en swiss_eliminar_ronda_asistente_handle")      # traceback en el log de Railway, no solo el DM
         await ctx.author.send(f"❌ Error: {e}")
 
 # ============================================================
@@ -950,12 +959,13 @@ async def swiss_finalizar_asistente_handle(ctx):
             await ctx.author.send("❌ Cancelado.")
             return
 
-        await finalizar_torneo(ctx.bot, torneo["codigo"], ctx.guild)
-        await ctx.author.send(f"✅ Torneo `{torneo['codigo']}` marcado como finalizado.")
+        ok, msg = await finalizar_torneo(ctx.bot, torneo["codigo"], ctx.guild)
+        await ctx.author.send(f"{'✅' if ok else '❌'} {msg}")
 
     except asyncio.TimeoutError:
         await ctx.author.send("⏰ Tiempo agotado.")
     except Exception as e:
+        log.exception("❌ Error en swiss_finalizar_asistente_handle")      # traceback en el log de Railway, no solo el DM
         await ctx.author.send(f"❌ Error: {e}")
 
 # ============================================================

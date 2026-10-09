@@ -123,3 +123,26 @@ Criterio: el sistema suizo propio gestiona los torneos (inscripción, emparejami
 - [x] **74.** (Hecho: borradas las 10, la llamada comentada a asignar_strike_automatico y, por arrastre, _esta_registrado_en_canal; también swiss_lista_inscritos_asistente_handle, un asistente que ningún comando registraba (lo hace !ver-inscritos). comandos_sin_ayuda (del 68) no se llamaba: ahora avisa en el log al arrancar si un comando no tiene ayuda) Otras funciones sin uso: `asignar_strike_automatico`, `member_update_handle`, `comprobar_registro_y_enviar_comandos`, `extraer_mencion`, `enviar_ayuda_handle`, `obtener_torneos_swiss_disponibles_canal`, `obtener_estado_torneos_usuario`, `obtener_inscritos_ids`, `eliminar_rondas` y `eliminar_clasificacion`.
 - [x] **75.** (Hecho: imports sin uso quitados en commons (json, wraps), jugadores (Counter, io, un obtener_torneo_estado repetido) y events; cache_web se importa una vez arriba en commons. Constantes: ROLES_BORRADOS y ROLES_BIENVENIDA de config, MAX_ERRORES, TIEMPO_LIMITE_MINUTOS e intentos_fallidos (solo se borraba, nunca se escribía). Por arrastre, enviar_comandos_a_miembro, que solo usaba una función del 74. Los imports locales de decks en commons se quedan: evitan un ciclo) Imports muertos o duplicados en todos los módulos, y constantes sin uso (`ROLES_BORRADOS`, `ROLES_BIENVENIDA`, `MAX_ERRORES`...).
 - [x] **76.** (Hecho junto al 54: `git rm --cached` de la caché y de 12 `.pyc`, y `cache/` en `.gitignore`) Dejar de subir a git los `.pyc` y `cache/torneos.json` (añadirlos a `.gitignore` y hacer `git rm --cached`).
+
+## Correcciones tras la auditoría (rama fix/auditoria, 2026-10-09)
+
+Auditoría completa con el refactor ya en producción: ninguna tarea rota ni deshecha, pero 10 se habían quedado a medias y había fallos que ya venían de antes. Todos corregidos aquí:
+
+- [x] **3b** La web no comprobaba sanciones ni rol de jugador: `@requiere_sesion(jugador=True)` en los 8 endpoints de acción, con la misma regla que Discord (`permisos.motivo_denegacion`); 403 con texto para el usuario.
+- [x] **4** Deck del rival: con un resultado reportado (aunque fuera falso y de uno solo) se veía el deck; ahora hace falta la ronda completa o el torneo finalizado, en `deck-rival` y en `mis-enfrentamientos`.
+- [x] **6b** El token solo se acepta en la cabecera `Authorization: Bearer` (la web ya lo envía así, commit 293af4e publicado).
+- [x] **18 / 65** `!reiniciar-swiss` desinscribe a los retirados (y borra su deck) y vacía la lista.
+- [x] **21** No se puede generar una ronda con el torneo abierto: la ronda 1 solo la genera `!iniciar-swiss`.
+- [x] **35 / 51** La clasificación de la web solo lee (guardada o calculada sin guardar); `calcular_clasificacion` va con el lock del torneo; reiniciar y finalizar un torneo borrado ya no crean un registro fantasma.
+- [x] **38** `!best-decks` no enseña decks de torneos sin terminar.
+- [x] **46** Cualquier error al escribir el comando (comillas sin cerrar, argumentos de más...) se trata como error del usuario.
+- [x] **62** Los 8 asistentes del suizo que solo avisaban por DM registran el error en el log.
+- [x] **C2** El selector de torneos no filtra por "donde jugué" en los comandos de admin; `!reportar-torneo` no acepta "todos".
+- [x] **C3** `!sorteo-torneo` funciona también con battles (participantes de sus enfrentamientos).
+- [x] Reportar en un torneo finalizado (o sin empezar) se rechaza; las correcciones siguen con `!modificar-resultado-swiss`.
+- [x] `!editar-deck` ya no gasta la única edición si no se cambia nada o no se responde.
+- [x] "Agendada" en la web: los mensajes de la agenda llevan al final ` | Torneo `CÓDIGO`` (web y `!agendar-partida`, que lo deduce si los dos jugadores comparten un único suizo en juego); también en `torneo-enfrentamientos`.
+- [x] Solicitud de admisión con comentario largo: el comentario va en la descripción del embed (antes se pasaba de 1024 y daba 500).
+- [x] Fechas en hora de Madrid (`commons.ahora_madrid`) en `!eventos-hoy`, la cartelera semanal, `!nueva-peticion` y la fecha por defecto de un suizo.
+- [x] `!strike`, `!out` y el login de la web buscan el usuario por nombre exacto; en los demás asistentes la coincidencia parcial solo vale si hay una.
+- [x] Textos de ayuda de `editar-deck`, `inscribirse-sorteo` y `sorteo-torneo` corregidos.

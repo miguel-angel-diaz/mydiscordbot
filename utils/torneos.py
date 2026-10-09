@@ -17,12 +17,14 @@ async def tournament_report_handle(ctx, codigo_torneo: str = None):
     if not codigo_torneo:
         codigo_torneo = await obtener_torneo_usuario(
             ctx,
-            mensaje_inicial="📩 No escribiste el código del torneo.\n"
-                            "Elige uno de los torneos en los que estás inscrito:",
+            mensaje_inicial="📩 No escribiste el código del torneo.\nElige el torneo del informe:",
             complete=True
         )
         if not codigo_torneo:
             return
+    if isinstance(codigo_torneo, list):     # "todos": el informe es de un torneo concreto
+        await ctx.author.send("❌ El informe se hace de un torneo concreto: elige uno, no 'todos'.")
+        return
 
     # 🔹 Obtener datos
     cartas_data = await cartas_mas_jugadas(ctx, codigo_torneo, '🧠📈analisis-torneos')
