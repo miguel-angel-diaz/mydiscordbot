@@ -20,7 +20,7 @@ Ramas: **[BOT]** en `fix/auditoria` (ya creada desde `main`). **[WEB]** en una r
 - [x] **3.** [OPS] (Hecho por el usuario el 2026-10-09) Rotar la clave de Challonge, que salió en una captura y en el chat. Poner la nueva en Railway y en `config_token.py`.
 - [x] **4.** [OPS] (Hecho por el usuario el 2026-10-09) OpenRouter: rotar la clave o, si el análisis con IA ya no se usa, quitarlo (ver tarea 41) y borrar `OPENROUTER_API_KEY` de Railway y de `config_token.py`.
 - [x] **5.** [OPS] (Hecho por el usuario el 2026-10-09) Borrar la variable `pepe` de Railway. `CACHE_PATH` se puede quitar: tiene el mismo valor que el código usa por defecto.
-- [ ] **6.** [BOT] (Commit f5e8789 en `fix/auditoria`; falta integrarlo en `main` y desplegar, cuando lo pida el usuario) Revisar, hacer commit y desplegar `fix/auditoria`, con las correcciones de la auditoría del bot ya hechas: sancionados en la web, deck del rival, `!best-decks`, suizo, agenda, hora de Madrid, búsqueda exacta, etc. Están listadas al final de `REFACTOR_PENDIENTES.md`. La web es compatible y no hay que coordinar nada.
+- [x] **6.** [BOT] (Desplegado el 2026-10-09 a las 14:3x: push de main 654ff9b..4f5b976, con la auditoría y las fases 3 y 5. Comprobado en Railway: /auth/logout responde ok, /api/torneos 200, login sin revelar usuarios y token por query rechazado) Revisar, hacer commit y desplegar `fix/auditoria`, con las correcciones de la auditoría del bot ya hechas: sancionados en la web, deck del rival, `!best-decks`, suizo, agenda, hora de Madrid, búsqueda exacta, etc. Están listadas al final de `REFACTOR_PENDIENTES.md`. La web es compatible y no hay que coordinar nada.
 
 ## Fase 1 · XSS en la web (crítico)
 
