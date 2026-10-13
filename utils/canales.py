@@ -42,11 +42,9 @@ RONDAS_TORNEOS = "rondas-torneo"
 CLASIFICACIONES_TORNEOS = "clasificaciones-torneo"
 
 # Moderación y registros
-REGISTRO_USUARIOS = "registro-de-usuarios"
 USUARIOS_QUE_SE_FUERON = "usuarios-que-nos-dejaron"
 MENSAJES_BORRADOS = "mensajes-borrados"
 BLACKLIST = "blacklist"
-VESTIBULO = "🪞-vestíbulo‐"
 REGISTRO_VOZ = "registro-canales-voz"
 OYENTES = "oyentes-en-canales"
 
@@ -65,15 +63,12 @@ ROL_ADMIN = "admin"
 ROL_MIEMBRO = "miembro"
 ROL_OUT = "Out"
 ROL_STRIKE = "Strike"
-ROL_ACEPTA_BIENVENIDA = "Accept Welcome"
-ROL_ACEPTA_REGLAS = "Accept Rules"
 ROL_SOCIO = "socio"
 ROL_SOCIO_2C = "second-chance-socio"
 ROL_MIEMBRO_2C = "second-chance-miembro"
 
 # Grupos
 ROLES_JUGADORES = (ROL_SOCIO, ROL_SOCIO_2C, ROL_MIEMBRO, ROL_MIEMBRO_2C)   # pueden usar los comandos de jugador
-ROLES_BIENVENIDA = (ROL_ACEPTA_BIENVENIDA, ROL_ACEPTA_REGLAS)
 
 
 # ============================================================

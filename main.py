@@ -51,7 +51,6 @@ class Bot(commands.Bot):
 
     async def on_message(self, message: discord.Message):
         # Sustituye al on_message por defecto: primero los atajos con espacio ("!subir deck"), luego los comandos.
-        # La bienvenida del vestíbulo es un listener del cog Eventos.
         if message.author.bot:
             return
         manejado = await reconocer_comando_handle(self, message)
