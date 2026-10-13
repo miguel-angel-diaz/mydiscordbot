@@ -10,6 +10,7 @@ from discord.ext.commands.view import StringView
 
 from utils import canales
 from utils import dm
+from utils import ayuda
 
 log = logging.getLogger(__name__)
 
@@ -54,6 +55,100 @@ async def registrar_mensaje_borrado_handle(message: discord.Message):
 
     except Exception as e:
         log.exception(f"registrando mensaje borrado: {e}")
+
+async def bienvenida_y_comandos_handle(message: discord.Message):
+    """Presentación en el vestíbulo con las reglas aceptadas -> pasa a miembro, recibe la bienvenida y se registra."""
+    if message.author.bot or not message.guild:
+        return
+    canal_presentaciones = canales.get_canal(message.guild, canales.VESTIBULO)
+    if not canal_presentaciones or message.channel.id != canal_presentaciones.id:
+        return
+
+    member = message.author
+    roles_usuario = {role.name for role in member.roles}
+    if not set(canales.ROLES_BIENVENIDA).issubset(roles_usuario):
+        return  # sin los dos roles de bienvenida no sigue
+
+    if not await _pasar_a_miembro(member):
+        return
+    dms_abiertos = await _enviar_bienvenida(member, roles_usuario | {canales.ROL_MIEMBRO})
+    await _registrar_nuevo_miembro(message, member, roles_usuario, dms_abiertos)
+
+
+async def _pasar_a_miembro(member) -> bool:
+    """
+    Veto -> rol 'miembro' -> quitar los de bienvenida. Devuelve False si no debe seguir (vetado o sin poder dar el rol).
+    'miembro' se asigna ANTES de quitar los de bienvenida: si falla, el usuario no se queda sin roles.
+    """
+    guild = member.guild
+    roles_bienvenida = [r for r in (canales.get_rol(guild, canales.ROL_ACEPTA_BIENVENIDA),
+                                    canales.get_rol(guild, canales.ROL_ACEPTA_REGLAS)) if r in member.roles]
+
+    # Blacklist / expulsados: se comprueba ANTES de tocar ningún rol
+    if await _esta_vetado(member, guild):
+        await castigar_usuario(member)
+        await _quitar_roles(member, roles_bienvenida, "Vetado: no pasa a miembro")
+        return False
+
+    rol_miembro = canales.get_rol(guild, canales.ROL_MIEMBRO)
+    if rol_miembro and rol_miembro not in member.roles:
+        try:
+            await member.add_roles(rol_miembro, reason="Aceptó reglas y bienvenida")
+            log.info(f"Rol 'miembro' asignado a {member.display_name}")
+        except discord.HTTPException as e:
+            log.warning(f"No pude asignar el rol 'miembro' a {member.display_name}: {e}")
+            return False
+
+    await _quitar_roles(member, roles_bienvenida, "Ya obtuvo el rol 'miembro'")
+    return True
+
+
+async def _enviar_bienvenida(member, roles_simulados: set) -> bool:
+    """DMs de bienvenida: comandos disponibles, torneos y sorteos. Devuelve si tiene los DMs abiertos."""
+    comandos_disponibles = [f"!{c['comando']} - {c['descripcion']}" for c in ayuda.comandos_info()
+                            if any(rol in roles_simulados for rol in c["roles_permitidos"])]
+    torneos_activos = await _torneos_para_nuevo_miembro(member.guild)
+    sorteos_activos = []
+    canal_sorteos = canales.get_canal(member.guild, canales.SORTEOS_ACTIVOS)
+    if canal_sorteos:
+        async for msg in canal_sorteos.history(limit=50):
+            if not msg.pinned:
+                sorteos_activos.append(msg.content)
+
+    # Si tiene los DMs cerrados se sigue: el registro se hace igualmente
+    dms_abiertos = await _dm(member, f"👋 ¡Bienvenido/a al servidor, {member.display_name}! 🎉")
+    if not dms_abiertos:
+        return False
+    for titulo, lineas, separador, color in (
+        ("📋 Tus comandos disponibles", comandos_disponibles, "\n", discord.Color.green()),
+        ("🎮 Torneos activos", torneos_activos[:5], "\n\n", discord.Color.blue()),       # los primeros 5
+        ("🎁 Sorteos activos", sorteos_activos[:5], "\n\n", discord.Color.purple()),
+    ):
+        if lineas:
+            await _dm(member, embed=discord.Embed(title=titulo, description=_recortar(separador.join(lineas), 4096),
+                                                  color=color))
+    return True
+
+
+async def _registrar_nuevo_miembro(message, member, roles_usuario: set, dms_abiertos: bool):
+    """Ficha en #registro-de-usuarios."""
+    canal_registro = canales.get_canal(message.guild, canales.REGISTRO_USUARIOS)
+    if not canal_registro:
+        return
+    embed = discord.Embed(title="📥 Nuevo miembro registrado", color=discord.Color.blue())
+    embed.set_thumbnail(url=member.display_avatar.url)
+    embed.add_field(name="Usuario", value=f"{member} (ID: {member.id})", inline=False)
+    embed.add_field(name="Apodo en servidor", value=member.display_name, inline=False)
+    embed.add_field(name="Roles asignados", value=_recortar(", ".join(roles_usuario) or "Sin roles"), inline=False)
+    embed.add_field(name="Cuenta creada", value=member.created_at.strftime("%d/%m/%Y %H:%M:%S"), inline=False)
+    embed.add_field(name="Se unió al servidor", value=member.joined_at.strftime("%d/%m/%Y %H:%M:%S") if member.joined_at else "Desconocida", inline=False)
+    embed.add_field(name="DMs", value="✅ Bienvenida enviada" if dms_abiertos else "⚠️ DMs cerrados: no recibió la bienvenida", inline=False)
+    embed.add_field(name="Mensaje de presentación", value=_recortar(message.content or "(sin texto: solo adjuntos)"), inline=False)
+    try:
+        await canal_registro.send(embed=embed)
+    except discord.HTTPException as e:
+        log.warning(f"No pude registrar a {member} en #registro-de-usuarios: {e}")
+
 
 def mapa_alias_con_espacios(bot: commands.Bot) -> dict:
     """
@@ -209,22 +304,26 @@ async def usuario_salio_handle(bot: commands.Bot, member: discord.Member):
     # if canal_anuncios:
     #     await canal_anuncios.send(f"📢 El usuario **{member.display_name}** ha abandonado **The Klub**.")
 
-async def entrada_vetado_handle(member: discord.Member):
-    """
-    La bienvenida, las normas y los roles los gestiona la Incorporación de Discord. El bot solo mira, al entrar,
-    si el usuario está vetado: si lo está, se le avisa por DM y recibe 'Out' (bloquea los comandos aunque la
-    Incorporación le dé 'miembro').
-    """
-    if member.bot:
-        return
+async def _torneos_para_nuevo_miembro(guild) -> list:
+    """Torneos suizos abiertos y de nivel "todos" (un miembro nuevo no es socio), por fecha de inicio."""
+    from utils.torneos_estado import leer_estado   # import local: evita ciclos al cargar
     try:
-        vetado = await _esta_vetado(member, member.guild)
-    except discord.HTTPException as e:
-        log.warning(f"No pude revisar la blacklist para {member}: {e}")
-        return
-    if vetado:
-        log.info(f"Entra un usuario vetado: {member} ({member.id})")
-        await castigar_usuario(member)
+        estado = await leer_estado(guild._state._get_client())
+    except Exception as e:
+        log.warning(f"No pude leer los torneos para la bienvenida: {e}")
+        return []
+
+    def fecha(t):
+        try:
+            return datetime.strptime(t.get("fecha_inicio", ""), "%d/%m/%Y")
+        except ValueError:
+            return datetime.max
+
+    abiertos = [t for t in estado.get("torneos", []) if t.get("tipo") == "swiss" and t.get("estado") == "abierto"
+                and str(t.get("nivel", "todos")).lower() != "socios"]
+    return [f"🎮 **{t.get('nombre', 'Torneo')}** — `{t['codigo']}`\n"
+            f"📋 {t.get('formato', '?')} · 📅 {t.get('fecha_inicio', 'sin fecha')}\n"
+            f"👉 `!inscribir-swiss {t['codigo']}`" for t in sorted(abiertos, key=fecha)]
 
 
 async def _dm(member, contenido=None, **kwargs) -> bool:
@@ -235,6 +334,15 @@ async def _dm(member, contenido=None, **kwargs) -> bool:
     except discord.HTTPException:
         log.info(f"No pude enviar DM a {member}")
         return False
+
+
+async def _quitar_roles(member, roles, motivo: str):
+    if not roles:
+        return
+    try:
+        await member.remove_roles(*roles, reason=motivo)
+    except discord.HTTPException as e:
+        log.warning(f"No pude quitar roles a {member.display_name}: {e}")
 
 
 async def _esta_vetado(member, guild) -> bool:
@@ -260,9 +368,9 @@ async def _esta_vetado(member, guild) -> bool:
 async def castigar_usuario(member: discord.Member):
     await _dm(
         member,
-        "🚫 Estás vetado en **The Klub**: fuiste expulsado y no puedes volver a participar en el servidor.\n\n"
-        "Lo siento, pero no eres el perfil que buscamos. Agradecemos tu interés, pero no todo el mundo vale para "
-        "The Klub: estar aquí no es un derecho, es un privilegio. Buena suerte en tu camino."
+        "Lo siento pero no eres el perfil que buscamos, agradecemos tú interés pero no todo el mundo vale para The Klub,"
+        "estar aquí no es un derecho, es un privilegio."
+        "Buena suerte en tu camino y que vaya bien."
     )
 
     # Asignar rol Out (sin dejar escapar el error si faltan permisos)

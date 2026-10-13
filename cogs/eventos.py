@@ -1,5 +1,5 @@
 ######## cogs/eventos.py #######
-"""Eventos del servidor (vetados al entrar, mensajes borrados, socios, salidas, voz), registro y errores de comandos, y la ayuda."""
+"""Eventos del servidor (bienvenida, mensajes borrados, socios, salidas, voz), registro y errores de comandos, y la ayuda."""
 import logging
 
 import discord
@@ -9,7 +9,7 @@ from utils.permisos import CogConRoles
 from utils.jugadores import mis_comandos_handle
 from utils.events import (
     registrar_mensaje_borrado_handle,
-    entrada_vetado_handle,
+    bienvenida_y_comandos_handle,
     evento_socio_handle,
     usuario_salio_handle,
     log_comando_handle,
@@ -37,9 +37,11 @@ class Eventos(CogConRoles):
     ################################## EVENTOS DEL SERVIDOR ##################################
 
     @commands.Cog.listener()
-    async def on_member_join(self, member: discord.Member):
-        # La entrada la lleva la Incorporación de Discord; el bot solo avisa a los vetados
-        await entrada_vetado_handle(member)
+    async def on_message(self, message: discord.Message):
+        # Los comandos los enruta Bot.on_message (main.py); aquí solo la presentación en el vestíbulo
+        if message.author.bot:
+            return
+        await bienvenida_y_comandos_handle(message)
 
     @commands.Cog.listener()
     async def on_message_delete(self, message):
