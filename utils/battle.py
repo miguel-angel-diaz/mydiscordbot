@@ -547,3 +547,5 @@ async def finalizar_battle_handle(ctx, codigo_battle: str = None):
         return
     await publicar_clasificacion_battle(ctx.bot, ctx.guild, codigo)
     await ctx.author.send(f"🏁 {msg}" + (f" {anulados} enfrentamiento(s) anulado(s)." if anulados else ""))
+    from utils import encuestas      # import local, como sorteos
+    await encuestas.programar_encuesta(ctx.bot, codigo)

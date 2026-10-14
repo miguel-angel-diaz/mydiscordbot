@@ -35,6 +35,7 @@ CARTELERA_PARTIDAS = "🎭-cartelera‐proximas-partidas"
 # Sorteos
 SORTEOS_ACTIVOS = "sorteos-activos"
 INSCRITOS_SORTEOS = "inscritos-sorteos"
+ENCUESTAS = "encuestas"      # PRIVADO: respuestas ANÓNIMAS de las encuestas de fin de torneo (utils/encuestas.py)
 PREMIOS = "premios"          # PRIVADO (solo organizadores): datos de envío de los ganadores (utils/sorteos.py)
 
 # Estado interno del bot (mensajes JSON)

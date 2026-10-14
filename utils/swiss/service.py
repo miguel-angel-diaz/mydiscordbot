@@ -267,13 +267,14 @@ async def finalizar_torneo(bot, codigo: str, guild: discord.Guild = None) -> Tup
     if guild:   # ya no queda nada por jugar: fuera sus citas (pendientes o la línea suelta de un BYE)
         await presentacion.borrar_emparejamientos(bot, guild, codigo, todos=True)
     await publicar_clasificacion_swiss(bot, guild, codigo)
-    await _preguntar_sorteo(bot, codigo, guild)
+    await _tras_finalizar(bot, codigo, guild)
     return True, f"Torneo `{codigo}` marcado como finalizado."
 
-async def _preguntar_sorteo(bot, codigo: str, guild):
-    """Tras la clasificación final: el dueño del servidor decide por DM si hay sorteo (utils/sorteos.py)."""
-    from utils import sorteos      # import local: sorteos -> battle -> swiss_handle -> service
+async def _tras_finalizar(bot, codigo: str, guild):
+    """Tras la clasificación final: el dueño decide por DM si hay sorteo y se programa la encuesta de los jugadores."""
+    from utils import encuestas, sorteos      # import local: sorteos -> battle -> swiss_handle -> service
     await sorteos.al_finalizar_torneo(bot, codigo, guild)
+    await encuestas.programar_encuesta(bot, codigo)
 
 # ============================================================
 # INSCRIPCIONES
@@ -379,7 +380,7 @@ async def _siguiente_ronda_automatica(bot, codigo: str, guild: discord.Guild = N
             await presentacion.borrar_emparejamientos(bot, guild, codigo, todos=True)
             await presentacion.anunciar_fin_automatico(guild, codigo, motivo)
         await publicar_clasificacion_swiss(bot, guild, codigo)
-        await _preguntar_sorteo(bot, codigo, guild)
+        await _tras_finalizar(bot, codigo, guild)
         return
 
     if guild:

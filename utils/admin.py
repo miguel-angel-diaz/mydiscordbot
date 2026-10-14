@@ -8,6 +8,7 @@ import re
 from utils import dm
 from utils import canales
 from utils import decks
+from utils import encuestas
 from utils import sorteos
 from utils.commons import borrar_mensaje_seguro, validar_canal_correcto, buscar_usuario_en_servidor, obtener_torneo_usuario, enviar_en_trozos, leer_inscritos_sorteo
 
@@ -406,6 +407,72 @@ async def sorteo_torneo_handle(ctx, codigo_torneo: str = None, premios: str = No
         else:
             ok, msg = await sorteos.preguntar_si_hay_sorteo(ctx.bot, codigo_torneo, ctx.guild, destinatario=ctx.author)
         await ctx.author.send(f"{'✅' if ok else '❌'} {msg}", allowed_mentions=discord.AllowedMentions.none())
+    except discord.Forbidden:
+        await ctx.send("❌ No puedo enviarte mensajes privados. Activa los DMs para continuar.")
+
+async def enviar_encuesta_handle(ctx, codigo: str = None):
+    """Manda ya la encuesta de fin de torneo (sin esperar a la mañana siguiente), p. ej. a un torneo ya finalizado."""
+    await borrar_mensaje_seguro(ctx)
+    if not await validar_canal_correcto(ctx, canales.COMANDOS, "!enviar-encuesta"):
+        return
+    if not await moderador_permisos_handle(ctx):
+        return
+    try:
+        opciones = await encuestas.torneos_para_encuesta(ctx.bot)
+        if codigo:
+            torneo = next((t for t in opciones if t.get("codigo") == codigo), None)
+            if torneo is None:
+                await ctx.author.send(f"❌ El torneo `{codigo}` no existe o ya tiene la encuesta enviada.")
+                return
+        else:
+            if not opciones:
+                await ctx.author.send("❌ No hay torneos sin encuesta enviada.")
+                return
+            idx = await dm.elegir_de_lista(ctx.bot, ctx.author, "📋 **¿A qué torneo le mando la encuesta?**",
+                                           [sorteos.etiqueta_torneo(t) for t in opciones])
+            if idx is None:
+                return
+            torneo = opciones[idx]
+        # Escribe a gente real: se confirma antes
+        resp = await dm.preguntar(ctx.bot, ctx.author,
+                                  f"⚠️ Se mandará la encuesta por DM a los participantes de **{torneo.get('nombre')}** "
+                                  f"(`{torneo['codigo']}`). ¿Seguro? (sí/no)")
+        if resp is None:
+            return
+        if not dm.es_si(resp):
+            await ctx.author.send("❌ Cancelado.")
+            return
+        await ctx.author.send("⏳ Enviando… (un segundo por participante)")
+        ok, msg = await encuestas.enviar_encuesta_ahora(ctx.bot, torneo["codigo"])
+        await ctx.author.send(f"{'✅' if ok else '❌'} {msg}")
+    except discord.Forbidden:
+        await ctx.send("❌ No puedo enviarte mensajes privados. Activa los DMs para continuar.")
+
+
+async def resultados_encuesta_handle(ctx, codigo: str = None):
+    """Resumen y CSV de una encuesta de fin de torneo (utils/encuestas.py), por DM al admin."""
+    await borrar_mensaje_seguro(ctx)
+    if not await validar_canal_correcto(ctx, canales.COMANDOS, "!resultados-encuesta"):
+        return
+    if not await moderador_permisos_handle(ctx):
+        return
+    try:
+        opciones = await encuestas.encuestas_consultables(ctx.bot)
+        if codigo:
+            encuesta = next((e for e in opciones if e.get("codigo") == codigo), None)
+            if encuesta is None:
+                await ctx.author.send(f"❌ No hay ninguna encuesta enviada del torneo `{codigo}`.")
+                return
+        else:
+            if not opciones:
+                await ctx.author.send("❌ Todavía no se ha enviado ninguna encuesta.")
+                return
+            idx = await dm.elegir_de_lista(ctx.bot, ctx.author, "📋 **¿De qué torneo quieres ver la encuesta?**",
+                                           [encuestas.etiqueta_encuesta(e) for e in opciones])
+            if idx is None:
+                return
+            encuesta = opciones[idx]
+        await encuestas.mandar_resultados(ctx.author, encuesta)
     except discord.Forbidden:
         await ctx.send("❌ No puedo enviarte mensajes privados. Activa los DMs para continuar.")
 

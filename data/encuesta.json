@@ -1,0 +1,13 @@
+{
+  "_ayuda": "Preguntas de la encuesta de fin de torneo (utils/encuestas.py). 'elegir': como mucho 4, tipo 'estrellas' (1 a 5) o con 'opciones' (2 a 25). 'textos': como mucho 5, siempre opcionales. Los cambios valen para las encuestas nuevas; las ya enviadas conservan sus preguntas.",
+  "elegir": [
+    {"id": "general", "texto": "Valoración general del torneo", "tipo": "estrellas"},
+    {"id": "organizacion", "texto": "Organización (avisos, emparejamientos, bot)", "tipo": "estrellas"},
+    {"id": "ritmo", "texto": "Ritmo de las rondas", "opciones": ["Muy lento", "Bien", "Muy rápido"]},
+    {"id": "repetiria", "texto": "¿Jugarías el próximo?", "opciones": ["Sí", "Quizá", "No"]}
+  ],
+  "textos": [
+    {"id": "mejorar", "texto": "¿Qué mejorarías?"},
+    {"id": "comentarios", "texto": "Otros comentarios"}
+  ]
+}

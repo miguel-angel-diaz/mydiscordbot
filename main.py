@@ -9,7 +9,7 @@ from discord.ext import commands
 import logging
 import os
 
-from utils import ayuda, sorteos
+from utils import ayuda, encuestas, sorteos
 from utils.api import iniciar_servidor_web, set_bot_instance
 from utils.events import reconocer_comando_handle
 from utils.watchers import cargar_tareas
@@ -35,6 +35,7 @@ class Bot(commands.Bot):
         await iniciar_servidor_web()          # con await: si falla (p. ej. puerto ocupado) se ve en el arranque
         cargar_tareas(self)                   # el bucle espera a wait_until_ready antes de su primera ejecución
         sorteos.registrar(self)               # botones de sorteo persistentes y revisión de plazos
+        encuestas.registrar(self)             # encuesta de fin de torneo: botón persistente y envíos programados
 
         # Caché de la web a memoria; si falta o es antigua (p. ej. tras un deploy) se regenera en segundo plano
         from utils import cache_web

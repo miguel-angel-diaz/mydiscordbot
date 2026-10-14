@@ -32,7 +32,8 @@ log = logging.getLogger(__name__)
 CANALES = {
     "estado": canales.ESTADO_TORNEOS,
     "rondas": canales.RONDAS_TORNEOS,
-    "clasificacion": canales.CLASIFICACIONES_TORNEOS
+    "clasificacion": canales.CLASIFICACIONES_TORNEOS,
+    "encuesta": canales.ENCUESTAS,
 }
 PREFIX = "📊 TORNEO: "
 CABECERA = re.compile(r"^📊 TORNEO: (\S+)(?:\s*\|\s*PARTE\s*(\d+)/(\d+))?(?:\s*\|\s*v=(\d+))?\s*$")
@@ -248,6 +249,24 @@ async def leer_clasificacion(bot, codigo: str) -> Optional[dict]:
 
 async def guardar_clasificacion(bot, codigo: str, datos: dict):
     await _guardar_dato_torneo(bot, "clasificacion", codigo, datos)
+
+# --- ENCUESTAS (utils/encuestas.py; no se borran al eliminar el torneo) ---
+async def leer_encuesta(bot, codigo: str) -> Optional[dict]:
+    return await _leer_dato_torneo(bot, "encuesta", codigo)
+
+async def guardar_encuesta(bot, codigo: str, datos: dict):
+    await _guardar_dato_torneo(bot, "encuesta", codigo, datos)
+
+async def leer_encuestas(bot) -> List[dict]:
+    channel = await _get_channel(bot, "encuesta")
+    if not channel:
+        return []
+    encuestas = []
+    for codigo, entradas in (await _mensajes_por_codigo(bot, channel)).items():
+        datos = _decodificar(codigo, entradas)
+        if datos:
+            encuestas.append(datos)
+    return encuestas
 
 # ============================================================
 # UTILIDADES

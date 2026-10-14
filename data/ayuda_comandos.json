@@ -503,6 +503,34 @@
       "manage_roles"
     ]
   },
+  "enviar-encuesta": {
+    "seccion": "ADMIN - TORNEOS SWISS",
+    "descripcion": "Manda ya la encuesta anónima de un torneo a sus participantes",
+    "tutorial": [
+      "Normalmente no hace falta: al finalizar un torneo la encuesta sale sola a la mañana siguiente (10:00).",
+      "Escribe `!enviar-encuesta` en `#preguntale-a-el-barbas` y elige el torneo por DM (o `!enviar-encuesta <código>`); sirve también para torneos ya finalizados.",
+      "Confirma con `sí`: cada participante recibe el DM con el botón para responder. Se cierra a los 7 días.",
+      "Cada torneo tiene una sola encuesta: los que ya la tienen enviada no salen en la lista."
+    ],
+    "permisos_discord": [
+      "manage_messages",
+      "manage_roles"
+    ]
+  },
+  "resultados-encuesta": {
+    "seccion": "ADMIN - TORNEOS SWISS",
+    "descripcion": "Resumen y CSV de la encuesta anónima de fin de torneo",
+    "tutorial": [
+      "Al finalizar un torneo, a la mañana siguiente (10:00) el bot manda a cada participante una encuesta anónima por DM. Se cierra a los 7 días y el dueño recibe el resumen.",
+      "Escribe `!resultados-encuesta` en `#preguntale-a-el-barbas` y elige el torneo por DM (o `!resultados-encuesta <código>`).",
+      "Te llega el resumen (medias, reparto de respuestas y comentarios) y un CSV para abrir en Excel.",
+      "Las preguntas se cambian en `data/encuesta.json`. Las respuestas se guardan en `#encuestas` (debe ser privado)."
+    ],
+    "permisos_discord": [
+      "manage_messages",
+      "manage_roles"
+    ]
+  },
   "sorteo-torneo": {
     "seccion": "ADMIN - SORTEOS",
     "descripcion": "Sortea premios entre los participantes de un torneo suizo o battle",

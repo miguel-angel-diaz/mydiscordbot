@@ -12,6 +12,8 @@ from utils.admin import (
     eliminar_mensajes,
     cerrar_peticion_handle,
     sorteo_torneo_handle,
+    resultados_encuesta_handle,
+    enviar_encuesta_handle,
     nuevo_sorteo_handle,
     realizar_sorteo_handle,
     nuevo_comunicado_handle,
@@ -64,6 +66,18 @@ class Admin(CogConRoles):
     async def sorteo_torneo(self, ctx, codigo_torneo: str = None, *, premios: str = None):
         """Sorteo de premios entre los participantes de un torneo - !sorteo-torneo <código_torneo> [Tapete, Token x4]"""
         await sorteo_torneo_handle(ctx, codigo_torneo, premios)
+
+    @commands.command(name="enviar-encuesta",
+        aliases=["enviar encuesta", "enviar_encuesta"])
+    async def enviar_encuesta(self, ctx, codigo_torneo: str = None):
+        """Manda ya la encuesta anónima de un torneo a sus participantes - !enviar-encuesta [código_torneo]"""
+        await enviar_encuesta_handle(ctx, codigo_torneo)
+
+    @commands.command(name="resultados-encuesta",
+        aliases=["resultados encuesta", "resultados_encuesta", "encuesta"])
+    async def resultados_encuesta(self, ctx, codigo_torneo: str = None):
+        """Resumen y CSV de la encuesta anónima de un torneo - !resultados-encuesta [código_torneo]"""
+        await resultados_encuesta_handle(ctx, codigo_torneo)
 
     @commands.command(name="nuevo-sorteo",
         aliases=["nuevo sorteo", "nuevo_sorteo"])
