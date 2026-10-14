@@ -26,6 +26,7 @@ from utils.torneos_estado import (
     generar_codigo_unico
 )
 from utils.validacion_web import EntradaInvalida, resultado as validar_resultado
+from utils.commons import ahora_madrid
 
 log = logging.getLogger(__name__)
 
@@ -344,6 +345,7 @@ async def generar_ronda(bot, codigo: str) -> Tuple[bool, str]:
         return False, error
 
     ronda = engine.nueva_ronda(codigo, torneo, rondas)
+    ronda["creada"] = ahora_madrid().strftime("%d/%m/%Y")   # el recordatorio de agenda no avisa de rondas recién salidas
     await _guardar_lista_rondas(bot, codigo, rondas + [ronda])
     await actualizar_torneo_estado(bot, codigo, {"ronda_actual": ronda["numero"]})
     return True, f"Ronda {ronda['numero']} generada con {len(ronda['emparejamientos'])} emparejamientos."

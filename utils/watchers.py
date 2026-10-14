@@ -11,8 +11,9 @@ from discord.ext import commands, tasks
 import config
 from utils import canales
 from utils import decks
-from utils.commons import resolver_miembro
-from utils.torneos_estado import leer_estado, actualizar_torneo_estado
+from utils.commons import nombre_miembro, resolver_miembro
+from utils.jugadores import torneo_de_agenda
+from utils.torneos_estado import leer_estado, leer_rondas, actualizar_torneo_estado
 
 try:
     from zoneinfo import ZoneInfo
@@ -39,6 +40,8 @@ TITULO_EMBED_SEMANAL = "📅 Partidas programadas esta semana"
 MAX_CAMPOS_EMBED = 25          # límite de Discord
 DIAS_GRACIA_TORNEO = 2         # días tras el inicio antes de borrar el torneo de #torneos-activos
 DIAS_RECORDATORIO = (3, 1)
+DIA_RECORDATORIO_AGENDA = 3   # jueves (lunes = 0)
+DIAS_MINIMOS_RONDA = 3        # no se recuerda agendar una ronda que salió hace menos
 PAUSA_BORRADO = 0.3            # segundos entre borrados para no saturar la API
 
 PATRON_FECHA = re.compile(r"\d{2}/\d{2}/\d{4}")
@@ -335,6 +338,104 @@ async def enviar_recordatorios_deck(bot: commands.Bot):
         log(f"Recordatorio {aviso}d para '{nombre}' ({codigo}): enviado a {enviados} usuario(s).")
 
 
+# ============================================================
+#   RECORDATORIO DE AGENDA (los jueves, partidas sin agendar)
+# ============================================================
+PATRON_MENCION = re.compile(r"<@!?(\d+)>")
+
+
+def agenda_de_canal(contenidos) -> list:
+    """[(ids de los dos jugadores, torneo o None)] de los mensajes de #partidos-agendados."""
+    agenda = []
+    for contenido in contenidos:
+        match = PATRON_EVENTO.search(contenido)
+        if match:
+            ids = set(PATRON_MENCION.findall(f"{match.group(3)} {match.group(4)}"))
+            agenda.append((ids, torneo_de_agenda(contenido)))
+    return agenda
+
+
+def partidas_sin_agendar(codigo: str, ronda: dict, agenda: list) -> list:
+    """
+    (j1, j2) de la ronda que ni tienen resultado (el BYE nace con él) ni están en la agenda. Una cita sin etiqueta
+    de torneo (las antiguas) vale para cualquiera; con etiqueta, solo para el suyo.
+    """
+    pendientes = []
+    for emp in ronda.get("emparejamientos", []):
+        if emp.get("resultado") is not None or emp.get("j2") is None:
+            continue
+        pareja = {str(emp["j1"]), str(emp["j2"])}
+        if not any(pareja <= ids and torneo in (None, codigo) for ids, torneo in agenda):
+            pendientes.append((str(emp["j1"]), str(emp["j2"])))
+    return pendientes
+
+
+def ronda_con_recorrido(ronda: dict, hoy_date: date) -> bool:
+    """Si la ronda lleva al menos DIAS_MINIMOS_RONDA días (las antiguas, sin fecha, se dan por viejas)."""
+    creada = _parsear_fecha(ronda.get("creada"))
+    return creada is None or (hoy_date - creada).days >= DIAS_MINIMOS_RONDA
+
+
+def _mensaje_recordatorio_agenda(nombre: str, ronda_num: int, rival_id: str, rival_nombre: str) -> str:
+    return (
+        f"📅 **¡Aún no habéis agendado vuestra partida!**\n\n"
+        f"🍸 Torneo **{nombre}**, ronda {ronda_num}: tu partida contra **{rival_nombre}** (<@{rival_id}>) "
+        f"sigue sin fecha.\n\n"
+        f"Poneos de acuerdo y agendadla con `!agendar-partida` en `#{CANAL_PREGUNTAS}`.\n"
+        f"❓ ¿No sabes cómo? Escribe `!mis-comandos` en `#{CANAL_PREGUNTAS}` y elige **agendar-partida**.\n"
+        f"✅ Si ya la habéis jugado, reportad el resultado con `!reportar-resultado`."
+    )
+
+
+async def enviar_recordatorios_agenda(bot: commands.Bot):
+    """
+    Los jueves, DM a los dos jugadores de cada partida de la ronda actual sin resultado y sin cita en
+    #partidos-agendados. Una vez por torneo y jueves (fecha en el estado: la segunda pasada del día no repite).
+    """
+    hoy_date = hoy()
+    guild = bot.get_guild(GUILD_ID_ADMISION)
+    if hoy_date.weekday() != DIA_RECORDATORIO_AGENDA or not guild:
+        return
+
+    estado = await leer_estado(bot)
+    marca = hoy_date.strftime("%d/%m/%Y")
+    agenda = None   # se lee solo si algún torneo lo necesita
+
+    for torneo in estado.get("torneos", []):
+        codigo = torneo.get("codigo")
+        if not codigo or torneo.get("tipo") != "swiss" or torneo.get("estado") != "en desarrollo" \
+                or torneo.get("recordatorio_agenda_enviado") == marca:
+            continue
+        rondas = ((await leer_rondas(bot, codigo)) or {}).get("rondas", [])
+        if not rondas or rondas[-1].get("completa") or not ronda_con_recorrido(rondas[-1], hoy_date):
+            continue
+
+        if agenda is None:
+            canal = _canal(guild, CANAL_PARTIDOS)
+            agenda = agenda_de_canal([m.content async for m in canal.history(limit=500)]) if canal else []
+
+        ronda = rondas[-1]
+        pendientes = partidas_sin_agendar(codigo, ronda, agenda)
+        # Marca ANTES de enviar: si falla la escritura no se manda nada, en vez de arriesgarse a repetir
+        await actualizar_torneo_estado(bot, codigo, {"recordatorio_agenda_enviado": marca})
+
+        nombre = torneo.get("nombre", codigo)
+        enviados = 0
+        for j1, j2 in pendientes:
+            for jugador_id, rival_id in ((j1, j2), (j2, j1)):
+                miembro = await resolver_miembro(guild, jugador_id)
+                if miembro is None:
+                    continue
+                rival_nombre = await nombre_miembro(guild, rival_id)
+                try:
+                    await miembro.send(_mensaje_recordatorio_agenda(nombre, ronda["numero"], rival_id, rival_nombre))
+                    enviados += 1
+                except discord.HTTPException as e:          # incluye Forbidden (DMs cerrados)
+                    log(f"Sin recordatorio de agenda a {jugador_id}: {e}")
+        log(f"Recordatorio de agenda de '{nombre}' ({codigo}): {len(pendientes)} partidas sin agendar, "
+            f"{enviados} DM enviados.")
+
+
 # -------------------------------------------------------------
 # LOOP DIARIO (10:15 y 22:15 hora de Madrid)
 # -------------------------------------------------------------
@@ -344,6 +445,7 @@ TAREAS_DIARIAS = (
     limpiar_partidos_pasados,
     publicar_eventos_semanales,
     enviar_recordatorios_deck,
+    enviar_recordatorios_agenda,
 )
 
 
