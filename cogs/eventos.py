@@ -5,6 +5,7 @@ import logging
 import discord
 from discord.ext import commands
 
+from utils import barbas, canales
 from utils.permisos import CogConRoles
 from utils.jugadores import mis_comandos_handle
 from utils.events import (
@@ -13,10 +14,21 @@ from utils.events import (
     evento_socio_handle,
     usuario_salio_handle,
     log_comando_handle,
-    member_join_handle
+    member_join_handle,
+    PREFIJO
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _en_el_barbas(message: discord.Message) -> bool:
+    """Mensaje de alguien que no es admin en #preguntale-a-el-barbas (los admins pueden escribir avisos ahí)."""
+    return (message.guild is not None and getattr(message.channel, "name", None) == canales.COMANDOS
+            and isinstance(message.author, discord.Member) and not message.author.guild_permissions.administrator)
+
+
+def _es_texto_libre_en_el_barbas(message: discord.Message) -> bool:
+    return _en_el_barbas(message) and not message.content.lstrip().startswith(PREFIJO)
 
 
 async def _avisar_usuario(ctx, texto: str):
@@ -40,6 +52,9 @@ class Eventos(CogConRoles):
     async def on_message(self, message: discord.Message):
         # Los comandos los enruta Bot.on_message (main.py); aquí solo la presentación en el vestíbulo
         if message.author.bot:
+            return
+        if _es_texto_libre_en_el_barbas(message):
+            await barbas.atender(self.bot, message)
             return
         await bienvenida_y_comandos_handle(message)
 
@@ -78,6 +93,8 @@ class Eventos(CogConRoles):
 
         if isinstance(error, commands.CommandNotFound):
             tipo = "no_encontrado"
+            if _en_el_barbas(ctx.message):
+                await barbas.atender(self.bot, ctx.message)     # "!agendar" → "¿querías !agendar-partida?"
         elif isinstance(error, commands.UserInputError):
             # Faltan o fallan argumentos, comillas sin cerrar, argumentos de más...: error de quien escribe, no del bot
             tipo = "argumento_faltante"
