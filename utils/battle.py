@@ -20,7 +20,8 @@ import discord
 
 from utils import canales
 from utils import dm
-from utils.commons import borrar_mensaje_seguro, buscar_usuario_en_servidor, trocear_lista, validar_canal_correcto
+from utils import miembros
+from utils.commons import borrar_mensaje_seguro, trocear_lista, validar_canal_correcto
 from utils.swiss import engine
 from utils.swiss_handle import _es_admin
 from utils.torneos_estado import (
@@ -345,14 +346,15 @@ async def _elegir_battle(ctx, codigo: Optional[str], solo_en_curso: bool = True)
 
 
 async def _miembro_valido(ctx, valor, etiqueta: str) -> Optional[discord.Member]:
-    miembro = valor if isinstance(valor, discord.Member) else buscar_usuario_en_servidor(ctx.guild, valor or "")
-    if not isinstance(miembro, discord.Member):
+    if isinstance(valor, discord.Member):
+        if valor.bot:
+            await ctx.author.send(f"❌ {valor.display_name} es un bot.")
+            return None
+        return valor
+    if not str(valor or "").strip():
         await ctx.author.send(f"❌ No encontré a {etiqueta} en el servidor.")
         return None
-    if miembro.bot:
-        await ctx.author.send(f"❌ {miembro.display_name} es un bot.")
-        return None
-    return miembro
+    return await miembros.resolver_jugador(ctx.bot, ctx.author, ctx.guild, valor, timeout=TIMEOUT_DM)
 
 
 def _describir(guild, e: dict) -> str:
@@ -392,14 +394,14 @@ async def iniciar_battle_handle(ctx, codigo_torneo: str = None, jugador1=None, j
     if not battle:
         return
     if jugador1 is None:
-        jugador1 = await _preguntar(ctx, "1️⃣ Nombre o ID del **jugador 1**:")
+        jugador1 = await _preguntar(ctx, f"1️⃣ ¿**Jugador 1**? ({miembros.AYUDA_FORMATO})")
         if jugador1 is None:
             return
     j1 = await _miembro_valido(ctx, jugador1, "el jugador 1")
     if not j1:
         return
     if jugador2 is None:
-        jugador2 = await _preguntar(ctx, "2️⃣ Nombre o ID del **jugador 2**:")
+        jugador2 = await _preguntar(ctx, f"2️⃣ ¿**Jugador 2**? ({miembros.AYUDA_FORMATO})")
         if jugador2 is None:
             return
     j2 = await _miembro_valido(ctx, jugador2, "el jugador 2")

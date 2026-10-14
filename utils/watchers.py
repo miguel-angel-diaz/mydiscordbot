@@ -12,7 +12,7 @@ import config
 from utils import canales
 from utils import decks
 from utils.commons import resolver_miembro
-from utils.torneos_estado import leer_estado, actualizar_torneo_estado, obtener_torneo_estado
+from utils.torneos_estado import leer_estado, actualizar_torneo_estado
 
 try:
     from zoneinfo import ZoneInfo
@@ -25,7 +25,9 @@ except Exception:
 # CONFIGURACIÓN
 # -------------------------------------------------------------
 GUILD_ID_ADMISION = config.GUILD_ID_ADMISION      # el de la variable de entorno, como el resto del bot
-HORA_TAREAS_DIARIAS = time(hour=10, minute=15, tzinfo=TZ)
+# Dos pasadas al día: si un reinicio de Railway se come una, la otra recoge lo pendiente (todas las tareas se
+# pueden repetir sin efectos: las limpiezas no encuentran nada nuevo y la cartelera edita su mensaje)
+HORAS_TAREAS_DIARIAS = [time(hour=10, minute=15, tzinfo=TZ), time(hour=22, minute=15, tzinfo=TZ)]
 
 CANAL_PREGUNTAS = canales.COMANDOS
 CANAL_PARTIDOS = canales.AGENDA
@@ -223,41 +225,59 @@ async def publicar_eventos_semanales(bot: commands.Bot):
 
 
 # ============================================================
-#   RECORDATORIOS DE DECK (3 días y 24h antes del torneo)
+#   RECORDATORIOS DE DECK (3 días y 1 día antes del torneo)
 # ============================================================
 async def _obtener_decks_subidos(guild: discord.Guild) -> set:
     """Códigos de deck ya subidos (codigo_torneo_id), del canal entero."""
     return await decks.codigos_subidos(guild)
 
 
-def _mensaje_recordatorio(codigo: str, nombre: str, dias_restantes: int) -> str:
-    if dias_restantes == 3:
+DIAS_SEMANA = ("lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo")
+
+
+def _fecha_larga(d: date) -> str:
+    return f"{DIAS_SEMANA[d.weekday()]} {d.strftime('%d/%m')}"
+
+
+def aviso_pendiente(torneo: dict, dias_restantes: int) -> Optional[int]:
+    """
+    Qué recordatorio toca (3, 1 o None). No exige el día exacto: si el bot estaba caído o reiniciándose cuando
+    tocaba, el aviso sale en cuanto vuelve (antes se perdía). Ya dentro del último día solo sale el de 1 día.
+    """
+    if dias_restantes <= 0:
+        return None                                   # el plazo del deck acaba a medianoche del día de inicio
+    if dias_restantes <= DIAS_RECORDATORIO[1]:
+        return None if torneo.get("recordatorio_1d_enviado") else 1
+    if dias_restantes <= DIAS_RECORDATORIO[0]:
+        if torneo.get("recordatorio_3d_enviado") or torneo.get("recordatorio_1d_enviado"):
+            return None
+        return 3
+    return None
+
+
+def _mensaje_recordatorio(codigo: str, nombre: str, aviso: int, inicio: date) -> str:
+    limite = _fecha_larga(inicio - timedelta(days=1))
+    if aviso == 3:
         return (
-            f"⏰ **¡Faltan 3 días para el torneo `{nombre}`!**\n\n"
-            f"🏷️ Código: `{codigo}`\n"
-            f"📅 Inicio: en 3 días\n\n"
-            f"Recuerda subir tu deck antes del inicio con el comando:\n"
+            f"⏰ **El torneo `{nombre}` empieza el {_fecha_larga(inicio)}**\n\n"
+            f"🏷️ Código: `{codigo}`\n\n"
+            f"Todavía no has subido tu deck. Tienes hasta el **{limite} a las 23:59** con:\n"
             f"`!subir-deck {codigo}`"
         )
     return (
-        f"⏰ **¡Últimas 24 horas para subir tu deck!**\n\n"
-        f"🏷️ Torneo: **{nombre}**\n"
+        f"⏰ **¡Último día para subir tu deck!**\n\n"
+        f"🏷️ Torneo: **{nombre}** (empieza el {_fecha_larga(inicio)})\n"
         f"🆔 Código: `{codigo}`\n\n"
-        f"⚠️ Todavía no has subido tu deck. Hazlo antes de que empiece con:\n"
+        f"⚠️ Todavía no has subido tu deck. Tienes hasta el **{limite} a las 23:59** con:\n"
         f"`!subir-deck {codigo}`"
     )
 
 
-async def _enviar_recordatorio_a_inscritos(bot, guild, codigo, nombre, dias_restantes, decks_subidos) -> int:
+async def _enviar_recordatorio_a_inscritos(guild, torneo: dict, mensaje: str, decks_subidos: set) -> int:
     """Envía el recordatorio por DM a los inscritos que no hayan subido deck."""
-    torneo = await obtener_torneo_estado(bot, codigo)
-    inscritos_ids = (torneo or {}).get("inscritos_ids", [])
-    if not inscritos_ids:
-        return 0
-
-    mensaje = _mensaje_recordatorio(codigo, nombre, dias_restantes)
+    codigo = torneo["codigo"]
     enviados = 0
-    for uid in inscritos_ids:
+    for uid in torneo.get("inscritos_ids", []):
         if f"{codigo}_{uid}" in decks_subidos:
             continue  # ya subió el deck
         try:
@@ -278,8 +298,9 @@ async def _enviar_recordatorio_a_inscritos(bot, guild, codigo, nombre, dias_rest
 
 async def enviar_recordatorios_deck(bot: commands.Bot):
     """
-    Revisa los torneos abiertos y envía recordatorios 3 días y 1 día antes del inicio.
-    Solo a quien NO haya subido deck, y una única vez por torneo y aviso (flag en el estado).
+    Revisa los torneos abiertos y envía los recordatorios de 3 días y 1 día antes del inicio, solo a quien NO
+    haya subido deck y una única vez por torneo y aviso (flag en el estado, que vive en Discord y sobrevive a los
+    reinicios de Railway). Corre en las dos pasadas diarias: un aviso perdido sale en la siguiente.
     """
     guild = bot.get_guild(GUILD_ID_ADMISION)
     if not guild:
@@ -298,27 +319,24 @@ async def enviar_recordatorios_deck(bot: commands.Bot):
         if not fecha_inicio:
             continue
 
-        dias_restantes = (fecha_inicio - hoy_date).days
-        if dias_restantes not in DIAS_RECORDATORIO:
+        aviso = aviso_pendiente(torneo, (fecha_inicio - hoy_date).days)
+        if aviso is None:
             continue
 
-        flag = f"recordatorio_{dias_restantes}d_enviado"
-        if torneo.get(flag):
-            continue
+        # El flag se marca ANTES de enviar: si falla la escritura no se manda nada, en vez de arriesgarse a repetir
+        await actualizar_torneo_estado(bot, codigo, {f"recordatorio_{aviso}d_enviado": True})
 
         if decks_subidos is None:
             decks_subidos = await _obtener_decks_subidos(guild)
 
         nombre = torneo.get("nombre", "Torneo")
-        enviados = await _enviar_recordatorio_a_inscritos(
-            bot, guild, codigo, nombre, dias_restantes, decks_subidos
-        )
-        await actualizar_torneo_estado(bot, codigo, {flag: True})
-        log(f"Recordatorio {dias_restantes}d para '{nombre}' ({codigo}): enviado a {enviados} usuario(s).")
+        mensaje = _mensaje_recordatorio(codigo, nombre, aviso, fecha_inicio)
+        enviados = await _enviar_recordatorio_a_inscritos(guild, torneo, mensaje, decks_subidos)
+        log(f"Recordatorio {aviso}d para '{nombre}' ({codigo}): enviado a {enviados} usuario(s).")
 
 
 # -------------------------------------------------------------
-# LOOP DIARIO (10:15 hora de Madrid)
+# LOOP DIARIO (10:15 y 22:15 hora de Madrid)
 # -------------------------------------------------------------
 TAREAS_DIARIAS = (
     limpiar_canal_diario,
@@ -338,7 +356,7 @@ async def ejecutar_todas(bot: commands.Bot):
             log(f"❌ {tarea.__name__} falló:\n{traceback.format_exc()}")
 
 
-@tasks.loop(time=HORA_TAREAS_DIARIAS)
+@tasks.loop(time=HORAS_TAREAS_DIARIAS)
 async def ejecutar_tareas_diarias(bot: commands.Bot):
     await ejecutar_todas(bot)
 
@@ -362,4 +380,5 @@ def cargar_tareas(bot: commands.Bot):
         return
     _bot_tareas = bot
     ejecutar_tareas_diarias.start(bot)
-    log(f"Tareas diarias programadas a las {HORA_TAREAS_DIARIAS.strftime('%H:%M')} ({TZ or 'hora local'})")
+    horas = " y ".join(h.strftime('%H:%M') for h in HORAS_TAREAS_DIARIAS)
+    log(f"Tareas diarias programadas a las {horas} ({TZ or 'hora local'})")

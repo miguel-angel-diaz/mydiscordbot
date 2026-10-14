@@ -7,6 +7,7 @@ import re
 
 from utils import dm
 from utils import canales
+from utils import miembros
 from typing import Optional
 
 from utils.torneos_estado import generar_codigo_unico, leer_estado, obtener_torneo_estado
@@ -22,7 +23,6 @@ from utils.commons import (
     ahora_madrid,
     borrar_mensaje_seguro,
     validar_canal_correcto,
-    buscar_usuario_en_servidor,
     obtener_torneo_usuario,
     cartas_mas_jugadas,
     best_decks_handle,
@@ -98,16 +98,11 @@ async def agendar_partida_handle(ctx, fecha=None, hora=None, jugador1=None, _vs=
                 await ctx.author.send("❌ Hora inválida. Usa el formato `hh:mm`.")
                 return
 
-            await ctx.author.send("3️⃣ Escribe el nombre o apodo del **jugador 1** tal como aparece en el servidor:")
-            respuesta_j1 = await dm.esperar_respuesta(ctx.bot, ctx.author, timeout=90)
-            jugador1 = buscar_usuario_en_servidor(ctx.guild, respuesta_j1.content.strip())
-
-            await ctx.author.send("4️⃣ Escribe el nombre o apodo del **jugador 2** tal como aparece en el servidor:")
-            respuesta_j2 = await dm.esperar_respuesta(ctx.bot, ctx.author, timeout=90)
-            jugador2 = buscar_usuario_en_servidor(ctx.guild, respuesta_j2.content.strip())
-
-            if not jugador1 or not jugador2:
-                await ctx.author.send("❌ Uno o ambos jugadores no fueron reconocidos. Asegúrate de mencionar correctamente.")
+            jugador1 = await miembros.pedir_jugador(ctx.bot, ctx.author, ctx.guild, "3️⃣ ¿**Jugador 1**?")
+            if jugador1 is None:
+                return
+            jugador2 = await miembros.pedir_jugador(ctx.bot, ctx.author, ctx.guild, "4️⃣ ¿**Jugador 2**?")
+            if jugador2 is None:
                 return
 
         except asyncio.TimeoutError:

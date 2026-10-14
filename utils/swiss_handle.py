@@ -2,15 +2,15 @@ import logging
 import discord
 from typing import List, Optional, Tuple
 import asyncio
-import re
 from datetime import datetime
 
 from utils import dm
 from utils import canales
+from utils import miembros
 from utils.torneos_estado import leer_clasificacion
 from utils import decks
 from utils import servicios
-from utils.commons import (ahora_madrid, borrar_mensaje_seguro, buscar_usuario_en_servidor, validar_canal_correcto,
+from utils.commons import (ahora_madrid, borrar_mensaje_seguro, validar_canal_correcto,
                            obtener_torneo_usuario, enviar_en_trozos, nombre_miembro,
                            codigo_etiquetado)
 from utils.jugadores import submitted_deck_handle
@@ -165,19 +165,10 @@ async def swiss_inscribir_asistente_handle(ctx):
 
         # Solo los admins pueden inscribir a otra persona; el resto se inscribe a sí mismo
         if _es_admin(ctx):
-            await ctx.author.send("2️⃣ ¿A quién inscribes? (`yo` o nombre/mención)")
-            usuario_msg = await dm.esperar_respuesta(ctx.bot, ctx.author, timeout=60)
-            if usuario_msg.content.lower() == "cancelar":
+            usuario = await miembros.pedir_jugador(ctx.bot, ctx.author, ctx.guild, "2️⃣ ¿A quién inscribes?",
+                                                   timeout=60)
+            if usuario is None:
                 return
-            if usuario_msg.content.lower() in ["yo", "mi", "me"]:
-                usuario = ctx.author
-            else:
-                # Acepta nombre, ID o mención (<@id> / <@!id>)
-                texto_usuario = re.sub(r"^<@!?(\d+)>$", r"\1", usuario_msg.content.strip())
-                usuario = buscar_usuario_en_servidor(ctx.guild, texto_usuario)
-                if not isinstance(usuario, discord.Member):
-                    await ctx.author.send("❌ Usuario no encontrado en el servidor.")
-                    return
         else:
             usuario = ctx.author
 
@@ -430,13 +421,10 @@ async def swiss_reportar_asistente_handle(ctx):
             return
         torneo = activos[idx]
 
-        await ctx.author.send("2️⃣ ¿Jugador 1? (nombre, mención o **ID numérico**)")
-        j1_msg = await dm.esperar_respuesta(ctx.bot, ctx.author, timeout=60)
-        if j1_msg.content.lower() == "cancelar":
-            return
-        jugador1 = buscar_usuario_en_servidor(ctx.guild, j1_msg.content)
-        if not jugador1:
-            await ctx.author.send("❌ Usuario no encontrado. Prueba con el **ID numérico**.")
+        # Con permitir_ausente se puede reportar por ID la partida de quien ya se fue del servidor
+        jugador1 = await miembros.pedir_jugador(ctx.bot, ctx.author, ctx.guild, "2️⃣ ¿**Jugador 1**?",
+                                                permitir_ausente=True, timeout=60)
+        if jugador1 is None:
             return
 
         await ctx.author.send("3️⃣ ¿Resultado? (formato X-Y, ej: 2-1)")
@@ -449,13 +437,9 @@ async def swiss_reportar_asistente_handle(ctx):
             await ctx.author.send(f"❌ {e.mensaje}")
             return
 
-        await ctx.author.send("4️⃣ ¿Jugador 2? (nombre, mención o **ID numérico**)")
-        j2_msg = await dm.esperar_respuesta(ctx.bot, ctx.author, timeout=60)
-        if j2_msg.content.lower() == "cancelar":
-            return
-        jugador2 = buscar_usuario_en_servidor(ctx.guild, j2_msg.content)
-        if not jugador2:
-            await ctx.author.send("❌ Usuario no encontrado. Prueba con el **ID numérico**.")
+        jugador2 = await miembros.pedir_jugador(ctx.bot, ctx.author, ctx.guild, "4️⃣ ¿**Jugador 2**?",
+                                                permitir_ausente=True, timeout=60)
+        if jugador2 is None:
             return
 
         # Validaciones
