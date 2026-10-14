@@ -142,10 +142,34 @@ async def publicar_clasificacion_swiss(bot, guild, codigo: str):
 
 
 async def publicar_emparejamientos(bot, guild, codigo: str):
-    """Publica los emparejamientos de la última ronda del torneo."""
+    """
+    Publica los emparejamientos de la última ronda del torneo y avisa por DM a cada jugador de su rival. Solo se
+    llama al crear una ronda (iniciar, generar, la automática al completar la anterior), así que el DM no se repite.
+    """
     rondas = await _leer_lista_rondas(bot, codigo)
     if guild and rondas:
         await presentacion.publicar_emparejamientos(guild, codigo, rondas[-1])
+        torneo = await obtener_torneo(bot, codigo) or {}
+        # En segundo plano: la ronda automática se publica con el lock del torneo cogido y un DM por jugador lo
+        # retendría segundos (bloqueando los reportes de ese torneo)
+        tarea = asyncio.create_task(_avisar_ronda(guild, codigo, torneo.get("nombre", codigo), rondas[-1]))
+        _tareas_aviso.add(tarea)                           # referencia: que el recolector no la corte a medias
+        tarea.add_done_callback(_tareas_aviso.discard)
+
+
+_tareas_aviso = set()
+
+
+async def _avisar_ronda(guild, codigo: str, nombre: str, ronda: dict):
+    try:
+        await presentacion.anunciar_byes(guild, nombre, ronda)
+    except discord.HTTPException as e:
+        log.warning(f"⚠️ No se pudo anunciar el BYE de la ronda {ronda.get('numero')} de {codigo}: {e}")
+    try:
+        enviados = await presentacion.avisar_emparejamientos(guild, codigo, nombre, ronda)
+        log.info(f"Ronda {ronda.get('numero')} de {codigo}: aviso por DM a {enviados} jugador(es)")
+    except Exception:
+        log.exception(f"❌ Error avisando por DM de la ronda {ronda.get('numero')} de {codigo}")
 
 # ============================================================
 # GESTIÓN DE TORNEOS

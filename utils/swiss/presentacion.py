@@ -9,7 +9,7 @@ from typing import List
 import discord
 
 from utils import canales
-from utils.commons import cabecera_emparejamientos, es_mensaje_emparejamientos
+from utils.commons import cabecera_emparejamientos, es_mensaje_emparejamientos, nombre_miembro, resolver_miembro
 
 log = logging.getLogger(__name__)
 
@@ -23,7 +23,8 @@ def texto_emparejamientos(codigo: str, ronda: dict) -> str:
     """Mensaje de emparejamientos de una ronda para #🍸-citas‐a‐ciegas (las menciones "<@id>" no piden nada a la API)."""
     lineas = [cabecera_emparejamientos(codigo, ronda["numero"])]
     for emp in ronda.get("emparejamientos", []):
-        lineas.append(f"<@{emp['j1']}> → BYE" if emp.get("j2") is None else f"<@{emp['j1']}> vs <@{emp['j2']}>")
+        lineas.append(f"<@{emp['j1']}> → BYE ✅ (victoria automática)" if emp.get("j2") is None
+                      else f"<@{emp['j1']}> vs <@{emp['j2']}>")
     return "\n".join(lineas) + "\n"
 
 
@@ -32,6 +33,55 @@ async def publicar_emparejamientos(guild, codigo: str, ronda: dict):
     canal = canales.get_canal(guild, canales.CITAS)
     if canal and ronda:
         await canal.send(texto_emparejamientos(codigo, ronda))
+
+
+def texto_aviso_ronda(codigo: str, nombre: str, ronda_num: int, rival_id=None, rival_nombre: str = None) -> str:
+    """DM a un jugador con su partida de la ronda; sin rival es que le ha tocado BYE."""
+    cabecera = f"🍸 **Ronda {ronda_num} del torneo {nombre}**\n\n"
+    if rival_id is None:
+        return cabecera + ("Esta semana te toca **BYE**: descansas y ya tienes la **victoria reportada** "
+                           "automáticamente (3 puntos). ¡Nada que agendar!")
+    return (
+        cabecera
+        + f"⚔️ Tu partida de esta semana es contra **{rival_nombre}** (<@{rival_id}>).\n\n"
+        f"📅 Poneos de acuerdo y **agendad la partida** con `!agendar-partida` en `#{canales.COMANDOS}`.\n"
+        f"❓ ¿No sabes cómo? Escribe `!mis-comandos` en `#{canales.COMANDOS}` y elige **agendar-partida** "
+        f"de la lista: te explica paso a paso cómo hacerlo."
+    )
+
+
+async def anunciar_byes(guild, nombre: str, ronda: dict):
+    """
+    Anuncia en #resultados los BYE de la ronda como un resultado más. El BYE ya nace con resultado ("BYE", 3 puntos
+    en engine.nueva_ronda): nadie tiene que reportarlo, solo faltaba que se viera.
+    """
+    canal = canales.get_canal(guild, canales.RESULTADOS)
+    if not canal:
+        return
+    for emp in ronda.get("emparejamientos", []):
+        if emp.get("j2") is None:
+            jugador = await nombre_miembro(guild, emp["j1"])
+            await canal.send(f"🏆 Resultado reportado automáticamente en **{nombre}** (ronda {ronda['numero']}):\n"
+                             f"**{jugador}** descansa con **BYE**\n"
+                             f"🏅 Ganador: {jugador} (3 puntos)")
+
+
+async def avisar_emparejamientos(guild, codigo: str, nombre: str, ronda: dict) -> int:
+    """Manda a cada jugador de la ronda un DM con su rival. Devuelve cuántos se enviaron (DMs cerrados se saltan)."""
+    enviados = 0
+    for emp in ronda.get("emparejamientos", []):
+        pareja = [(emp["j1"], emp.get("j2"))] + ([(emp["j2"], emp["j1"])] if emp.get("j2") is not None else [])
+        for jugador_id, rival_id in pareja:
+            miembro = await resolver_miembro(guild, jugador_id)
+            if miembro is None:
+                continue                                   # ya no está en el servidor
+            rival_nombre = await nombre_miembro(guild, rival_id) if rival_id is not None else None
+            try:
+                await miembro.send(texto_aviso_ronda(codigo, nombre, ronda["numero"], rival_id, rival_nombre))
+                enviados += 1
+            except discord.HTTPException as e:              # incluye Forbidden (DMs cerrados)
+                log.info(f"Sin DM de ronda {ronda['numero']} de {codigo} a {jugador_id}: {e}")
+    return enviados
 
 
 async def borrar_emparejamientos(bot, guild, codigo: str, ronda_num: int = None, todos: bool = False):
