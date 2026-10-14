@@ -10,6 +10,7 @@ from utils import miembros
 from utils.torneos_estado import leer_clasificacion
 from utils import decks
 from utils import servicios
+from utils import sorteos
 from utils.commons import (ahora_madrid, borrar_mensaje_seguro, validar_canal_correcto,
                            obtener_torneo_usuario, enviar_en_trozos, nombre_miembro,
                            codigo_etiquetado)
@@ -719,10 +720,21 @@ async def swiss_eliminar_asistente_handle(ctx):
             return
         torneo = torneos[idx]
 
+        bloqueo = sorteos.motivo_bloqueo_eliminar(torneo)
+        if bloqueo:
+            await ctx.author.send(f"🔒 No se puede eliminar `{torneo['codigo']}` todavía: {bloqueo}")
+            return
+
         await ctx.author.send(f"⚠️ ¿Eliminar permanentemente `{torneo['codigo']}`? (sí/no)")
         confirm = await dm.esperar_respuesta(ctx.bot, ctx.author, timeout=60)
         if not dm.es_si(confirm.content):
             await ctx.author.send("❌ Cancelado.")
+            return
+
+        # Otra vez con los datos actuales: el torneo pudo terminar (y preguntar por el sorteo) mientras se confirmaba
+        bloqueo = sorteos.motivo_bloqueo_eliminar(await obtener_torneo(ctx.bot, torneo["codigo"]))
+        if bloqueo:
+            await ctx.author.send(f"🔒 No se puede eliminar `{torneo['codigo']}` todavía: {bloqueo}")
             return
 
         ok = await eliminar_torneo_swiss(ctx.bot, torneo["codigo"])

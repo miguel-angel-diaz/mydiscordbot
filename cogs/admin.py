@@ -61,9 +61,9 @@ class Admin(CogConRoles):
 
     @commands.command(name="sorteo-torneo",
         aliases=["sorteo torneo", "sorteo_torneo"])
-    async def sorteo_torneo(self, ctx, codigo_torneo: str = None, *, premio: str = "Premio del sorteo"):
-        """Realiza un sorteo entre los inscritos de un torneo - !sorteo-torneo <código_torneo> <premio>"""
-        await sorteo_torneo_handle(ctx, codigo_torneo, premio)
+    async def sorteo_torneo(self, ctx, codigo_torneo: str = None, *, premios: str = None):
+        """Sorteo de premios entre los participantes de un torneo - !sorteo-torneo <código_torneo> [Tapete, Token x4]"""
+        await sorteo_torneo_handle(ctx, codigo_torneo, premios)
 
     @commands.command(name="nuevo-sorteo",
         aliases=["nuevo sorteo", "nuevo_sorteo"])

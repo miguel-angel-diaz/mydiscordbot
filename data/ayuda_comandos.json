@@ -505,10 +505,13 @@
   },
   "sorteo-torneo": {
     "seccion": "ADMIN - SORTEOS",
-    "descripcion": "Sortea un premio entre los participantes de un torneo suizo o battle",
+    "descripcion": "Sortea premios entre los participantes de un torneo suizo o battle",
     "tutorial": [
-      "Escribe `!sorteo-torneo <código> <premio>`.",
-      "El bot elige un ganador al azar entre los participantes (inscritos del suizo o jugadores del battle) y os avisa por DM a ti y al ganador."
+      "Al terminar un suizo el bot ya pregunta al dueño del servidor por DM si hay sorteo; este comando es para lanzarlo a mano.",
+      "Escribe `!sorteo-torneo <código> Tapete, Token x4` para sortear ya, o solo `!sorteo-torneo <código>` y te llegará un DM con un botón para indicar los premios.",
+      "Cada ganador tiene 48 h para aceptar por DM; si renuncia o no contesta, el premio se vuelve a sortear.",
+      "Al aceptar, sus datos de envío llegan solo a `#premios` (debe ser privado). Pulsa «Enviado» al mandarlo y se borran.",
+      "Mientras el sorteo no esté cerrado no se puede eliminar el torneo."
     ],
     "permisos_discord": [
       "manage_messages",

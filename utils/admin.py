@@ -8,6 +8,7 @@ import re
 from utils import dm
 from utils import canales
 from utils import decks
+from utils import sorteos
 from utils.commons import borrar_mensaje_seguro, validar_canal_correcto, buscar_usuario_en_servidor, obtener_torneo_usuario, enviar_en_trozos, leer_inscritos_sorteo
 
 # Tablón de anuncios: por ID y, si no, por nombre (ver utils/canales.py)
@@ -367,27 +368,28 @@ async def cerrar_peticion_handle(ctx, codigo: str = None, respuesta: str = None)
 
     await author.send(f"✅ Petición `{codigo}` cerrada y registrada en #resolucion-de-peticiones.\n{aviso_usuario}")
 
-async def sorteo_torneo_handle(ctx, codigo_torneo: str, premio: str = "Premio del sorteo"):
+async def sorteo_torneo_handle(ctx, codigo_torneo: str = None, premios: str = None):
+    """
+    Sorteo de premios de un torneo con aceptación del ganador y datos de envío (utils/sorteos.py).
+    Con premios ("Tapete, Token x4") se sortea ya; sin ellos, el bot te manda por DM el botón para indicarlos.
+    """
     await borrar_mensaje_seguro(ctx)
     if not await validar_canal_correcto(ctx, canales.COMANDOS, "!sorteo-torneo"):
         return
     if not await moderador_permisos_handle(ctx):
         return
-    
+
     if codigo_torneo is None:
         try:
             await ctx.author.send(
                 "📩 No escribiste el código del torneo.\n"
                 "Por favor, respóndeme con el **código del torneo** del que quieres hacer el sorteo. Tienes 60 segundos."
             )
-
             respuesta = await dm.esperar_respuesta(ctx.bot, ctx.author, timeout=60.0)
             codigo_torneo = respuesta.content.strip()
-
             if not codigo_torneo:
-                await ctx.author.send("❌ El código no puede estar vacío. Cancelo la inscripción.")
+                await ctx.author.send("❌ El código no puede estar vacío.")
                 return
-
         except asyncio.TimeoutError:
             await ctx.author.send("⏰ Tiempo agotado. Intenta de nuevo con `!sorteo-torneo <código_torneo>`.")
             return
@@ -395,45 +397,19 @@ async def sorteo_torneo_handle(ctx, codigo_torneo: str, premio: str = "Premio de
             await ctx.send("❌ No puedo enviarte mensajes privados. Activa los DMs para continuar.")
             return
 
-    # Participantes desde el estado del bot (ya no se consulta Challonge): los inscritos de un suizo o, en un
-    # Battle Royale (sin inscripción), quienes tienen algún enfrentamiento
-    from utils.torneos_estado import obtener_torneo_estado
-    torneo = await obtener_torneo_estado(ctx.bot, codigo_torneo)
-    if not torneo:
-        await ctx.author.send(f"❌ El torneo `{codigo_torneo}` no existe (solo se puede sortear en suizos y battles).")
-        return
-    if torneo.get("tipo") == "battle":
-        from utils.battle import participantes   # import local: evita el ciclo battle → swiss_handle → jugadores → admin
-        ids = await participantes(ctx.bot, codigo_torneo)
-    else:
-        ids = torneo.get("inscritos_ids", [])
-    candidatos = [m for m in (ctx.guild.get_member(int(uid)) for uid in ids) if m]
-
-    if not candidatos:
-        await ctx.author.send("⚠️ No hay participantes válidos (inscritos que sigan en el servidor) para el sorteo.")
-        return
-
-    # Elegir ganador aleatorio
-    ganador = random.choice(candidatos)
-
-    # Mensaje al moderador
     try:
-        await ctx.author.send(
-            f"🎉 Sorteo realizado para el torneo `{codigo_torneo}`\n"
-            f"🏆 Ganador: {ganador.display_name} ({ganador.mention})\n"
-            f"🎁 Premio: {premio}"
-        )
+        if premios:
+            try:
+                nombres = sorteos.parsear_premios(premios)
+            except ValueError as e:
+                await ctx.author.send(f"❌ {e}")
+                return
+            ok, msg = await sorteos.iniciar_sorteo(ctx.bot, codigo_torneo, nombres, ctx.author)
+        else:
+            ok, msg = await sorteos.preguntar_si_hay_sorteo(ctx.bot, codigo_torneo, ctx.guild, destinatario=ctx.author)
+        await ctx.author.send(f"{'✅' if ok else '❌'} {msg}", allowed_mentions=discord.AllowedMentions.none())
     except discord.Forbidden:
-        await ctx.send("⚠️ No pude enviarte mensaje privado con el resultado.")
-
-    # Mensaje al ganador
-    try:
-        await ganador.send(
-            f"🎉 ¡Felicidades! Has sido seleccionado en un sorteo del torneo `{codigo_torneo}`.\n"
-            f"🎁 Te ha tocado: {premio}"
-        )
-    except discord.Forbidden:
-        await ctx.send(f"⚠️ No pude enviar mensaje privado a {ganador.display_name}.")
+        await ctx.send("❌ No puedo enviarte mensajes privados. Activa los DMs para continuar.")
 
 async def moderador_permisos_handle(ctx, only_check: bool = False) -> bool:
     autor = ctx.author
