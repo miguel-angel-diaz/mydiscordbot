@@ -153,6 +153,24 @@ def motivo_bloqueo_eliminar(torneo: Optional[dict]) -> Optional[str]:
             f"todos los ganadores acepten o renuncien (plazo de {int(PLAZO_ACEPTACION.total_seconds() // 3600)} h).")
 
 
+def torneos_sorteables(torneos: List[dict]) -> List[dict]:
+    """Suizos y battles sin un sorteo en curso o cerrado: primero los finalizados (lo normal es sortear al acabar)."""
+    validos = [t for t in torneos if t.get("codigo") and t.get("tipo", "swiss") in ("swiss", "battle")
+               and ((t.get("sorteo") or {}).get("estado")) not in (EN_CURSO, CERRADO)]
+    return sorted(validos, key=lambda t: t.get("estado") != "finalizado")     # sorted es estable
+
+
+def etiqueta_torneo(torneo: dict) -> str:
+    tipo = "battle" if torneo.get("tipo") == "battle" else "suizo"
+    estado = "finalizado" if torneo.get("estado") == "finalizado" else "en juego"
+    jugadores = f", {len(ids_participantes(torneo))} jugadores" if tipo == "suizo" else ""
+    return f"`{torneo['codigo']}` → {torneo.get('nombre') or torneo['codigo']} ({tipo}, {estado}{jugadores})"
+
+
+async def torneos_para_sortear(bot) -> List[dict]:
+    return torneos_sorteables((await leer_estado(bot)).get("torneos", []))
+
+
 def resumen_premios(sorteo: dict) -> str:
     lineas = []
     for p in sorteo.get("premios", []):

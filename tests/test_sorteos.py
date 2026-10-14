@@ -79,6 +79,26 @@ class TestEstado(unittest.TestCase):
         self.assertFalse(sorteos.plazo_vencido({"estado": "pendiente", "plazo": "basura"}, ahora))
 
 
+class TestElegirTorneo(unittest.TestCase):
+    def test_filtra_y_ordena(self):
+        torneos = [
+            {"codigo": "A", "tipo": "swiss", "estado": "en desarrollo"},
+            {"codigo": "B", "tipo": "swiss", "estado": "finalizado", "sorteo": {"estado": "cerrado"}},
+            {"codigo": "C", "tipo": "battle", "estado": "finalizado"},
+            {"codigo": "D", "tipo": "swiss", "estado": "finalizado", "sorteo": {"estado": "sin_sorteo"}},
+            {"codigo": "E", "tipo": "otro", "estado": "finalizado"},
+            {"codigo": "F", "tipo": "swiss", "estado": "finalizado", "sorteo": {"estado": "en_curso"}},
+        ]
+        self.assertEqual([t["codigo"] for t in sorteos.torneos_sorteables(torneos)], ["C", "D", "A"])
+
+    def test_etiqueta(self):
+        suizo = {"codigo": "premoderntodosQHRH7L", "nombre": "Liga", "tipo": "swiss", "estado": "finalizado",
+                 "inscritos_ids": ["1", "2", "3"], "retirados": ["3"]}
+        self.assertEqual(sorteos.etiqueta_torneo(suizo),
+                         "`premoderntodosQHRH7L` → Liga (suizo, finalizado, 2 jugadores)")
+        self.assertIn("(battle, en juego)", sorteos.etiqueta_torneo({"codigo": "brx", "tipo": "battle"}))
+
+
 class TestBotonesPersistentes(unittest.TestCase):
     """Los custom_id deben casar con su plantilla para que los botones sigan funcionando tras un reinicio."""
 

@@ -380,19 +380,17 @@ async def sorteo_torneo_handle(ctx, codigo_torneo: str = None, premios: str = No
         return
 
     if codigo_torneo is None:
+        # Sin código: se elige de la lista de torneos que aún se pueden sortear
         try:
-            await ctx.author.send(
-                "📩 No escribiste el código del torneo.\n"
-                "Por favor, respóndeme con el **código del torneo** del que quieres hacer el sorteo. Tienes 60 segundos."
-            )
-            respuesta = await dm.esperar_respuesta(ctx.bot, ctx.author, timeout=60.0)
-            codigo_torneo = respuesta.content.strip()
-            if not codigo_torneo:
-                await ctx.author.send("❌ El código no puede estar vacío.")
+            opciones = await sorteos.torneos_para_sortear(ctx.bot)
+            if not opciones:
+                await ctx.author.send("❌ No hay torneos en los que se pueda hacer un sorteo.")
                 return
-        except asyncio.TimeoutError:
-            await ctx.author.send("⏰ Tiempo agotado. Intenta de nuevo con `!sorteo-torneo <código_torneo>`.")
-            return
+            idx = await dm.elegir_de_lista(ctx.bot, ctx.author, "🎁 **¿De qué torneo es el sorteo?**",
+                                           [sorteos.etiqueta_torneo(t) for t in opciones])
+            if idx is None:
+                return
+            codigo_torneo = opciones[idx]["codigo"]
         except discord.Forbidden:
             await ctx.send("❌ No puedo enviarte mensajes privados. Activa los DMs para continuar.")
             return
