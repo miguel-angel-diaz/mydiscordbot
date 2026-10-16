@@ -5,6 +5,7 @@ import asyncio
 import random
 import re
 
+from utils import analisis
 from utils import dm
 from utils import canales
 from utils import decks
@@ -444,6 +445,35 @@ async def enviar_encuesta_handle(ctx, codigo: str = None):
             return
         await ctx.author.send("⏳ Enviando… (un segundo por participante)")
         ok, msg = await encuestas.enviar_encuesta_ahora(ctx.bot, torneo["codigo"])
+        await ctx.author.send(f"{'✅' if ok else '❌'} {msg}")
+    except discord.Forbidden:
+        await ctx.send("❌ No puedo enviarte mensajes privados. Activa los DMs para continuar.")
+
+
+async def analisis_torneo_handle(ctx, codigo: str = None):
+    """Publica (o rehace) el análisis de cartas y decks de un suizo finalizado en #analisis-torneos."""
+    await borrar_mensaje_seguro(ctx)
+    if not await validar_canal_correcto(ctx, canales.COMANDOS, "!analisis-torneo"):
+        return
+    if not await moderador_permisos_handle(ctx):
+        return
+    try:
+        opciones = await analisis.torneos_analizables(ctx.bot)
+        if codigo:
+            torneo = next((t for t in opciones if t.get("codigo") == codigo), None)
+            if torneo is None:
+                await ctx.author.send(f"❌ `{codigo}` no es un torneo suizo finalizado: los decks siguen siendo privados.")
+                return
+        else:
+            if not opciones:
+                await ctx.author.send("❌ No hay torneos suizos finalizados.")
+                return
+            idx = await dm.elegir_de_lista(ctx.bot, ctx.author, "🧠 **¿De qué torneo publico el análisis?**",
+                                           [sorteos.etiqueta_torneo(t) for t in opciones])
+            if idx is None:
+                return
+            torneo = opciones[idx]
+        ok, msg = await analisis.publicar_analisis(ctx.bot, torneo["codigo"], ctx.guild)
         await ctx.author.send(f"{'✅' if ok else '❌'} {msg}")
     except discord.Forbidden:
         await ctx.send("❌ No puedo enviarte mensajes privados. Activa los DMs para continuar.")

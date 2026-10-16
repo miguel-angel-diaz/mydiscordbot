@@ -41,7 +41,6 @@ MAX_CAMPOS_EMBED = 25          # límite de Discord
 DIAS_GRACIA_TORNEO = 2         # días tras el inicio antes de borrar el torneo de #torneos-activos
 DIAS_RECORDATORIO = (3, 1)
 DIA_RECORDATORIO_AGENDA = 3   # jueves (lunes = 0)
-DIAS_MINIMOS_RONDA = 3        # no se recuerda agendar una ronda que salió hace menos
 PAUSA_BORRADO = 0.3            # segundos entre borrados para no saturar la API
 
 PATRON_FECHA = re.compile(r"\d{2}/\d{2}/\d{4}")
@@ -370,12 +369,6 @@ def partidas_sin_agendar(codigo: str, ronda: dict, agenda: list) -> list:
     return pendientes
 
 
-def ronda_con_recorrido(ronda: dict, hoy_date: date) -> bool:
-    """Si la ronda lleva al menos DIAS_MINIMOS_RONDA días (las antiguas, sin fecha, se dan por viejas)."""
-    creada = _parsear_fecha(ronda.get("creada"))
-    return creada is None or (hoy_date - creada).days >= DIAS_MINIMOS_RONDA
-
-
 def _mensaje_recordatorio_agenda(nombre: str, ronda_num: int, rival_id: str, rival_nombre: str) -> str:
     return (
         f"📅 **¡Aún no habéis agendado vuestra partida!**\n\n"
@@ -407,7 +400,7 @@ async def enviar_recordatorios_agenda(bot: commands.Bot):
                 or torneo.get("recordatorio_agenda_enviado") == marca:
             continue
         rondas = ((await leer_rondas(bot, codigo)) or {}).get("rondas", [])
-        if not rondas or rondas[-1].get("completa") or not ronda_con_recorrido(rondas[-1], hoy_date):
+        if not rondas or rondas[-1].get("completa"):
             continue
 
         if agenda is None:

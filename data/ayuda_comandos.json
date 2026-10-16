@@ -517,6 +517,20 @@
       "manage_roles"
     ]
   },
+  "analisis-torneo": {
+    "seccion": "ADMIN - TORNEOS SWISS",
+    "descripcion": "Publica el análisis de cartas y decks de un torneo suizo finalizado",
+    "tutorial": [
+      "Normalmente no hace falta: al finalizar un torneo suizo el análisis se publica solo en `#🧠📈analisis-torneos`.",
+      "Escribe `!analisis-torneo` en `#preguntale-a-el-barbas` y elige el torneo por DM (o `!analisis-torneo <código>`).",
+      "Publica las 10 cartas más jugadas (sin tierras básicas) y el porcentaje de decks de cada arquetipo.",
+      "Si el torneo ya tenía análisis, se actualiza en vez de repetirse. Solo torneos finalizados: mientras se juega, los decks son privados."
+    ],
+    "permisos_discord": [
+      "manage_messages",
+      "manage_roles"
+    ]
+  },
   "resultados-encuesta": {
     "seccion": "ADMIN - TORNEOS SWISS",
     "descripcion": "Resumen y CSV de la encuesta anónima de fin de torneo",

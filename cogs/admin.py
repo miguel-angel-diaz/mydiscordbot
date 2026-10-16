@@ -14,6 +14,7 @@ from utils.admin import (
     sorteo_torneo_handle,
     resultados_encuesta_handle,
     enviar_encuesta_handle,
+    analisis_torneo_handle,
     nuevo_sorteo_handle,
     realizar_sorteo_handle,
     nuevo_comunicado_handle,
@@ -72,6 +73,12 @@ class Admin(CogConRoles):
     async def enviar_encuesta(self, ctx, codigo_torneo: str = None):
         """Manda ya la encuesta anónima de un torneo a sus participantes - !enviar-encuesta [código_torneo]"""
         await enviar_encuesta_handle(ctx, codigo_torneo)
+
+    @commands.command(name="analisis-torneo",
+        aliases=["analisis torneo", "analisis_torneo"])
+    async def analisis_torneo(self, ctx, codigo_torneo: str = None):
+        """Publica en #analisis-torneos las cartas más jugadas y el % de decks de un suizo finalizado - !analisis-torneo [código_torneo]"""
+        await analisis_torneo_handle(ctx, codigo_torneo)
 
     @commands.command(name="resultados-encuesta",
         aliases=["resultados encuesta", "resultados_encuesta", "encuesta"])

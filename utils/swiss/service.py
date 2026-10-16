@@ -26,7 +26,6 @@ from utils.torneos_estado import (
     generar_codigo_unico
 )
 from utils.validacion_web import EntradaInvalida, resultado as validar_resultado
-from utils.commons import ahora_madrid
 
 log = logging.getLogger(__name__)
 
@@ -271,8 +270,12 @@ async def finalizar_torneo(bot, codigo: str, guild: discord.Guild = None) -> Tup
     return True, f"Torneo `{codigo}` marcado como finalizado."
 
 async def _tras_finalizar(bot, codigo: str, guild):
-    """Tras la clasificación final: el dueño decide por DM si hay sorteo y se programa la encuesta de los jugadores."""
-    from utils import encuestas, sorteos      # import local: sorteos -> battle -> swiss_handle -> service
+    """
+    Tras la clasificación final: análisis de cartas y decks en #analisis-torneos, el dueño decide por DM si hay
+    sorteo y se programa la encuesta de los jugadores.
+    """
+    from utils import analisis, encuestas, sorteos      # import local: sorteos -> battle -> swiss_handle -> service
+    await analisis.al_finalizar_torneo(bot, codigo, guild)
     await sorteos.al_finalizar_torneo(bot, codigo, guild)
     await encuestas.programar_encuesta(bot, codigo)
 
@@ -352,7 +355,6 @@ async def generar_ronda(bot, codigo: str) -> Tuple[bool, str]:
         return False, error
 
     ronda = engine.nueva_ronda(codigo, torneo, rondas)
-    ronda["creada"] = ahora_madrid().strftime("%d/%m/%Y")   # el recordatorio de agenda no avisa de rondas recién salidas
     await _guardar_lista_rondas(bot, codigo, rondas + [ronda])
     await actualizar_torneo_estado(bot, codigo, {"ronda_actual": ronda["numero"]})
     return True, f"Ronda {ronda['numero']} generada con {len(ronda['emparejamientos'])} emparejamientos."

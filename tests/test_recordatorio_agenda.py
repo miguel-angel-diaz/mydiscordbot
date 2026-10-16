@@ -5,11 +5,10 @@ Tests de quién recibe el recordatorio de agenda de los jueves (utils/watchers.p
 import os
 import sys
 import unittest
-from datetime import date
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from utils.watchers import agenda_de_canal, partidas_sin_agendar, ronda_con_recorrido
+from utils.watchers import agenda_de_canal, partidas_sin_agendar
 
 RONDA = {"numero": 2, "emparejamientos": [
     {"j1": "1", "j2": "2", "resultado": None},     # agendada
@@ -37,17 +36,6 @@ class TestPartidasSinAgendar(unittest.TestCase):
         # "Agendado por <@5>" en una cita de 5 contra otro no es la partida 5-6
         agenda = agenda_de_canal(["📅 [EVENTO] 16/10/2026 19:00 | <@1> vs <@2> | Agendado por <@6>"])
         self.assertIn(("5", "6"), partidas_sin_agendar("t1", RONDA, agenda))
-
-
-class TestRondaConRecorrido(unittest.TestCase):
-    def test_recien_salida_no(self):
-        self.assertFalse(ronda_con_recorrido({"creada": "14/10/2026"}, date(2026, 10, 15)))
-
-    def test_de_la_semana(self):
-        self.assertTrue(ronda_con_recorrido({"creada": "12/10/2026"}, date(2026, 10, 15)))
-
-    def test_antigua_sin_fecha(self):
-        self.assertTrue(ronda_con_recorrido({}, date(2026, 10, 15)))
 
 
 if __name__ == "__main__":
